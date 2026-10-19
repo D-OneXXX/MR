@@ -355,8 +355,12 @@ fn hydrate_settings(conn: &rusqlite::Connection, s: &mut Settings) {
 
 fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
     // Windows 优先：`dirs::data_local_dir` → …\AppData\Local\com.local.manga-reader。
-    let dir = dirs::data_local_dir()
-        .map(|d| d.join("com.local.manga-reader"))
+    // MR_DATA_DIR 用于测试/冒烟隔离；生产环境未设置时仍使用本地数据目录。
+    let dir = std::env::var("MR_DATA_DIR")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::data_local_dir().map(|d| d.join("com.local.manga-reader")))
         .ok_or_else(|| "无法定位本地数据目录".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let db_path = dir.join("library.db");

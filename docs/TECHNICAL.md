@@ -166,7 +166,8 @@ Windows 下由 `dirs::data_local_dir()` 定位：
 └── EBWebView\                 # WebView2 运行时数据
 ```
 
-- `MR_RENDER_CACHE_DIR` 可覆盖 `render_cache` 根目录（测试隔离用）。
+- `MR_DATA_DIR` 可覆盖整个数据根目录（SQLite / logs / 默认 render_cache），用于测试与冒烟隔离；未设置时使用系统本地数据目录。
+- `MR_RENDER_CACHE_DIR` 可单独覆盖 `render_cache` 根目录（测试隔离用）。
 - Sidecar 模型目录默认 `sidecar/models`，可用 `SIDECAR_MODELS` 覆盖。
 
 ### 3.3 启动顺序（`src-tauri/src/lib.rs`）
@@ -855,6 +856,7 @@ stateDiagram-v2
 | `SIDECAR_DEVICE` | sidecar | `cpu` | `cpu`/`cuda` |
 | `SIDECAR_MODELS` | sidecar | `sidecar/models` | 模型目录 |
 | `HF_ENDPOINT` | download_models | `https://huggingface.co` | 模型下载镜像 |
+| `MR_DATA_DIR` | Tauri | `%LOCALAPPDATA%\com.local.manga-reader` | 数据根目录（SQLite/logs/默认 render_cache，测试隔离） |
 | `MR_RENDER_CACHE_DIR` | Tauri | `%LOCALAPPDATA%\...\render_cache` | L2 根目录 |
 | `BT_ROOT` | `sidecar/smoke_test.py` | `D:\BallonsTranslator\...` | 仅在旧烟测脚本中使用；正式 sidecar 已自包含 |
 

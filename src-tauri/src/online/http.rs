@@ -130,6 +130,33 @@ struct RawResponse {
 /// 最多跟随的重定向次数；第 6 个重定向响应视为错误。
 const MAX_REDIRECTS: usize = 5;
 
+/// 主机是否相同（大小写不敏感）。
+fn same_host(a: &url::Url, b: &url::Url) -> bool {
+    match (a.host_str(), b.host_str()) {
+        (Some(x), Some(y)) => x.eq_ignore_ascii_case(y),
+        _ => false,
+    }
+}
+
+/// origin（scheme + host + port）是否相同；端口按 scheme 默认值归一。
+fn same_origin(a: &url::Url, b: &url::Url) -> bool {
+    a.scheme().eq_ignore_ascii_case(b.scheme())
+        && same_host(a, b)
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// 重定向跳的请求头策略：跨主机丢弃 Cookie，跨 origin 丢弃 Authorization，
+/// 其余自定义头照常发送。
+fn allows_header(name: &str, target: &url::Url, original: &url::Url) -> bool {
+    if name.eq_ignore_ascii_case("cookie") {
+        return same_host(target, original);
+    }
+    if name.eq_ignore_ascii_case("authorization") {
+        return same_origin(target, original);
+    }
+    true
+}
+
 /// 归一化代理地址：小写 scheme；https 按 HTTP CONNECT 代理映射为 http；
 /// 仅保留 http/socks5，并要求非空 host。
 fn normalize_proxy(raw: &str) -> Result<Option<String>, OnlineError> {
@@ -181,14 +208,19 @@ impl UreqTransport {
     }
 
     /// 单次请求：应用手动请求头与派生的 Referer/Origin。
+    /// Cookie 仅在目标与原始请求同主机时发送，Authorization 仅在同 origin 时发送。
     fn execute(
         &self,
-        url: &url::Url,
+        target: &url::Url,
+        original: &url::Url,
         max_bytes: usize,
         referer: Option<&str>,
     ) -> Result<RawResponse, OnlineError> {
-        let mut req = self.agent.get(url.as_str());
+        let mut req = self.agent.get(target.as_str());
         for (k, v) in &self.headers.values {
+            if !allows_header(k, target, original) {
+                continue;
+            }
             req = req.set(k, v);
         }
         if let Some(page) = referer {
@@ -207,13 +239,13 @@ impl UreqTransport {
             }
         }
         match req.call() {
-            Ok(resp) => read_response(resp, url, max_bytes),
-            Err(ureq::Error::Status(_, resp)) => read_response(resp, url, max_bytes),
+            Ok(resp) => read_response(resp, target, max_bytes),
+            Err(ureq::Error::Status(_, resp)) => read_response(resp, target, max_bytes),
             Err(ureq::Error::Transport(t)) => Err(OnlineError::Network(t.to_string())),
         }
     }
 
-    /// 手动跟随 301/302/303/307/308；每一跳都重新应用请求头。
+    /// 手动跟随 301/302/303/307/308；每一跳都重新应用请求头（凭据按目标 host/origin 过滤）。
     fn get_once(
         &self,
         url: &url::Url,
@@ -222,7 +254,7 @@ impl UreqTransport {
     ) -> Result<RawResponse, OnlineError> {
         let mut current = url.clone();
         for hop in 0..=MAX_REDIRECTS {
-            let raw = self.execute(&current, max_bytes, referer)?;
+            let raw = self.execute(&current, url, max_bytes, referer)?;
             if !is_redirect(raw.status) {
                 return Ok(raw);
             }
@@ -506,6 +538,145 @@ mod tests {
         assert_eq!(r.body, b"ok");
         assert!(r.final_url.ends_with("/final"), "{}", r.final_url);
         h.join().unwrap();
+    }
+
+    /// 有界 accept：监听非阻塞 + 截止时间，避免实现异常时测试永久挂起。
+    fn accept_bounded(listener: &TcpListener) -> std::net::TcpStream {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        listener.set_nonblocking(true).unwrap();
+        loop {
+            match listener.accept() {
+                Ok((s, _)) => {
+                    s.set_nonblocking(false).unwrap();
+                    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    s.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+                    return s;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(std::time::Instant::now() < deadline, "等待客户端请求超时");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("accept 失败：{e}"),
+            }
+        }
+    }
+
+    /// 只处理一次请求的 loopback hop；可返回 302 或 200，并回传收到的原始请求。
+    fn spawn_hop(redirect_to: Option<String>) -> (String, JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let h = std::thread::spawn(move || {
+            let mut s = accept_bounded(&listener);
+            let mut buf = [0u8; 8192];
+            let n = s.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            match redirect_to {
+                Some(location) => {
+                    let resp = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    s.write_all(resp.as_bytes()).unwrap();
+                }
+                None => {
+                    s.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .unwrap();
+                }
+            }
+            req
+        });
+        (format!("http://{addr}/start"), h)
+    }
+
+    /// 同源两跳：/start 302 → /final，回传第二跳的原始请求。
+    fn spawn_same_origin_redirect() -> (String, JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let h = std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            let mut first = accept_bounded(&listener);
+            let n = first.read(&mut buf).unwrap();
+            assert!(String::from_utf8_lossy(&buf[..n]).starts_with("GET /start "));
+            first
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            let mut second = accept_bounded(&listener);
+            let n = second.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            second
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .unwrap();
+            req
+        });
+        (format!("http://{addr}/start"), h)
+    }
+
+    /// 读取原始请求中的指定请求头（名称大小写不敏感）。
+    fn header_value<'a>(req: &'a str, name: &str) -> Option<&'a str> {
+        req.lines().find_map(|line| {
+            let (k, v) = line.split_once(':')?;
+            if k.eq_ignore_ascii_case(name) {
+                Some(v.trim())
+            } else {
+                None
+            }
+        })
+    }
+
+    const CREDENTIAL_HEADERS: &str =
+        r#"{"Cookie":"sid=abc","Authorization":"Bearer secret","X-Test":"yes"}"#;
+
+    #[test]
+    fn redirect_same_host_other_port_drops_authorization_only() {
+        // 第二个 stub 与起点同主机不同端口：Cookie 保留，Authorization 丢弃。
+        let (target_url, target_h) = spawn_hop(None);
+        let (start_url, start_h) = spawn_hop(Some(target_url));
+        let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
+        let r = t.get(&start_url, 1024, None).unwrap();
+        assert_eq!(r.status, 200);
+        let first = start_h.join().unwrap();
+        assert_eq!(header_value(&first, "cookie"), Some("sid=abc"));
+        assert_eq!(header_value(&first, "authorization"), Some("Bearer secret"));
+        let second = target_h.join().unwrap();
+        assert_eq!(header_value(&second, "cookie"), Some("sid=abc"));
+        assert_eq!(header_value(&second, "authorization"), None, "{second}");
+        assert_eq!(header_value(&second, "x-test"), Some("yes"));
+    }
+
+    #[test]
+    fn redirect_cross_host_drops_cookie_and_authorization() {
+        // 127.0.0.1 → localhost 视为跨主机：Cookie 与 Authorization 都丢弃。
+        let (target_url, target_h) = spawn_hop(None);
+        let port = url::Url::parse(&target_url).unwrap().port().unwrap();
+        let (start_url, start_h) = spawn_hop(Some(format!("http://localhost:{port}/final")));
+        let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
+        let r = t.get(&start_url, 1024, None).unwrap();
+        assert_eq!(r.status, 200);
+        let first = start_h.join().unwrap();
+        assert_eq!(header_value(&first, "cookie"), Some("sid=abc"));
+        assert_eq!(header_value(&first, "authorization"), Some("Bearer secret"));
+        let second = target_h.join().unwrap();
+        assert_eq!(header_value(&second, "cookie"), None, "{second}");
+        assert_eq!(header_value(&second, "authorization"), None, "{second}");
+        assert_eq!(header_value(&second, "x-test"), Some("yes"));
+    }
+
+    #[test]
+    fn redirect_same_origin_keeps_cookie_and_authorization() {
+        let (url, h) = spawn_same_origin_redirect();
+        let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
+        let r = t.get(&url, 1024, None).unwrap();
+        assert_eq!(r.status, 200);
+        let second = h.join().unwrap();
+        assert_eq!(header_value(&second, "cookie"), Some("sid=abc"));
+        assert_eq!(
+            header_value(&second, "authorization"),
+            Some("Bearer secret")
+        );
+        assert_eq!(header_value(&second, "x-test"), Some("yes"));
     }
 
     #[test]

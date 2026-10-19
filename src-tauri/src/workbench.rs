@@ -2,7 +2,6 @@
 //! 检测/OCR/擦除经 sidecar(docs/sidecar-api.md),翻译走 OpenAI 兼容服务
 //! (SQLite 按 书+页+原文+目标语言 缓存,术语表按系列注入 prompt)。
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,7 +15,6 @@ use crate::commands::{blocking, err};
 use crate::db;
 use crate::ocr;
 use crate::sidecar::{self, DetectBox, OcrText};
-use crate::source::{self, ImageSource};
 use crate::state::AppState;
 use crate::translate;
 
@@ -53,33 +51,37 @@ pub(crate) struct PagePng {
     pub height: u32,
 }
 
-/// 原始分辨率整页 PNG(检测/OCR/擦除/批量队列共用;展示缩放是前端的责任)。
-pub(crate) fn load_page_png(
-    path: String,
+/// 按 bookId 读取原始分辨率整页 PNG（本地/在线共用；展示缩放是前端的责任）。
+pub(crate) fn load_page_png_for_book(
+    st: &Arc<AppState>,
+    book_id: &str,
     index: u32,
 ) -> Result<PagePng, crate::source::BackendError> {
-    let src = source::open_source(Path::new(&path))?;
-    let count = src.page_count()?;
+    let handle = st.source_handle_for_book(book_id)?;
+    let count = handle.page_count()?;
     if index >= count as u32 {
         return Err(crate::source::BackendError::Msg(format!(
             "页码 {index} 超出范围(共 {count} 页)"
         )));
     }
-    let raw = src.read_raw(index as usize)?;
+    let raw = handle.read_raw(index as usize)?;
     let img = image::load_from_memory(&raw.bytes)?;
     let (width, height) = (img.width(), img.height());
     let png = ocr::encode_png(&img)?;
     Ok(PagePng { png, width, height })
 }
 
-/// 书路径 + sidecar 连接参数。
-fn wb_ctx(state: &State<'_, Arc<AppState>>, book_id: &str) -> Result<(String, String, u64), String> {
+/// sidecar 连接参数；bookId 仅用于校验书籍存在。
+fn wb_ctx(
+    state: &State<'_, Arc<AppState>>,
+    book_id: &str,
+) -> Result<(String, u64), String> {
     let s = state.settings.lock().clone();
-    let row = state
+    state
         .db
         .with(|conn| db::get_book(conn, book_id).map_err(err))?
         .ok_or_else(|| "书籍不存在".to_string())?;
-    Ok((row.path, s.sidecar_endpoint, s.sidecar_timeout_s))
+    Ok((s.sidecar_endpoint, s.sidecar_timeout_s))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,8 +101,10 @@ pub async fn wb_detect(
     index: u32,
 ) -> Result<WbDetectResult, String> {
     let t0 = Instant::now();
-    let (path, endpoint, timeout) = wb_ctx(&state, &book_id)?;
-    let page = blocking(move || load_page_png(path, index)).await?;
+    let (endpoint, timeout) = wb_ctx(&state, &book_id)?;
+    let st = state.inner().clone();
+    let bid = book_id.clone();
+    let page = blocking(move || load_page_png_for_book(&st, &bid, index)).await?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&page.png);
     let client = state.http.clone();
     let boxes = sidecar::detect(&client, endpoint.trim(), &b64, timeout).await?;
@@ -128,8 +132,10 @@ pub async fn wb_ocr(
     boxes: Vec<DetectBox>,
 ) -> Result<WbOcrResult, String> {
     let t0 = Instant::now();
-    let (path, endpoint, timeout) = wb_ctx(&state, &book_id)?;
-    let page = blocking(move || load_page_png(path, index)).await?;
+    let (endpoint, timeout) = wb_ctx(&state, &book_id)?;
+    let st = state.inner().clone();
+    let bid = book_id.clone();
+    let page = blocking(move || load_page_png_for_book(&st, &bid, index)).await?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&page.png);
     let client = state.http.clone();
     let results = sidecar::ocr_boxes(&client, endpoint.trim(), &b64, &boxes, timeout).await?;
@@ -157,8 +163,10 @@ pub async fn wb_inpaint(
     boxes: Vec<DetectBox>,
 ) -> Result<WbImageResult, String> {
     let t0 = Instant::now();
-    let (path, endpoint, timeout) = wb_ctx(&state, &book_id)?;
-    let page = blocking(move || load_page_png(path, index)).await?;
+    let (endpoint, timeout) = wb_ctx(&state, &book_id)?;
+    let st = state.inner().clone();
+    let bid = book_id.clone();
+    let page = blocking(move || load_page_png_for_book(&st, &bid, index)).await?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&page.png);
     let client = state.http.clone();
     let bytes = sidecar::inpaint(&client, endpoint.trim(), &b64, &boxes, timeout).await?;

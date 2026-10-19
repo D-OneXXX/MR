@@ -22,8 +22,8 @@ use crate::state::AppState;
 use crate::translate;
 use crate::{
     BookDayPoint, BookInfo, Dashboard, HeatDay, ImportItemResult, ImportResult, MemoryStats,
-    OcrResult, PageDim, PageEntry, PageImage, RegionRect, RemoveResult, ScanResult, SeriesProgress,
-    Settings, TransStats, TranslateResult,
+    OcrResult, OnlineProbe, PageDim, PageEntry, PageImage, RegionRect, RemoveResult, ScanResult,
+    SeriesProgress, Settings, TransStats, TranslateResult,
 };
 
 pub(crate) fn err(e: impl ToString) -> String {
@@ -333,24 +333,15 @@ pub async fn remove_books(
         if delete_source_files {
             let mut hard: Vec<String> = Vec::new();
             for id in &ids {
-                let path = match db::get_book(&conn, id)? {
-                    Some(b) => b.path,
-                    None => continue,
-                };
-                let p = PathBuf::from(&path);
-                let res = if p.is_dir() {
-                    std::fs::remove_dir_all(&p)
-                } else if p.is_file() {
-                    std::fs::remove_file(&p)
-                } else {
-                    Ok(())
-                };
-                match res {
-                    Ok(()) => {
-                        deleted_files += 1;
+                let Some(b) = db::get_book(&conn, id)? else { continue };
+                match delete_source_if_local(&b.path, &b.source_type) {
+                    Ok(deleted) => {
+                        if deleted {
+                            deleted_files += 1;
+                        }
                         hard.push(id.clone());
                     }
-                    Err(e) => errors.push(format!("{path}：{e}")),
+                    Err(e) => errors.push(format!("{}：{e}", b.path)),
                 }
             }
             let n = db::hard_delete_books(&conn, &hard)?;
@@ -361,11 +352,12 @@ pub async fn remove_books(
         }
     })
     .await?;
-    // 内存缓存 + 磁盘渲染缓存 + 条漫布局缓存级联清理。
+    // 内存缓存 + 磁盘渲染缓存 + 条漫布局缓存 + 常开源句柄级联清理。
     for id in &ids {
         state.cache.remove_book(id);
         state.render.remove_book(id);
         state.webtoon_layouts.lock().remove(id);
+        state.sources.lock().remove(id);
     }
     Ok(RemoveResult {
         removed,
@@ -405,17 +397,11 @@ pub async fn list_entries(
     state: State<'_, Arc<AppState>>,
     book_id: String,
 ) -> Result<Vec<PageEntry>, String> {
-    let path: String = state
-        .db
-        .with(|conn| {
-            db::get_book(conn, &book_id)
-                .map_err(err)?
-                .map(|b| b.path)
-                .ok_or_else(|| "书籍不存在".to_string())
-        })?;
+    let st = state.inner().clone();
+    let bid = book_id.clone();
     blocking(move || {
-        let src = source::open_source(Path::new(&path))?;
-        Ok(src
+        let handle = st.source_handle_for_book(&bid)?;
+        Ok(handle
             .entry_names()?
             .into_iter()
             .enumerate()
@@ -481,24 +467,23 @@ pub async fn get_page(
     if let Some(hit) = state.cache.get_page(&book_id, index, w, h) {
         return Ok(to_page_image(index, hit));
     }
-    let (path, title) = state
+    let (title, is_online) = state
         .db
         .with(|conn| {
             db::get_book(conn, &book_id)
                 .map_err(err)?
-                .map(|b| (b.path, b.title))
+                .map(|b| (b.title, b.source_type != "local"))
                 .ok_or_else(|| "书籍不存在".to_string())
         })?;
     let st = state.inner().clone();
     let book = book_id.clone();
-    let task_path = path.clone();
     let rendered = match blocking(move || {
         // 2) L2 磁盘成品缓存。
         if let Some(bytes) = st.render.get(&book, index, w, h) {
             return assembled_page(bytes);
         }
         // 3) 全管线（常开句柄，不再每页重开 zip/重读目录）。
-        let handle = st.source_handle(&book, &task_path)?;
+        let handle = st.source_handle_for_book(&book)?;
         let raw = handle.read_raw(index as usize)?;
         let page = pipeline::render_raw(&raw, max_width, max_height)?;
         st.render.put(&book, index, w, h, &page.bytes);
@@ -518,33 +503,35 @@ pub async fn get_page(
         }
     };
     state.cache.put_page(&book_id, index, w, h, rendered.clone());
-    prefetch_neighbors(&state, &book_id, &path, index, w, h);
+    prefetch_neighbors(&state, &book_id, is_online, index, w, h);
     Ok(to_page_image(index, rendered))
 }
 
-/// 服务端邻页预取：主请求落地后，后台把 ±1/±2 页灌进 L1/L2，
+/// 服务端邻页预取：主请求落地后，后台把邻页灌进 L1/L2，
 /// 翻页不依赖前端 idle 回调时机（P0 手感：命中翻页零等待）。
+/// 本地读盘廉价，预取 ±1/±2；在线走网络，只预取 +1/+2（不向前回读）。
 fn prefetch_neighbors(
     state: &State<'_, Arc<AppState>>,
     book_id: &str,
-    path: &str,
+    is_online: bool,
     index: u32,
     w: u32,
     h: u32,
 ) {
     let st = state.inner().clone();
     let book = book_id.to_string();
-    let path = path.to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        let page_count = match st.source_handle(&book, &path) {
-            Ok(hd) => hd.page_count().unwrap_or(0) as i64,
+        let handle = match st.source_handle_for_book(&book) {
+            Ok(h) => h,
             Err(_) => return,
         };
+        let page_count = handle.page_count().unwrap_or(0) as i64;
         let (mw, mh) = (
             Some(w).filter(|v| *v > 0),
             Some(h).filter(|v| *v > 0),
         );
-        for d in [1i64, -1, 2, -2] {
+        let dirs: &[i64] = if is_online { &[1, 2] } else { &[1, -1, 2, -2] };
+        for d in dirs {
             let target = index as i64 + d;
             if target < 0 || target >= page_count {
                 continue;
@@ -564,8 +551,7 @@ fn prefetch_neighbors(
                 .get(&book, t, w, h)
                 .map(assembled_page)
                 .unwrap_or_else(|| {
-                    st.source_handle(&book, &path).and_then(|hd| {
-                        let raw = hd.read_raw(t as usize)?;
+                    handle.read_raw(t as usize).and_then(|raw| {
                         let p = pipeline::render_raw(&raw, mw, mh)?;
                         st.render.put(&book, t, w, h, &p.bytes);
                         Ok(p)
@@ -589,12 +575,12 @@ pub async fn get_thumbnail(
         return Ok(to_page_image(0, hit));
     }
     let edge = max_size.unwrap_or(240).clamp(64, 1024);
-    let (path, title) = state
+    let title = state
         .db
         .with(|conn| {
             db::get_book(conn, &book_id)
                 .map_err(err)?
-                .map(|b| (b.path, b.title))
+                .map(|b| b.title)
                 .ok_or_else(|| "书籍不存在".to_string())
         })?;
     let st = state.inner().clone();
@@ -604,7 +590,7 @@ pub async fn get_thumbnail(
         if let Some(bytes) = st.render.get(&book, 0, edge, edge) {
             return assembled_page(bytes);
         }
-        let handle = st.source_handle(&book, &path)?;
+        let handle = st.source_handle_for_book(&book)?;
         let raw = handle.read_raw(0)?;
         let page = pipeline::render_raw(&raw, Some(edge), Some(edge))?;
         st.render.put(&book, 0, edge, edge, &page.bytes);
@@ -769,14 +755,13 @@ pub async fn clear_pages(state: State<'_, Arc<AppState>>) -> Result<(), String> 
     Ok(())
 }
 
-/// 条漫布局：逐页源图尺寸（header 解析，不解码全图）。
+/// 条漫布局：逐页源图尺寸（本地 header 解析，不解码全图；在线直接读清单尺寸）。
 /// 结果按书缓存（切换条漫免重新读全部页头）；删除书籍时级联清缓存。
 #[tauri::command]
 pub async fn get_webtoon_layout(
     state: State<'_, Arc<AppState>>,
     book_id: String,
 ) -> Result<Vec<PageDim>, String> {
-    // 1) 命中缓存：直接返回（第二次切换条漫瞬时）。
     if let Some(cached) = state.webtoon_layouts.lock().get(&book_id) {
         return Ok(cached
             .iter()
@@ -788,18 +773,34 @@ pub async fn get_webtoon_layout(
             })
             .collect());
     }
-    let path: String = state
+    let row = state
         .db
-        .with(|conn| {
-            db::get_book(conn, &book_id)
-                .map_err(err)?
-                .map(|b| b.path)
-                .ok_or_else(|| "书籍不存在".to_string())
-        })?;
-    let st = state.inner().clone();
-    let book = book_id.clone();
+        .with(|conn| db::get_book(conn, &book_id).map_err(err))?
+        .ok_or_else(|| "书籍不存在".to_string())?;
+    if row.source_type != "local" {
+        let meta: crate::online::StoredMeta = serde_json::from_str(&row.meta_json)
+            .map_err(|e| format!("在线书元数据损坏：{e}"))?;
+        if meta.pages.is_empty()
+            || meta
+                .pages
+                .iter()
+                .any(|p| p.width.unwrap_or(0) == 0 || p.height.unwrap_or(0) == 0)
+        {
+            return Err("该在线书籍缺少页面尺寸，无法使用条漫模式".into());
+        }
+        return Ok(meta
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| PageDim {
+                index: i as u32,
+                width: p.width.unwrap(),
+                height: p.height.unwrap(),
+            })
+            .collect());
+    }
+    let handle = state.source_handle_for_book(&book_id).map_err(err)?;
     let dims = blocking(move || {
-        let handle = st.source_handle(&book, &path)?;
         let count = handle.page_count()?;
         let mut out: Vec<(u32, u32)> = Vec::with_capacity(count);
         for i in 0..count {
@@ -860,12 +861,12 @@ pub async fn get_webtoon_tile(
     if let Some(hit) = state.cache.get_tile(&book_id, index, tile, w) {
         return Ok(to_page_image(index, hit));
     }
-    let (path, title) = state
+    let title = state
         .db
         .with(|conn| {
             db::get_book(conn, &book_id)
                 .map_err(err)?
-                .map(|b| (b.path, b.title))
+                .map(|b| b.title)
                 .ok_or_else(|| "书籍不存在".to_string())
         })?;
     let st = state.inner().clone();
@@ -881,7 +882,7 @@ pub async fn get_webtoon_tile(
         if let Some(bytes) = st.render.get_tile(&book, index, tile, w) {
             return assembled_page(bytes);
         }
-        let handle = st.source_handle(&book, &path)?;
+        let handle = st.source_handle_for_book(&book)?;
         let raw = handle.read_raw(index as usize)?;
         let (tiles, pages) = pipeline::render_webtoon_tiles(&raw, w)?;
         if tile >= tiles {
@@ -919,23 +920,21 @@ pub async fn ocr_region(
     rect: RegionRect,
 ) -> Result<OcrResult, String> {
     let t0 = Instant::now();
-    let (path, endpoint, lang, timeout_s) = {
+    let (endpoint, lang, timeout_s) = {
         let s = state.settings.lock().clone();
-        let row = state
-            .db
-            .with(|conn| db::get_book(conn, &book_id).map_err(err))?
-            .ok_or_else(|| "书籍不存在".to_string())?;
-        (row.path, s.ocr_endpoint, s.src_lang, s.ocr_timeout_s)
+        (s.ocr_endpoint, s.src_lang, s.ocr_timeout_s)
     };
+    let st = state.inner().clone();
+    let bid = book_id.clone();
     let png = blocking(move || -> Result<Vec<u8>, BackendError> {
-        let src = source::open_source(Path::new(&path))?;
-        let count = src.page_count()?;
+        let handle = st.source_handle_for_book(&bid)?;
+        let count = handle.page_count()?;
         if index >= count as u32 {
             return Err(BackendError::Msg(format!(
                 "页码 {index} 超出范围(共 {count} 页)"
             )));
         }
-        let raw = src.read_raw(index as usize)?;
+        let raw = handle.read_raw(index as usize)?;
         ocr::encode_png(&ocr::crop_dyn(&raw, &rect)?)
     })
     .await?;
@@ -1074,6 +1073,129 @@ fn settings_persist_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("online_concurrency", s.online_concurrency.to_string()),
         ("online_headers", s.online_headers.clone()),
     ]
+}
+
+/// 解析 JSON 清单并入库/恢复；不改变已存在书的阅读进度。
+#[tauri::command]
+pub async fn resolve_online_url(
+    state: State<'_, Arc<AppState>>,
+    url: String,
+) -> Result<BookInfo, String> {
+    let st = state.inner().clone();
+    let (row, changed) = blocking(move || {
+        let s = st.settings.lock().clone();
+        if !s.experimental_online {
+            return Err(BackendError::Msg("在线直读未开启".into()));
+        }
+        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &s.online_headers)?;
+        let meta = crate::online::resolve(&http, &url)?;
+        // 兜底：部分历史路径可能把 0 页书入库，upsert 的页数钳制无法处理 0。
+        if meta.page_count == 0 {
+            return Err(BackendError::Msg("在线书清单没有可读页面，无法入库".into()));
+        }
+        let id = db::book_id_for_path(&meta.canonical_url);
+        let old = st
+            .db
+            .with(|conn| db::get_book(conn, &id).map_err(|e| e.to_string()))
+            .map_err(BackendError::Msg)?;
+        let old_hash = old.as_ref().and_then(|b| {
+            serde_json::from_str::<crate::online::StoredMeta>(&b.meta_json)
+                .ok()
+                .map(|m| m.manifest_hash)
+        });
+        let new_hash = serde_json::from_str::<crate::online::StoredMeta>(&meta.meta_json)
+            .map_err(|e| BackendError::Msg(format!("内部元数据错误：{e}")))?
+            .manifest_hash;
+        let changed = old_hash.as_deref() != Some(new_hash.as_str());
+        if changed && old.is_some() {
+            let active = st
+                .db
+                .with(|conn| db::has_active_batch(conn, &id).map_err(|e| e.to_string()))
+                .map_err(BackendError::Msg)?;
+            if active {
+                return Err(BackendError::Msg(
+                    "清单已变化，请先取消该书的批量任务再更新".into(),
+                ));
+            }
+        }
+        st.db
+            .with(|conn| {
+                db::upsert_online_book(
+                    conn,
+                    &id,
+                    &meta.canonical_url,
+                    &meta.title,
+                    meta.page_count as u32,
+                    &meta.source_type,
+                    &meta.meta_json,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .map_err(BackendError::Msg)?;
+        if changed && old.is_some() {
+            st.db
+                .with(|conn| db::clear_book_derived(conn, &id).map_err(|e| e.to_string()))
+                .map_err(BackendError::Msg)?;
+        }
+        let row = st
+            .db
+            .with(|conn| db::get_book(conn, &id).map_err(|e| e.to_string()))
+            .map_err(BackendError::Msg)?
+            .ok_or_else(|| BackendError::Msg("在线书入库后回读失败".into()))?;
+        Ok((row, changed))
+    })
+    .await?;
+
+    if changed {
+        state.cache.remove_book(&row.id);
+        state.render.remove_book(&row.id);
+        state.webtoon_layouts.lock().remove(&row.id);
+        state.sources.lock().remove(&row.id);
+    }
+    Ok(to_book_info(row))
+}
+
+/// 只测试 JSON 清单 + 代理连通性，不写库。
+#[tauri::command]
+pub async fn test_online_connection(
+    state: State<'_, Arc<AppState>>,
+    url: String,
+) -> Result<OnlineProbe, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let s = st.settings.lock().clone();
+        if !s.experimental_online {
+            return Err(BackendError::Msg("在线直读未开启".into()));
+        }
+        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &s.online_headers)?;
+        let t0 = Instant::now();
+        let meta = crate::online::resolve(&http, &url)?;
+        Ok(OnlineProbe {
+            ok: true,
+            title: meta.title,
+            page_count: meta.page_count as u32,
+            elapsed_ms: t0.elapsed().as_millis() as u64,
+            message: "可解析".into(),
+        })
+    })
+    .await
+}
+
+/// 本地书删除源文件；在线书返回 false（不触碰远程源）。
+fn delete_source_if_local(path: &str, source_type: &str) -> Result<bool, std::io::Error> {
+    if source_type != "local" {
+        return Ok(false);
+    }
+    let p = PathBuf::from(path);
+    if p.is_dir() {
+        std::fs::remove_dir_all(&p)?;
+        Ok(true)
+    } else if p.is_file() {
+        std::fs::remove_file(&p)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 #[tauri::command]
@@ -1248,5 +1370,11 @@ mod tests {
             meta_json: "{not-json".into(),
         };
         assert!(!to_book_info(corrupt).webtoon_ready);
+    }
+
+    #[test]
+    fn online_source_path_is_never_deleted() {
+        let url = "https://example.com/gallery/1";
+        assert_eq!(delete_source_if_local(url, "generic_manga").unwrap(), false);
     }
 }

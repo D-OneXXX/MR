@@ -247,6 +247,17 @@ pub struct TranslateResult {
     pub elapsed_ms: u64,
 }
 
+/// 在线源连通性探测结果（只解析清单，不写库）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnlineProbe {
+    pub ok: bool,
+    pub title: String,
+    pub page_count: u32,
+    pub elapsed_ms: u64,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransLogEntry {
@@ -424,7 +435,9 @@ pub fn run() {
             batch::batch_pause,
             batch::batch_resume,
             batch::batch_cancel,
-            batch::batch_list
+            batch::batch_list,
+            commands::resolve_online_url,
+            commands::test_online_connection
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

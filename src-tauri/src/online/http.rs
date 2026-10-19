@@ -241,7 +241,11 @@ impl UreqTransport {
         match req.call() {
             Ok(resp) => read_response(resp, target, max_bytes),
             Err(ureq::Error::Status(_, resp)) => read_response(resp, target, max_bytes),
-            Err(ureq::Error::Transport(t)) => Err(OnlineError::Network(t.to_string())),
+            // Transport 的 Display/Debug 可能包含完整请求 URL/query，日志会经
+            // `BackendError` 落到 `app.log`。只保留错误类别，避免泄漏查询串。
+            Err(ureq::Error::Transport(t)) => {
+                Err(OnlineError::Network(format!("传输失败（{:?}）", t.kind())))
+            }
         }
     }
 
@@ -702,6 +706,24 @@ mod tests {
         };
         assert!(err.contains("重定向"), "{err}");
         h.join().unwrap();
+    }
+
+    #[test]
+    fn transport_failure_message_excludes_url_and_query() {
+        // 预留 loopback 端口后立即释放，保证连接被拒绝；不访问公网。
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let t = UreqTransport::new("", "").unwrap();
+        let url = format!("http://127.0.0.1:{port}/x?token=secret");
+        let msg = match t.get(&url, 1024, None) {
+            Ok(_) => panic!("连接被拒绝时应返回错误"),
+            Err(OnlineError::Network(msg)) => msg,
+            Err(other) => panic!("unexpected error: {other}"),
+        };
+        assert!(msg.starts_with("传输失败（"), "{msg}");
+        assert!(!msg.contains("token=secret"), "{msg}");
+        assert!(!msg.contains("/x?"), "{msg}");
     }
 
     #[test]

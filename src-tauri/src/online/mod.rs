@@ -131,16 +131,34 @@ pub fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-/// 日志脱敏：只保留 scheme/host/path，去掉 query 与 fragment。
-/// 解析失败时退化为按首个 `?` / `#` 截断。
+/// 日志脱敏：只保留 scheme/host/path，去掉 userinfo、query 与 fragment。
+/// 解析失败时退化为按首个 `?` / `#` 截断，并尽力去掉 authority 中的 userinfo。
 pub fn redact_url_for_log(raw: &str) -> String {
     if let Ok(mut u) = url::Url::parse(raw) {
+        // 先移除密码再移除用户名；两者都为空时序列化不会输出 `@`。
+        let _ = u.set_password(None);
+        let _ = u.set_username("");
         u.set_query(None);
         u.set_fragment(None);
         return u.to_string();
     }
     let cut = raw.find(|c| c == '?' || c == '#').unwrap_or(raw.len());
-    raw[..cut].to_string()
+    let s = &raw[..cut];
+    if let Some(scheme_end) = s.find("://") {
+        let authority_start = scheme_end + 3;
+        let authority_end = s[authority_start..]
+            .find('/')
+            .map(|i| authority_start + i)
+            .unwrap_or(s.len());
+        if let Some(at) = s[authority_start..authority_end].rfind('@') {
+            return format!(
+                "{}{}",
+                &s[..authority_start],
+                &s[authority_start + at + 1..]
+            );
+        }
+    }
+    s.to_string()
 }
 
 /// 校验代理地址：空=直连；仅支持 http/https/socks5，且不允许 userinfo。
@@ -239,10 +257,24 @@ mod tests {
             redact_url_for_log("http://example.com:8080/gallery/1?x=1"),
             "http://example.com:8080/gallery/1"
         );
+        // userinfo 同样不能进入日志。
+        assert_eq!(
+            redact_url_for_log("https://user:pass@example.com/a?token=secret#frag"),
+            "https://example.com/a"
+        );
+        assert_eq!(
+            redact_url_for_log("http://alice@example.com:8080/a"),
+            "http://example.com:8080/a"
+        );
         // 非法 URL 退化为按首个 ? / # 截断。
         assert_eq!(redact_url_for_log("not a url?x=1#f"), "not a url");
         assert_eq!(redact_url_for_log("plain#frag"), "plain");
         assert_eq!(redact_url_for_log("plain"), "plain");
+        // 解析失败时也尽力去掉 authority 中的 userinfo（scheme 非法导致无法解析）。
+        assert_eq!(
+            redact_url_for_log("ht tp://user:pass@example.com/a?x=1"),
+            "ht tp://example.com/a"
+        );
     }
 
     #[test]

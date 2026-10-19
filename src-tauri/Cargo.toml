@@ -39,6 +39,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 url = "2"
 percent-encoding = "2"
 ureq = { version = "2", features = ["json", "socks-proxy"] }
+# 在线源：单页 HTML 图集解析
+regex = "1"
 
 # 阶段三:本地 OCR 走 WinRT Windows.Media.Ocr(仅 Windows)。
 [target.'cfg(windows)'.dependencies]

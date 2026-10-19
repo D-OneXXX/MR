@@ -1,7 +1,9 @@
 //! 在线源公共类型、URL 规范化、阻塞信号量与错误。
 //!
-//! 仅承载纯逻辑与阻塞 HTTP 传输；JSON/HTML 解析由后续任务追加。
+//! 统一解析入口见 [`resolve`]：一次拉取后先试 JSON 清单，再试单页 HTML 图集。
 
+pub mod direct;
+pub mod html;
 pub mod http;
 
 use std::sync::{Condvar, Mutex};
@@ -95,6 +97,30 @@ pub fn page_name(p: &PageRef, index: usize) -> String {
         })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| format!("第 {} 页", index + 1))
+}
+
+/// 统一在线解析入口：只拉取一次，先按 JSON 清单解析，失败后尝试单页 HTML 图集。
+pub fn resolve(
+    http: &dyn http::HttpTransport,
+    raw_url: &str,
+) -> Result<direct::OnlineBookMeta, BackendError> {
+    let url = normalize_url(raw_url)?;
+    let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None)?;
+    if !(200..300).contains(&resp.status) {
+        return Err(BackendError::Network(format!(
+            "内容 HTTP {}：{}",
+            resp.status, resp.final_url
+        )));
+    }
+    match direct::parse_manifest(&resp.body, &url) {
+        Ok(meta) => Ok(meta),
+        Err(json_err) => match html::parse_gallery(&resp.body, &url) {
+            Ok(meta) => Ok(meta),
+            Err(html_err) => Err(BackendError::Msg(format!(
+                "无法解析为 JSON 或 HTML 图集：JSON={json_err}; HTML={html_err}"
+            ))),
+        },
+    }
 }
 
 /// 按字符（非字节）截断，避免切断多字节字符。
@@ -255,5 +281,75 @@ mod tests {
             h.join().unwrap();
         }
         assert_eq!(peak.load(Ordering::SeqCst), 1);
+    }
+
+    struct StubTransport {
+        status: u16,
+        body: Vec<u8>,
+    }
+
+    impl StubTransport {
+        fn ok(body: &[u8]) -> Self {
+            Self {
+                status: 200,
+                body: body.to_vec(),
+            }
+        }
+    }
+
+    impl http::HttpTransport for StubTransport {
+        fn get(
+            &self,
+            _url: &str,
+            _max: usize,
+            _referer: Option<&str>,
+        ) -> Result<http::HttpResponse, OnlineError> {
+            Ok(http::HttpResponse {
+                status: self.status,
+                final_url: "http://example.com/final".into(),
+                content_type: None,
+                body: self.body.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn resolve_prefers_json_over_html() {
+        // JSON 里故意夹带 <img>：若先走 HTML 解析会得到 2 页，因此 1 页即证明 JSON 优先。
+        let t = StubTransport::ok(
+            br#"{"title":"JSON","pages":["http://x/1.jpg"],"note":"<img src='http://x/2.jpg'>"}"#,
+        );
+        let meta = resolve(&t, "http://example.com/manifest.json").unwrap();
+        assert_eq!(meta.title, "JSON");
+        assert_eq!(meta.page_count, 1);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_html() {
+        let t = StubTransport::ok(
+            br#"<html><head><title>HTML</title></head><body><img src="/1.png"></body></html>"#,
+        );
+        let meta = resolve(&t, "http://example.com/gallery").unwrap();
+        assert_eq!(meta.title, "HTML");
+        assert_eq!(meta.page_count, 1);
+    }
+
+    #[test]
+    fn resolve_reports_both_parse_failures() {
+        let t = StubTransport::ok(b"plain text, no manifest and no images");
+        let err = resolve(&t, "http://example.com/x").unwrap_err().to_string();
+        assert!(err.contains("无法解析为 JSON 或 HTML 图集"), "{err}");
+        assert!(err.contains("JSON="), "{err}");
+        assert!(err.contains("HTML="), "{err}");
+    }
+
+    #[test]
+    fn resolve_rejects_non_2xx() {
+        let t = StubTransport {
+            status: 404,
+            body: b"missing".to_vec(),
+        };
+        let err = resolve(&t, "http://example.com/x").unwrap_err().to_string();
+        assert!(err.contains("404"), "{err}");
     }
 }

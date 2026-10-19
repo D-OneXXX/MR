@@ -131,6 +131,18 @@ pub fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
+/// 日志脱敏：只保留 scheme/host/path，去掉 query 与 fragment。
+/// 解析失败时退化为按首个 `?` / `#` 截断。
+pub fn redact_url_for_log(raw: &str) -> String {
+    if let Ok(mut u) = url::Url::parse(raw) {
+        u.set_query(None);
+        u.set_fragment(None);
+        return u.to_string();
+    }
+    let cut = raw.find(|c| c == '?' || c == '#').unwrap_or(raw.len());
+    raw[..cut].to_string()
+}
+
 /// 校验代理地址：空=直连；仅支持 http/https/socks5，且不允许 userinfo。
 pub fn validate_proxy(raw: &str) -> Result<(), String> {
     let raw = raw.trim();
@@ -215,6 +227,22 @@ mod tests {
         assert_eq!(u.as_str(), "https://example.com/a?x=1");
         assert!(normalize_url("file:///C:/a.jpg").is_err());
         assert!(normalize_url("http://user:pass@example.com/a").is_err());
+    }
+
+    #[test]
+    fn redact_url_for_log_strips_query_and_fragment() {
+        assert_eq!(
+            redact_url_for_log("https://example.com/a/b?token=secret#frag"),
+            "https://example.com/a/b"
+        );
+        assert_eq!(
+            redact_url_for_log("http://example.com:8080/gallery/1?x=1"),
+            "http://example.com:8080/gallery/1"
+        );
+        // 非法 URL 退化为按首个 ? / # 截断。
+        assert_eq!(redact_url_for_log("not a url?x=1#f"), "not a url");
+        assert_eq!(redact_url_for_log("plain#frag"), "plain");
+        assert_eq!(redact_url_for_log("plain"), "plain");
     }
 
     #[test]

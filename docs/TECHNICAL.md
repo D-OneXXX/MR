@@ -336,7 +336,7 @@ erDiagram
 |---|---|---|
 | `books` | 书库条目 | `id = sha256(path)`；`path` 唯一（本地为绝对路径，在线为规范化清单/图集 URL）；`removed=1` 为软删；`scroll_pct=-1` 表示无条漫记录 |
 | `books.source_type` | 来源类型 | `local` / `generic_manga`（本阶段在线书）/ `anime`（预留，命令不写入）；旧库默认 `local` |
-| `books.meta_json` | 在线书派生元数据 | 默认 `{}`；`{schema, manifestHash, fetchedAt, pages:[{url,width?,height?}]}`；**不含** Cookie/账号/代理凭据，也不通过 `BookInfo` 暴露 |
+| `books.meta_json` | 在线书派生元数据 | 默认 `{}`；`{schema, manifestHash, fetchedAt, pages:[{url,width?,height?}]}`；`pages[].url` 为完整页面 URL（含 query，下载所需）；**不含** 请求头/Cookie/账号/代理凭据，也不通过 `BookInfo` 暴露 |
 | `reading_log` | 逐日逐书阅读页数 | 主键 `(date, book_id)`；只累计“前进页数”，回翻不扣减；迁移旧数据时 `book_id=''` |
 | `settings` | 设置键值 | `k/v` 文本；启动时 `hydrate_settings` 回读 |
 | `trans_log` | OCR/翻译调用日志 | 保留最近 5000 条；统计取最近 50 条明细 |
@@ -363,7 +363,7 @@ erDiagram
   - 移除：`removed=1`，源文件/远程源与进度保留；重导入/重扫描自动恢复；
   - 删除源文件：先删除文件/目录，成功后才级联清理 DB 记录与缓存；
   - 在线书“彻底移除”：跳过文件系统，`deleted_files=0`，**不触碰远程源**，只硬删 DB 记录、缓存与句柄。
-- **在线元数据不外泄**：`meta_json` 只含页面 URL 与可选宽高；`BookInfo` 只增加 `sourceType`、`webtoonReady`，不返回页面 URL、请求头或凭据。
+- **在线元数据不外泄**：`pages` 只含完整页面 URL 与可选宽高；另有 `schema`/`manifestHash`/`fetchedAt`；不含请求头/凭据。`BookInfo` 只增加 `sourceType`、`webtoonReady`，不返回页面 URL、请求头或凭据。
 - **在线书条漫可用性**：`sourceType='local'` 恒为 `webtoonReady=true`；在线书要求全部页面具有正数宽高，否则 `false`（HTML 图集恒为 `false`）。
 - **阅读统计只增**：`set_progress` 只在 `page > prev` 时累加当日页数。
 - **页 OCR 先存后翻**：工作台步骤一成功即 `wb_save_ocr`；批量 worker 也先存 `page_ocr` 再翻译。
@@ -621,7 +621,7 @@ stateDiagram-v2
 ### 6.11 错误与日志
 
 - 统一错误 `BackendError`：IO / Zip / Decode / Db / Network / Msg，最终 `to_string()` 给前端；
-- 页面获取失败会写 `logs/app.log`，含书名、页码、原因；在线请求另记 `online_page` / `online_meta` scope，只记页码、状态码与主机，不记录完整 query/token；
+- 页面获取失败会写 `logs/app.log`，含书名、页码、原因；在线请求另记 `online_page` / `online_meta` scope，只记页码、状态码与 scheme/host/path，不记录 query/fragment；日志不包含 `onlineHeaders`/凭据；
 - 前端统一 `toastErr(command, error)` 展示可读错误；
 - 日志/缓存失败静默降级，不拖垮主流程。
 
@@ -638,15 +638,15 @@ stateDiagram-v2
 
 - `OnlineSource` 实现现有同步 `ImageSource`，构造只发生在 `spawn_blocking` 内；`UreqTransport` 为纯阻塞实现，不依赖 Tokio runtime；
 - 页下载使用 `ureq`（rustls；`http/https` 走 CONNECT，`socks5://` 走 SOCKS5），连接超时 10s、总超时 30s，固定 UA `MangaReader/0.1 online-direct`；
-- 重定向最多 5 跳，最终 URL 复验 `http/https`；跨主机重定向丢弃 Cookie/Authorization；429/500/502/503/504 最多重试 2 次（500ms/1500ms，`Retry-After` ≤5s），其余 4xx 不重试；
+- 重定向最多 5 跳，最终 URL 复验 `http/https`；跨主机重定向丢弃 Cookie；跨 origin（scheme+host+port）丢弃 Authorization；其他自定义头继续发送；429/500/502/503/504 最多重试 2 次（500ms/1500ms，`Retry-After` ≤5s），其余 4xx 不重试；
 - 响应上限：清单/HTML 2MiB，单页 32MiB；页面必须有 2xx 状态并以 `image::guess_format` 魔数验证，HTML/JSON/文本不进入图片解码；
-- 失败统一映射为 `BackendError::Network`，前端以字符串展示。
+- HTTP/传输失败映射为 `BackendError::Network`；URL/清单/HTML 解析错误为 `BackendError::Msg`，前端以字符串展示。
 
 **身份与元数据**
 
 - `books.path` = 规范化清单/图集 URL（trim、仅 http/https、拒绝 userinfo、去 fragment、保留 query，≤2048 字节）；
 - `book.id = sha256(path)`；`source_type='generic_manga'`；
-- `meta_json = {schema:1, manifestHash, fetchedAt, pages:[{url,width?,height?}]}`；页顺序即阅读顺序；宽高必须同时为正数才保存；不含任何请求头/凭据；
+- `meta_json = {schema:1, manifestHash, fetchedAt, pages:[{url,width?,height?}]}`；页顺序即阅读顺序；`pages[].url` 保存完整页面 URL（含 query，下载所需）；宽高必须同时为正数才保存；不含任何请求头/凭据；
 - `manifestHash = sha256(serde_json(规范化 {title, pages}))`，`fetchedAt` 不参与哈希。
 
 **JSON 清单**
@@ -691,7 +691,7 @@ stateDiagram-v2
 
 - `onlineHeaders` 为空不附加；以 `{` 开头按 JSON 对象解析，否则视为单行 Cookie；拒绝 CR/LF 与 `Host`、`Content-Length`、`Connection`、`Transfer-Encoding`；
 - 图片请求自动附加 `Referer: <规范化页面 URL>` 与 `Origin: <scheme://host>`；用户显式配置的同名头优先；
-- 明文保存在本机 SQLite，不读取浏览器 Cookie，不做自动登录或全局 Cookie jar；`meta_json` 与日志不包含请求头/完整 query。
+- 明文保存在本机 SQLite，不读取浏览器 Cookie，不做自动登录或全局 Cookie jar；`meta_json.pages[].url` 保存完整页面 URL（含 query，下载所需），但 `app.log` 只记 scheme/host/path、不含 query/fragment；`meta_json` 与日志均不含 `onlineHeaders`/凭据。
 
 **删除**
 
@@ -938,7 +938,7 @@ node scripts\verify-region.mjs
 npm run build
 ```
 
-当前基线：`cargo test` **101 项全部通过**（99 个库单元测试 + 2 个集成测试），类型检查与两个前端脚本通过。
+当前基线：`cargo test` **102 项全部通过**（100 个库单元测试 + 2 个集成测试），类型检查与两个前端脚本通过。
 
 覆盖重点：
 
@@ -946,7 +946,7 @@ npm run build
 - `cache.rs`：字节 LRU 淘汰、预算收缩、按书清理、200 页驻留；
 - `pipeline.rs`：尺寸计算、长图切片无缝覆盖；
 - `online/`：URL 规范化/标题回退、清单版本/页数/宽高/哈希、HTML 属性优先级/相对路径/去重/无图报错、JSON→HTML 调度回退；
-- `online/http.rs`：本地 stub server 的状态码/重试、重定向与跨主机凭据过滤、代理校验、禁止头、Referer/Origin 自动附加与显式覆盖；
+- `online/http.rs`：本地 stub server 的状态码/重试、重定向与凭据过滤（跨主机 Cookie / 跨 origin Authorization）、代理校验、禁止头、Referer/Origin 自动附加与显式覆盖；
 - `source.rs`：在线源的 URL/referer、状态/魔数校验、页名、`read_partial` 拒绝；
 - `state.rs`：按书打开本地/在线源、句柄池复用与来源类型错误；
 - `sidecar.rs`：健康响应/错误体/框默认值；

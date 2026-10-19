@@ -293,21 +293,31 @@ impl ImageSource for OnlineSource {
             .http
             .get(&page.url, PAGE_MAX_BYTES, Some(&self.referer))
             .map_err(|e| {
-                // 传输层失败（连接/超时/过大等）也带页 URL 留痕，便于定位。
-                let msg = format!("第 {} 页请求失败（{}）：{e}", index + 1, page.url);
+                // 传输层失败（连接/超时/过大等）也带脱敏后的页 URL 留痕，便于定位。
+                let msg = format!(
+                    "第 {} 页请求失败（{}）：{e}",
+                    index + 1,
+                    crate::online::redact_url_for_log(&page.url)
+                );
                 crate::logging::log_error("online_page", &msg);
                 BackendError::from(e)
             })?;
         if !(200..300).contains(&resp.status) {
             let msg = format!("第 {} 页 HTTP {}", index + 1, resp.status);
-            crate::logging::log_error("online_page", &format!("{msg}：{}", page.url));
+            crate::logging::log_error(
+                "online_page",
+                &format!("{msg}：{}", crate::online::redact_url_for_log(&page.url)),
+            );
             return Err(BackendError::Network(msg));
         }
         let fmt = match image::guess_format(&resp.body) {
             Ok(f) => f,
             Err(_) => {
                 let msg = format!("第 {} 页返回的不是图片", index + 1);
-                crate::logging::log_error("online_page", &format!("{msg}：{}", page.url));
+                crate::logging::log_error(
+                    "online_page",
+                    &format!("{msg}：{}", crate::online::redact_url_for_log(&page.url)),
+                );
                 return Err(BackendError::Network(msg));
             }
         };

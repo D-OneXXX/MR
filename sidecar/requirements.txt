@@ -1,0 +1,12 @@
+# Python 依赖(sidecar 自包含环境)
+# 注:Windows 上 PyPI 的 torch/torchvision 轮子即为 CPU 版;GPU 用户自行换 CUDA 轮子。
+torch
+torchvision
+numpy
+opencv-python
+pillow
+einops
+pyclipper
+shapely
+packaging
+requests

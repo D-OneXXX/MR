@@ -1,6 +1,6 @@
 # MangaReader 技术文档
 
-> 适用代码基线：`d8f19a7`（2026-10-19）  
+> 适用代码基线：`2a8a248`（2026-10-19）  
 > UI 版本：`v0.2.0`（`src/App.tsx`）；npm/Cargo/Tauri 清单版本：`0.1.0`  
 > 文档定位：面向接手开发、架构评审与排障的工程说明，不替代用户手册。  
 > 相关文档：[README](../README.md)、[Sidecar 接口契约](sidecar-api.md)、[真机冒烟清单](smoke-test.md)、[2026-10-19 冒烟报告](smoke-test-report-2026-10-19.md)、[在线直读设计](../superpowers/specs/2026-10-19-online-direct-reader-design.md)。
@@ -980,7 +980,7 @@ npm run build
 - 不通过：二次执行不秒出（擦除未缓存，整步约 8.7s）、批量 2 成功/7 失败（LLM 卡顿 + 30s 超时）、看板卡片缺成功/失败计数、工作台 OCR 不计入统计；
 - 文档问题：翻译默认关闭且 `Model` 为空、`启动翻译代理.bat` 监听 8081 而应用直连 8080。
 
-在线直读的手工 GUI 冒烟（本地 stub JSON 清单/HTML 图集、L2 回翻、条漫、工作台、删除、关闭开关）尚未在实现环境中执行；自动化只覆盖后端测试、类型检查、纯函数脚本与构建，GUI 验收需按[在线设计](../superpowers/specs/2026-10-19-online-direct-reader-design.md) 15.2 补跑。
+在线直读 GUI 冒烟已用隔离数据目录（`MR_DATA_DIR` / `MR_RENDER_CACHE_DIR` / 独立 WebView2 数据）执行并通过：JSON 清单与单页 HTML 图集导入、手动 `X-Smoke` 请求头与自动 Referer、在线页阅读、条漫、在线书“彻底移除”、关闭实验开关后已导入书仍可读、停掉源站并重启应用后 L2 离线回翻均正常。真实 sidecar 的检测/OCR 与工作台 GUI 未在本轮冒烟覆盖，仍需按[在线设计](../superpowers/specs/2026-10-19-online-direct-reader-design.md) 15.2 在 sidecar 可用时补跑。
 
 ---
 

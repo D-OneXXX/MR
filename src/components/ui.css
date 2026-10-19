@@ -699,3 +699,35 @@
 }
 .seg button.on { background: var(--accent); color: #fff; }
 .hint { font-size: 12px; color: var(--muted); }
+
+/* 在线源：URL 徽标与导入弹窗 */
+.book-source-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(77, 124, 254, 0.9);
+  letter-spacing: 0.04em;
+}
+.online-dialog {
+  width: min(560px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.online-dialog .online-error {
+  color: #f87171;
+}
+.online-spin {
+  animation: online-rot 0.9s linear infinite;
+}
+@keyframes online-rot {
+  to {
+    transform: rotate(360deg);
+  }
+}

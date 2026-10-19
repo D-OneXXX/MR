@@ -152,6 +152,11 @@ export default function DetailSheet({ book, originRect, onClose }: Props) {
           )}
           <div className="sheet-head-body">
             <div className="sheet-title">{render.title}</div>
+            {render.sourceType !== "local" && (
+              <span className="badge mono" style={{ marginLeft: 8 }}>
+                URL
+              </span>
+            )}
             <div className="hint mono">
               {render.currentPage} / {render.pageCount} 页
             </div>

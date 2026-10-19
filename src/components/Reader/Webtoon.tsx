@@ -46,7 +46,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * - 布局 = get_webtoon_layout 的源尺寸 → 显示高度（fit-width）→ 与后端同公式切片；
  * - 虚拟化：绝对定位占位撑起总高，只挂载视口上下窗口内的切片，滚出即释放；
  * - 切片由后端按显示宽度降采样解码后均分（≤2048px/片），整张长图永不进浏览器；
- * - **后台预切**：挂载后自动逐页物化后续页（近前 3 页最优先），滚到时全磁盘命中，
+ * - **后台预切**：挂载后自动逐页物化后续页（本地近前 3 页最优先，在线源收紧为
+ *   近前 1 页 / 向前 2 页），滚到时全磁盘命中，
  *   视觉上是一条无缝长条（不做字面拼接——巨型位图会爆内存）；
  * - 进度 = 滚动偏移百分比；恢复优先用条漫记录，否则用进入时的页码。
  */
@@ -257,19 +258,23 @@ const WebtoonView = memo(function WebtoonView({
     if (!layout) return;
     let alive = true;
     const gen = ++prefetchGen.current;
+    // 在线源每页都要真实下载：预取窗口收紧到近前 1 页 / 向前 2 页；
+    // 本地书保持 3/10。实际并发仍由后端 onlineConcurrency 信号量限制。
+    const near = book.sourceType === "local" ? PREFETCH_NEAR : 1;
+    const sweep = book.sourceType === "local" ? PREFETCH_SWEEP : 2;
     const run = async () => {
       while (alive && gen === prefetchGen.current) {
         const P = lastProgress.current.page;
         const total = layout.pages.length;
         let target = -1;
-        for (let c = P + 1; c <= P + PREFETCH_NEAR && c < total; c++) {
+        for (let c = P + 1; c <= P + near && c < total; c++) {
           if (!doneRef.current.has(c)) {
             target = c;
             break;
           }
         }
         if (target < 0) {
-          for (let c = P + PREFETCH_NEAR + 1; c < total && c <= P + PREFETCH_SWEEP; c++) {
+          for (let c = P + near + 1; c < total && c <= P + sweep; c++) {
             if (!doneRef.current.has(c)) {
               target = c;
               break;
@@ -300,7 +305,7 @@ const WebtoonView = memo(function WebtoonView({
     return () => {
       alive = false;
     };
-  }, [layout, book.id, W]);
+  }, [layout, book.id, book.sourceType, W]);
 
   /* ---------- 卸载前立即提交进度 ---------- */
   useEffect(
@@ -400,17 +405,7 @@ const WebtoonView = memo(function WebtoonView({
     fetchTile(i, t);
   };
 
-  if (err) {
-    return <ErrorState message={`条漫布局加载失败：${err}`} />;
-  }
-  if (!dims || !layout || vw <= 0) {
-    return (
-      <div className="reader-center">
-        <PixelPet mode="loading" message="正在展开长条" />
-      </div>
-    );
-  }
-
+  // 容器必须始终挂载：首次布局前 scrollerRef 为空，否则尺寸观察永远拿不到宽度。
   return (
     <div
       ref={scrollerRef}
@@ -419,28 +414,38 @@ const WebtoonView = memo(function WebtoonView({
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
     >
-      <div className="webtoon-strip" style={{ height: layout.total }}>
-        {layout.pages.flatMap((p, i) =>
-          Array.from({ length: p.tiles }, (_, t) => {
-            const key = `${i}:${t}`;
-            const tileH = p.dispH / p.tiles;
-            const top = p.start + t * tileH;
-            const src = tiles[key];
-            const isFailed = failed[key];
-            return (
-              <div key={key} className="webtoon-tile" style={{ top, height: tileH }}>
-                {src ? (
-                  <img src={src} alt={`第 ${i + 1} 页`} draggable={false} />
-                ) : isFailed ? (
-                  <button className="webtoon-tile-fail" onClick={() => retryTile(key)}>
-                    加载失败 · 点按重试
-                  </button>
-                ) : null}
-              </div>
-            );
-          }),
-        )}
-      </div>
+      {err ? (
+        <div className="reader-center">
+          <ErrorState message={`条漫布局加载失败：${err}`} />
+        </div>
+      ) : !dims || !layout || vw <= 0 ? (
+        <div className="reader-center">
+          <PixelPet mode="loading" message="正在展开长条" />
+        </div>
+      ) : (
+        <div className="webtoon-strip" style={{ height: layout.total }}>
+          {layout.pages.flatMap((p, i) =>
+            Array.from({ length: p.tiles }, (_, t) => {
+              const key = `${i}:${t}`;
+              const tileH = p.dispH / p.tiles;
+              const top = p.start + t * tileH;
+              const src = tiles[key];
+              const isFailed = failed[key];
+              return (
+                <div key={key} className="webtoon-tile" style={{ top, height: tileH }}>
+                  {src ? (
+                    <img src={src} alt={`第 ${i + 1} 页`} draggable={false} />
+                  ) : isFailed ? (
+                    <button className="webtoon-tile-fail" onClick={() => retryTile(key)}>
+                      加载失败 · 点按重试
+                    </button>
+                  ) : null}
+                </div>
+              );
+            }),
+          )}
+        </div>
+      )}
     </div>
   );
 });

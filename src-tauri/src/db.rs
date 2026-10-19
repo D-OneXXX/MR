@@ -37,7 +37,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
             current_page INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT '',
             removed INTEGER NOT NULL DEFAULT 0,
-            scroll_pct REAL NOT NULL DEFAULT -1
+            scroll_pct REAL NOT NULL DEFAULT -1,
+            source_type TEXT NOT NULL DEFAULT 'local',
+            meta_json TEXT NOT NULL DEFAULT '{}'
         );
         CREATE TABLE IF NOT EXISTS reading_log(
             date TEXT NOT NULL,
@@ -146,6 +148,28 @@ fn migrate_book_columns(conn: &Connection) -> Result<(), BackendError> {
             [],
         )?;
     }
+    let books_has_source: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name='source_type'",
+        [],
+        |r| r.get(0),
+    )?;
+    if books_has_source == 0 {
+        conn.execute(
+            "ALTER TABLE books ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local'",
+            [],
+        )?;
+    }
+    let books_has_meta: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name='meta_json'",
+        [],
+        |r| r.get(0),
+    )?;
+    if books_has_meta == 0 {
+        conn.execute(
+            "ALTER TABLE books ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'",
+            [],
+        )?;
+    }
     let cache_has_book: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('trans_cache') WHERE name='book_id'",
         [],
@@ -169,6 +193,8 @@ pub struct BookRow {
     pub current_page: u32,
     pub updated_at: String,
     pub scroll_pct: f64,
+    pub source_type: String,
+    pub meta_json: String,
 }
 
 fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<BookRow> {
@@ -180,6 +206,8 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<BookRow> {
         current_page: row.get::<_, i64>(4).map(|v| v.max(0) as u32)?,
         updated_at: row.get(5)?,
         scroll_pct: row.get::<_, f64>(6).unwrap_or(-1.0),
+        source_type: row.get(7)?,
+        meta_json: row.get(8)?,
     })
 }
 
@@ -193,20 +221,62 @@ pub fn upsert_book(
 ) -> Result<(), BackendError> {
     let now = now_str();
     conn.execute(
-        "INSERT INTO books(id, path, title, page_count, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO books(id, path, title, page_count, updated_at, source_type, meta_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'local', '{}')
          ON CONFLICT(id) DO UPDATE SET
             path=excluded.path, title=excluded.title,
             page_count=excluded.page_count, updated_at=excluded.updated_at,
-            removed=0",
+            removed=0, source_type='local', meta_json='{}'",
         params![id, path, title, page_count as i64, now],
     )?;
     Ok(())
 }
 
+/// 在线书入库/恢复：保留进度与条漫偏移；页数缩小时钳制 current_page。
+pub fn upsert_online_book(
+    conn: &Connection,
+    id: &str,
+    path: &str,
+    title: &str,
+    page_count: u32,
+    source_type: &str,
+    meta_json: &str,
+) -> Result<(), BackendError> {
+    let now = now_str();
+    conn.execute(
+        "INSERT INTO books(id, path, title, page_count, updated_at, source_type, meta_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+            path=excluded.path, title=excluded.title,
+            page_count=excluded.page_count, updated_at=excluded.updated_at,
+            removed=0, source_type=excluded.source_type, meta_json=excluded.meta_json,
+            current_page=MIN(books.current_page, excluded.page_count - 1)",
+        params![id, path, title, page_count as i64, now, source_type, meta_json],
+    )?;
+    Ok(())
+}
+
+/// 清单变化时清掉该书的派生缓存（页 OCR 与翻译缓存）。
+pub fn clear_book_derived(conn: &Connection, id: &str) -> Result<(), BackendError> {
+    conn.execute("DELETE FROM page_ocr WHERE book_id=?1", params![id])?;
+    conn.execute("DELETE FROM trans_cache WHERE book_id=?1", params![id])?;
+    Ok(())
+}
+
+/// 是否存在 queued/running/paused 批量任务。
+pub fn has_active_batch(conn: &Connection, book_id: &str) -> Result<bool, BackendError> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM batch_jobs WHERE book_id=?1 AND state IN ('queued','running','paused')",
+        params![book_id],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
 pub fn get_book(conn: &Connection, id: &str) -> Result<Option<BookRow>, BackendError> {
-    let mut stmt =
-        conn.prepare("SELECT id, path, title, page_count, current_page, updated_at, scroll_pct FROM books WHERE id=?1")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json FROM books WHERE id=?1",
+    )?;
     let mut rows = stmt.query(params![id])?;
     if let Some(r) = rows.next()? {
         Ok(Some(row_to_book(r)?))
@@ -227,12 +297,12 @@ pub fn book_is_removed(conn: &Connection, id: &str) -> Result<bool, BackendError
 pub fn list_books(conn: &Connection, query: Option<&str>) -> Result<Vec<BookRow>, BackendError> {
     let (sql, param): (&str, Option<String>) = match query {
         Some(q) if !q.trim().is_empty() => (
-            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct FROM books
+            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json FROM books
              WHERE removed=0 AND (title LIKE ?1 OR path LIKE ?1) ORDER BY updated_at DESC",
             Some(format!("%{}%", q.trim())),
         ),
         _ => (
-            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct FROM books
+            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json FROM books
              WHERE removed=0 ORDER BY updated_at DESC",
             None,
         ),
@@ -921,6 +991,63 @@ mod tests {
         assert_eq!(heatmap(&conn, 7).unwrap(), vec![(today_str(), 12)]);
         let by_book = reading_by_book(&conn, 7).unwrap();
         assert_eq!(by_book.len(), 2, "逐日逐书:两条(b1/b2),无全局行");
+    }
+
+    #[test]
+    fn online_columns_migrate_and_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE books(
+                id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+                page_count INTEGER NOT NULL DEFAULT 0, current_page INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            INSERT INTO books(id,path,title,page_count,current_page) VALUES('b1','p/b1','旧书',10,2);",
+        )
+        .unwrap();
+        init_schema(&conn).unwrap();
+        let old = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(old.source_type, "local");
+        assert_eq!(old.meta_json, "{}");
+
+        let meta = r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg"}]}"#;
+        upsert_online_book(&conn, "o1", "http://x/list.json", "在线", 3, "generic_manga", meta)
+            .unwrap();
+        let row = get_book(&conn, "o1").unwrap().unwrap();
+        assert_eq!(row.source_type, "generic_manga");
+        assert_eq!(row.meta_json, meta);
+        assert_eq!(row.page_count, 3);
+    }
+
+    #[test]
+    fn online_upsert_restores_and_clamps_progress() {
+        let conn = mem();
+        upsert_online_book(&conn, "o1", "http://x/a", "A", 5, "generic_manga", "{}").unwrap();
+        set_progress(&conn, "o1", 4, None).unwrap();
+        soft_remove_books(&conn, &["o1".into()]).unwrap();
+        upsert_online_book(&conn, "o1", "http://x/a", "A2", 2, "generic_manga", "{}").unwrap();
+        let row = get_book(&conn, "o1").unwrap().unwrap();
+        assert_eq!(row.title, "A2");
+        assert_eq!(row.page_count, 2);
+        assert_eq!(row.current_page, 1);
+        assert_eq!(row.source_type, "generic_manga");
+        assert!(list_books(&conn, None).unwrap().iter().any(|b| b.id == "o1"));
+    }
+
+    #[test]
+    fn clear_derived_and_active_batch() {
+        let conn = mem();
+        upsert_online_book(&conn, "o1", "http://x/a", "A", 2, "generic_manga", "{}").unwrap();
+        save_page_ocr(&conn, "o1", 0, 10, 10, "[]", "[]").unwrap();
+        cache_put(&conn, "k", "t", "o1").unwrap();
+        assert!(has_active_batch(&conn, "o1").unwrap() == false);
+        clear_book_derived(&conn, "o1").unwrap();
+        assert!(get_page_ocr(&conn, "o1", 0).unwrap().is_none());
+        assert!(cache_get(&conn, "k").unwrap().is_none());
+
+        let id = batch_create(&conn, "o1", "A", 2).unwrap();
+        batch_set_state(&conn, id, "running", "").unwrap();
+        assert!(has_active_batch(&conn, "o1").unwrap());
     }
 }
 

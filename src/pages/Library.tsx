@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderOpen, ListChecks, Plus, Search } from "lucide-react";
+import { FolderOpen, Link2, ListChecks, Plus, Search } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   api,
+  isOnlineEnabled,
   isTransEnabled,
+  onExperimentalChange,
   onTransToggle,
   type BatchJob,
   type BookInfo,
@@ -17,6 +19,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import ErrorState from "../components/ErrorState";
 import PixelPet from "../components/PixelPet";
 import DetailSheet from "../components/DetailSheet";
+import OnlineImportDialog from "../components/OnlineImportDialog";
 import { toast, toastErr, Toaster } from "../components/Toast";
 
 /**
@@ -49,6 +52,15 @@ export default function LibraryPage() {
   // 实验性翻译开关（镜像 + 订阅）：关闭时隐藏批量预翻译横条并停轮询。
   const [transOn, setTransOn] = useState(isTransEnabled());
   useEffect(() => onTransToggle(setTransOn), []);
+
+  // URL 在线直读入口（实验性开关门控 + 订阅变更）。
+  const [onlineOpen, setOnlineOpen] = useState(false);
+  const [onlineOn, setOnlineOn] = useState(isOnlineEnabled());
+  useEffect(() => onExperimentalChange(() => setOnlineOn(isOnlineEnabled())), []);
+  // 开关在别处被关闭时，立即收起已打开的导入弹窗。
+  useEffect(() => {
+    if (!onlineOn) setOnlineOpen(false);
+  }, [onlineOn]);
 
   // 批量预翻译进度轮询(工作台入队;仅在书库页轻量展示活跃任务)。
   useEffect(() => {
@@ -108,6 +120,20 @@ export default function LibraryPage() {
     () => books.find((b) => b.id === selectedId) ?? null,
     [books, selectedId],
   );
+
+  // 多选删除入口的文案：在线、本地、混合三种集合分别提示。
+  const checkedBooks = useMemo(
+    () => books.filter((b) => checkedIds.has(b.id)),
+    [books, checkedIds],
+  );
+  const checkedHasLocal = checkedBooks.some((b) => b.sourceType === "local");
+  const checkedHasOnline = checkedBooks.some((b) => b.sourceType !== "local");
+  const batchDeleteLabel =
+    checkedHasLocal && checkedHasOnline
+      ? "删除 / 彻底移除…"
+      : checkedHasOnline
+        ? "彻底移除…"
+        : "删除源文件…";
 
   const closeSheet = useCallback(() => {
     setSelectedId(null);
@@ -237,14 +263,24 @@ export default function LibraryPage() {
     setConfirmDelete(null);
     if (!targets || targets.length === 0) return;
     const ids = targets.map((b) => b.id);
+    const onlineCount = targets.filter((b) => b.sourceType !== "local").length;
+    const localCount = targets.length - onlineCount;
     try {
       const r = await api.removeBooks(ids, true);
       if (r.errors.length > 0) toastErr("remove_books", r.errors[0]);
-      toast(
-        r.deletedFiles > 0
-          ? `已删除源文件 ${r.deletedFiles} 个并清理全部记录`
-          : "没有源文件被删除",
-      );
+      if (onlineCount > 0 && localCount === 0) {
+        toast(`已彻底移除 ${onlineCount} 本在线书，远程源未删除`);
+      } else if (onlineCount > 0) {
+        toast(
+          `已删除源文件 ${r.deletedFiles} 个，并彻底移除 ${onlineCount} 本在线书（远程源未删除），全部记录已清理`,
+        );
+      } else {
+        toast(
+          r.deletedFiles > 0
+            ? `已删除源文件 ${r.deletedFiles} 个并清理全部记录`
+            : "没有源文件被删除",
+        );
+      }
       if (selectedId && ids.includes(selectedId)) closeSheet();
       setCheckedIds(new Set());
       await reload(debounced);
@@ -279,6 +315,9 @@ export default function LibraryPage() {
   const ctxBook = ctxMenu ? books.find((b) => b.id === ctxMenu.bookId) ?? null : null;
   const deleteTargets = confirmDelete;
   const deletePages = deleteTargets?.reduce((s, b) => s + b.pageCount, 0) ?? 0;
+  const deleteLocal = deleteTargets?.filter((b) => b.sourceType === "local") ?? [];
+  const deleteOnline = deleteTargets?.filter((b) => b.sourceType !== "local") ?? [];
+  const deleteMixed = deleteLocal.length > 0 && deleteOnline.length > 0;
 
   return (
     <div>
@@ -308,6 +347,15 @@ export default function LibraryPage() {
               aria-label="搜索书名"
             />
           </div>
+          {onlineOn && (
+            <button
+              className="btn"
+              onClick={() => setOnlineOpen(true)}
+              title="从 JSON 清单或单页 HTML 图集导入"
+            >
+              <Link2 size={14} /> URL 直读
+            </button>
+          )}
           <button
             className="btn primary"
             onClick={() => void onAddFiles()}
@@ -347,11 +395,10 @@ export default function LibraryPage() {
             className="btn"
             disabled={checkedIds.size === 0}
             onClick={() => {
-              const targets = books.filter((b) => checkedIds.has(b.id));
-              setConfirmDelete(targets);
+              setConfirmDelete(checkedBooks);
             }}
           >
-            删除源文件…
+            {batchDeleteLabel}
           </button>
           <button className="btn" onClick={exitSelectMode}>
             取消
@@ -458,7 +505,7 @@ export default function LibraryPage() {
               onSelect: () => void doRemove([ctxBook.id]),
             },
             {
-              label: "删除源文件…",
+              label: ctxBook.sourceType === "local" ? "删除源文件…" : "彻底移除…",
               danger: true,
               onSelect: () => setConfirmDelete([ctxBook]),
             },
@@ -466,15 +513,30 @@ export default function LibraryPage() {
         />
       )}
 
-      {/* 删除源文件：二次确认，列出路径与文件（页）数 */}
+      {/* 删除源文件 / 彻底移除：二次确认，列出路径与文件（页）数 */}
       {deleteTargets && deleteTargets.length > 0 && (
         <ConfirmDialog
-          title={`删除源文件（${deleteTargets.length} 本 · 共 ${deletePages} 页）？`}
+          title={`${
+            deleteMixed
+              ? "删除本地源文件 / 彻底移除在线书"
+              : deleteOnline.length > 0
+                ? "彻底移除"
+                : "删除源文件"
+          }（${deleteTargets.length} 本 · 共 ${deletePages} 页）？`}
           message={
-            "将从磁盘永久删除以下源文件/文件夹，并清理该书的进度、缩略图、翻译缓存等全部记录。此操作不可逆。"
+            deleteMixed
+              ? `将永久删除 ${deleteLocal.length} 本本地书的源文件（从磁盘移除），并彻底移除 ${deleteOnline.length} 本在线书；在线书的远程源不会被删除。以上书籍的进度、缩略图、翻译缓存等全部本地记录都会清理。此操作不可逆。`
+              : deleteOnline.length > 0
+                ? "将从书库移除以下在线书，并清理进度、缩略图、翻译缓存等全部本地记录；不会删除远程源。此操作不可逆。"
+                : "将从磁盘永久删除以下源文件/文件夹，并清理该书的进度、缩略图、翻译缓存等全部记录。此操作不可逆。"
           }
-          paths={deleteTargets.map((b) => `${b.path}（${b.pageCount} 页）`)}
-          confirmText="永久删除"
+          paths={deleteTargets.map(
+            (b) =>
+              `【${b.sourceType === "local" ? "本地" : "URL"}】${b.path}（${b.pageCount} 页）`,
+          )}
+          confirmText={
+            deleteMixed ? "删除 / 彻底移除" : deleteOnline.length > 0 ? "彻底移除" : "永久删除"
+          }
           onConfirm={() => void doDeleteConfirmed()}
           onCancel={() => setConfirmDelete(null)}
         />
@@ -501,6 +563,14 @@ export default function LibraryPage() {
             {importing.current}
           </div>
         </div>
+      )}
+
+      {onlineOn && onlineOpen && (
+        <OnlineImportDialog
+          onClose={() => setOnlineOpen(false)}
+          onImported={() => void reload(debounced)}
+          onRead={(b) => nav(`/reader/${encodeURIComponent(b.id)}`)}
+        />
       )}
 
       {/* 浮动详情 sheet（右侧滑出，非固定栏） */}

@@ -14,7 +14,7 @@ use crate::commands::{blocking, err};
 use crate::db::{self, BatchJobRow};
 use crate::sidecar::{self, DetectBox};
 use crate::state::AppState;
-use crate::workbench::{load_page_png, translate_texts_cached};
+use crate::workbench::{load_page_png_for_book, translate_texts_cached};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,8 +64,9 @@ pub fn spawn_worker(state: Arc<AppState>) {
 }
 
 async fn run_job(st: &Arc<AppState>, job: BatchJobRow) {
-    let path = match st.db.with(|conn| db::get_book(conn, &job.book_id).map_err(err)) {
-        Ok(Some(row)) => row.path,
+    // 只校验书籍存在；页面读取按 bookId 走统一源（本地/在线共用）。
+    match st.db.with(|conn| db::get_book(conn, &job.book_id).map_err(err)) {
+        Ok(Some(_)) => {}
         Ok(None) => {
             let _ = st.db.with(|conn| {
                 db::batch_set_state(conn, job.id, "failed", "书籍不存在(可能已被移除)").map_err(err)
@@ -101,7 +102,7 @@ async fn run_job(st: &Arc<AppState>, job: BatchJobRow) {
             _ => return, // 暂停/取消/被移除:留在当前状态,等 resume 重新入队
         }
 
-        match process_page(st, &job.book_id, &path, done).await {
+        match process_page(st, &job.book_id, done).await {
             Ok(_) => {
                 ok += 1;
                 last_err.clear();
@@ -137,7 +138,6 @@ async fn run_job(st: &Arc<AppState>, job: BatchJobRow) {
 async fn process_page(
     st: &Arc<AppState>,
     book_id: &str,
-    path: &str,
     index: u32,
 ) -> Result<(u32, u32), String> {
     let stored = st
@@ -149,8 +149,9 @@ async fn process_page(
             (row.width, row.height, texts)
         }
         None => {
-            let path = path.to_string();
-            let page = blocking(move || load_page_png(path, index)).await?;
+            let st2 = Arc::clone(st);
+            let bid = book_id.to_string();
+            let page = blocking(move || load_page_png_for_book(&st2, &bid, index)).await?;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&page.png);
             let (endpoint, timeout) = {
                 let s = st.settings.lock().clone();

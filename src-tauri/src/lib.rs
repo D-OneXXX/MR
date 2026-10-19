@@ -6,6 +6,7 @@ mod commands;
 pub mod db;
 pub mod logging;
 mod ocr;
+mod online;
 pub mod pipeline;
 pub mod render_cache;
 pub mod source;
@@ -34,6 +35,10 @@ pub struct BookInfo {
     pub updated_at: String,
     /// 条漫滚动偏移百分比（0.0..1.0）；-1 = 无条漫阅读记录。
     pub scroll_pct: f64,
+    /// local | generic_manga | anime（预留）。
+    pub source_type: String,
+    /// 条漫是否可用：本地 true；在线取决于清单尺寸。
+    pub webtoon_ready: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +182,14 @@ pub struct Settings {
     pub wb_detector: String,
     pub wb_ocr: String,
     pub wb_inpaint: String,
+    /// 实验性功能：URL 在线直读（JSON 清单 / 单页 HTML 图集）。
+    pub experimental_online: bool,
+    /// 在线源 HTTP 代理（空=直连；http/https/socks5）。
+    pub online_proxy: String,
+    /// 单本在线书页面下载并发（1-8）。
+    pub online_concurrency: u32,
+    /// 手动请求头：JSON 对象或单行 Cookie；仅用于自建/授权源。
+    pub online_headers: String,
 }
 
 impl Default for Settings {
@@ -201,6 +214,10 @@ impl Default for Settings {
             wb_detector: "ctd".into(),
             wb_ocr: "mit48pxctc".into(),
             wb_inpaint: "lama_large_512px".into(),
+            experimental_online: false,
+            online_proxy: String::new(),
+            online_concurrency: 3,
+            online_headers: String::new(),
         }
     }
 }
@@ -228,6 +245,17 @@ pub struct TranslateResult {
     pub translated: String,
     pub model: String,
     pub elapsed_ms: u64,
+}
+
+/// 在线源连通性探测结果（只解析清单，不写库）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnlineProbe {
+    pub ok: bool,
+    pub title: String,
+    pub page_count: u32,
+    pub elapsed_ms: u64,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,12 +339,28 @@ fn hydrate_settings(conn: &rusqlite::Connection, s: &mut Settings) {
     if let Some(v) = get("wb_inpaint") {
         s.wb_inpaint = v;
     }
+    if let Some(v) = get("experimental_online") {
+        s.experimental_online = v == "true" || v == "1";
+    }
+    if let Some(v) = get("online_proxy") {
+        s.online_proxy = v;
+    }
+    if let Some(v) = get("online_concurrency").and_then(|v| v.parse::<u32>().ok()) {
+        s.online_concurrency = v.clamp(1, 8);
+    }
+    if let Some(v) = get("online_headers") {
+        s.online_headers = v;
+    }
 }
 
 fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
     // Windows 优先：`dirs::data_local_dir` → …\AppData\Local\com.local.manga-reader。
-    let dir = dirs::data_local_dir()
-        .map(|d| d.join("com.local.manga-reader"))
+    // MR_DATA_DIR 用于测试/冒烟隔离；生产环境未设置时仍使用本地数据目录。
+    let dir = std::env::var("MR_DATA_DIR")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::data_local_dir().map(|d| d.join("com.local.manga-reader")))
         .ok_or_else(|| "无法定位本地数据目录".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let db_path = dir.join("library.db");
@@ -395,7 +439,9 @@ pub fn run() {
             batch::batch_pause,
             batch::batch_resume,
             batch::batch_cancel,
-            batch::batch_list
+            batch::batch_list,
+            commands::resolve_online_url,
+            commands::test_online_connection
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

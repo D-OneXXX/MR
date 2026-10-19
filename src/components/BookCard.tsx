@@ -99,6 +99,9 @@ export default function BookCard({
           <BookOpen size={28} strokeWidth={1.5} />
         </div>
       )}
+      {book.sourceType !== "local" && (
+        <span className="book-source-badge mono">URL</span>
+      )}
       <div className="book-overlay">
         <div className="book-title">{book.title}</div>
         <div className="book-sub mono">

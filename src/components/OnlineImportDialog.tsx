@@ -27,6 +27,7 @@ export default function OnlineImportDialog({ onClose, onImported, onRead }: Prop
       if (mode === "test") {
         const p = await api.testOnlineConnection(url.trim());
         setProbe(`${p.title} · ${p.pageCount} 页 · ${p.elapsedMs} ms`);
+        if (!p.ok) setErr(p.message || "清单没有可读页面，无法入库");
       } else {
         const b = await api.resolveOnlineUrl(url.trim());
         toast(`已加入：${b.title} · ${b.pageCount} 页`);

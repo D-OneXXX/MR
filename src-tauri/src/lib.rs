@@ -177,6 +177,14 @@ pub struct Settings {
     pub wb_detector: String,
     pub wb_ocr: String,
     pub wb_inpaint: String,
+    /// 实验性功能：URL 在线直读（JSON 清单）。
+    pub experimental_online: bool,
+    /// 在线源 HTTP 代理（空=直连；http/https/socks5）。
+    pub online_proxy: String,
+    /// 单本在线书页面下载并发（1-8）。
+    pub online_concurrency: u32,
+    /// 手动请求头：JSON 对象或单行 Cookie；仅用于自建/授权源。
+    pub online_headers: String,
 }
 
 impl Default for Settings {
@@ -201,6 +209,10 @@ impl Default for Settings {
             wb_detector: "ctd".into(),
             wb_ocr: "mit48pxctc".into(),
             wb_inpaint: "lama_large_512px".into(),
+            experimental_online: false,
+            online_proxy: String::new(),
+            online_concurrency: 3,
+            online_headers: String::new(),
         }
     }
 }
@@ -310,6 +322,18 @@ fn hydrate_settings(conn: &rusqlite::Connection, s: &mut Settings) {
     }
     if let Some(v) = get("wb_inpaint") {
         s.wb_inpaint = v;
+    }
+    if let Some(v) = get("experimental_online") {
+        s.experimental_online = v == "true" || v == "1";
+    }
+    if let Some(v) = get("online_proxy") {
+        s.online_proxy = v;
+    }
+    if let Some(v) = get("online_concurrency").and_then(|v| v.parse::<u32>().ok()) {
+        s.online_concurrency = v.clamp(1, 8);
+    }
+    if let Some(v) = get("online_headers") {
+        s.online_headers = v;
     }
 }
 

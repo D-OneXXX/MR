@@ -35,6 +35,10 @@ sysinfo = "0.31"
 dirs = "5"
 thiserror = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# 在线源：同步阻塞 HTTP + URL 规范化 + 文件名解码
+url = "2"
+percent-encoding = "2"
+ureq = { version = "2", features = ["json", "socks-proxy"] }
 
 # 阶段三:本地 OCR 走 WinRT Windows.Media.Ocr(仅 Windows)。
 [target.'cfg(windows)'.dependencies]

@@ -1044,6 +1044,10 @@ fn settings_persist_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("wb_detector", s.wb_detector.clone()),
         ("wb_ocr", s.wb_ocr.clone()),
         ("wb_inpaint", s.wb_inpaint.clone()),
+        ("experimental_online", if s.experimental_online { "true" } else { "false" }.to_string()),
+        ("online_proxy", s.online_proxy.clone()),
+        ("online_concurrency", s.online_concurrency.to_string()),
+        ("online_headers", s.online_headers.clone()),
     ]
 }
 
@@ -1101,6 +1105,10 @@ mod tests {
             "wb_detector",
             "wb_ocr",
             "wb_inpaint",
+            "experimental_online",
+            "online_proxy",
+            "online_concurrency",
+            "online_headers",
         ] {
             assert!(keys.contains(&k), "persist 清单缺少 {k}");
         }

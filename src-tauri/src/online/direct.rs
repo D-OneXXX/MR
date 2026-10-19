@@ -39,10 +39,11 @@ enum RawPageEntry {
     Url(String),
     Obj {
         url: String,
+        // 用 i64 接收，负数/超 u32 的值在解析后统一丢弃，而不是让整份清单反序列化失败。
         #[serde(default)]
-        width: Option<u32>,
+        width: Option<i64>,
         #[serde(default)]
-        height: Option<u32>,
+        height: Option<i64>,
     },
 }
 
@@ -105,8 +106,12 @@ pub fn parse_manifest(body: &[u8], url: &url::Url) -> Result<OnlineBookMeta, Bac
         };
         let page_url = normalize_url(&raw_page)
             .map_err(|e| BackendError::Msg(format!("第 {} 页 URL 非法：{e}", i + 1)))?;
+        // 宽高必须同时落在 1..=u32::MAX 才保留，否则两者都丢弃。
         let (width, height) = match (width, height) {
-            (Some(w), Some(h)) if w > 0 && h > 0 => (Some(w), Some(h)),
+            (Some(w), Some(h)) => match (u32::try_from(w), u32::try_from(h)) {
+                (Ok(w), Ok(h)) if w > 0 && h > 0 => (Some(w), Some(h)),
+                _ => (None, None),
+            },
             _ => (None, None),
         };
         pages.push(PageRef {
@@ -240,6 +245,25 @@ mod tests {
             .pages
             .iter()
             .all(|p| p.width.is_none() && p.height.is_none()));
+    }
+
+    #[test]
+    fn drops_negative_and_oversized_dimensions() {
+        let meta = resolve(
+            r#"{"pages":[
+                {"url":"http://x/1.jpg","width":-1,"height":1200},
+                {"url":"http://x/2.jpg","width":4294967296,"height":1200},
+                {"url":"http://x/3.jpg","width":800,"height":-5},
+                {"url":"http://x/4.jpg","width":4294967295,"height":4294967295}
+            ]}"#,
+        )
+        .unwrap();
+        let stored: StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
+        assert!(stored.pages[..3]
+            .iter()
+            .all(|p| p.width.is_none() && p.height.is_none()));
+        assert_eq!(stored.pages[3].width, Some(u32::MAX));
+        assert_eq!(stored.pages[3].height, Some(u32::MAX));
     }
 
     #[test]

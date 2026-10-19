@@ -112,9 +112,12 @@ pub fn resolve(
             resp.status, resp.final_url
         )));
     }
+    // 书身份保持用户请求的规范化 URL；HTML 相对图片与标题回退则使用重定向后的最终 URL。
+    // final_url 非法时退回请求 URL，避免因传输层给出的异常值中断解析。
+    let base_url = normalize_url(&resp.final_url).unwrap_or_else(|_| url.clone());
     match direct::parse_manifest(&resp.body, &url) {
         Ok(meta) => Ok(meta),
-        Err(json_err) => match html::parse_gallery(&resp.body, &url) {
+        Err(json_err) => match html::parse_gallery(&resp.body, &base_url, &url) {
             Ok(meta) => Ok(meta),
             Err(html_err) => Err(BackendError::Msg(format!(
                 "无法解析为 JSON 或 HTML 图集：JSON={json_err}; HTML={html_err}"
@@ -286,6 +289,8 @@ mod tests {
     struct StubTransport {
         status: u16,
         body: Vec<u8>,
+        final_url: String,
+        calls: AtomicUsize,
     }
 
     impl StubTransport {
@@ -293,7 +298,18 @@ mod tests {
             Self {
                 status: 200,
                 body: body.to_vec(),
+                final_url: "http://example.com/final".into(),
+                calls: AtomicUsize::new(0),
             }
+        }
+
+        fn with_final_url(mut self, final_url: &str) -> Self {
+            self.final_url = final_url.into();
+            self
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
         }
     }
 
@@ -304,9 +320,10 @@ mod tests {
             _max: usize,
             _referer: Option<&str>,
         ) -> Result<http::HttpResponse, OnlineError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(http::HttpResponse {
                 status: self.status,
-                final_url: "http://example.com/final".into(),
+                final_url: self.final_url.clone(),
                 content_type: None,
                 body: self.body.clone(),
             })
@@ -322,6 +339,7 @@ mod tests {
         let meta = resolve(&t, "http://example.com/manifest.json").unwrap();
         assert_eq!(meta.title, "JSON");
         assert_eq!(meta.page_count, 1);
+        assert_eq!(t.calls(), 1);
     }
 
     #[test]
@@ -332,6 +350,21 @@ mod tests {
         let meta = resolve(&t, "http://example.com/gallery").unwrap();
         assert_eq!(meta.title, "HTML");
         assert_eq!(meta.page_count, 1);
+        assert_eq!(t.calls(), 1);
+    }
+
+    #[test]
+    fn resolve_uses_final_url_for_relative_images_but_keeps_canonical_url() {
+        let t = StubTransport::ok(br#"<html><body><img src="2.png"></body></html>"#)
+            .with_final_url("http://cdn.example/dir/final.html");
+        let meta = resolve(&t, "http://example.com/request").unwrap();
+        // 书名身份保持用户请求的规范化 URL，不随重定向变化。
+        assert_eq!(meta.canonical_url, "http://example.com/request");
+        // 无 <title> 时标题也按最终 URL 推导。
+        assert_eq!(meta.title, "final.html");
+        let stored: StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
+        assert_eq!(stored.pages[0].url, "http://cdn.example/dir/2.png");
+        assert_eq!(t.calls(), 1);
     }
 
     #[test]
@@ -341,6 +374,7 @@ mod tests {
         assert!(err.contains("无法解析为 JSON 或 HTML 图集"), "{err}");
         assert!(err.contains("JSON="), "{err}");
         assert!(err.contains("HTML="), "{err}");
+        assert_eq!(t.calls(), 1);
     }
 
     #[test]
@@ -348,6 +382,7 @@ mod tests {
         let t = StubTransport {
             status: 404,
             body: b"missing".to_vec(),
+            ..StubTransport::ok(b"")
         };
         let err = resolve(&t, "http://example.com/x").unwrap_err().to_string();
         assert!(err.contains("404"), "{err}");

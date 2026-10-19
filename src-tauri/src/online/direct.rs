@@ -216,12 +216,30 @@ mod tests {
     fn title_falls_back_and_truncates() {
         let meta = resolve(r#"{"pages":["http://x/1.jpg"]}"#).unwrap();
         assert_eq!(meta.title, "manifest.json");
+        // 空白标题按缺失处理，回到 URL 推导名。
+        let meta = resolve(r#"{"title":"   ","pages":["http://x/1.jpg"]}"#).unwrap();
+        assert_eq!(meta.title, "manifest.json");
         let long = "a".repeat(300);
         let meta = resolve(&format!(
             r#"{{"title":"{long}","pages":["http://x/1.jpg"]}}"#
         ))
         .unwrap();
         assert_eq!(meta.title.chars().count(), 200);
+    }
+
+    #[test]
+    fn normalizes_title_and_drops_incomplete_dimensions() {
+        let meta = resolve(
+            r#"{"title":"  Trimmed  ","pages":[{"url":"http://x/1.jpg","width":800},{"url":"http://x/2.jpg","width":0,"height":1200}]}"#,
+        )
+        .unwrap();
+        assert_eq!(meta.title, "Trimmed");
+        let stored: StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
+        // 宽高必须同时为正，才保留尺寸提示。
+        assert!(stored
+            .pages
+            .iter()
+            .all(|p| p.width.is_none() && p.height.is_none()));
     }
 
     #[test]

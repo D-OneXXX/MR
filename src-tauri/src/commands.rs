@@ -337,6 +337,8 @@ pub async fn remove_books(
                 match delete_source_if_local(&b.path, &b.source_type) {
                     Ok(deleted) => {
                         if deleted {
+                            // 路径本就不存在时辅助函数返回 false：记录仍硬删，
+                            // 但没有实际删除动作，故不计入 deleted_files。
                             deleted_files += 1;
                         }
                         hard.push(id.clone());
@@ -353,6 +355,8 @@ pub async fn remove_books(
     })
     .await?;
     // 内存缓存 + 磁盘渲染缓存 + 条漫布局缓存 + 常开源句柄级联清理。
+    // 注意：在途预取/后台渲染无法撤回，旧页可能在此之后又写回 L1/L2；
+    // 本次不引入 generation key，接受该残留竞态（重新进入阅读会按新源重建）。
     for id in &ids {
         state.cache.remove_book(id);
         state.render.remove_book(id);
@@ -788,19 +792,31 @@ pub async fn get_webtoon_layout(
         {
             return Err("该在线书籍缺少页面尺寸，无法使用条漫模式".into());
         }
-        return Ok(meta
+        let dims: Vec<(u32, u32)> = meta
             .pages
             .iter()
+            .map(|p| (p.width.unwrap(), p.height.unwrap()))
+            .collect();
+        // 与本地分支一致写入布局缓存；清单变化/删书时由命令层失效。
+        state
+            .webtoon_layouts
+            .lock()
+            .insert(book_id.clone(), Arc::new(dims.clone()));
+        return Ok(dims
+            .iter()
             .enumerate()
-            .map(|(i, p)| PageDim {
+            .map(|(i, (w, h))| PageDim {
                 index: i as u32,
-                width: p.width.unwrap(),
-                height: p.height.unwrap(),
+                width: *w,
+                height: *h,
             })
             .collect());
     }
-    let handle = state.source_handle_for_book(&book_id).map_err(err)?;
+    // 句柄打开（SQLite 查询 / zip 或目录打开）必须在 blocking 内，避免占住 async worker。
+    let st = state.inner().clone();
+    let bid = book_id.clone();
     let dims = blocking(move || {
+        let handle = st.source_handle_for_book(&bid)?;
         let count = handle.page_count()?;
         let mut out: Vec<(u32, u32)> = Vec::with_capacity(count);
         for i in 0..count {
@@ -1075,7 +1091,61 @@ fn settings_persist_pairs(s: &Settings) -> Vec<(&'static str, String)> {
     ]
 }
 
-/// 解析 JSON 清单并入库/恢复；不改变已存在书的阅读进度。
+/// 把解析结果落库/恢复：0 页拦截、清单变化检测、活动批量任务拒绝、
+/// 入库与派生缓存清理同事务；返回整行与“是否变化”。
+fn apply_resolved_meta(
+    st: &Arc<AppState>,
+    meta: &crate::online::direct::OnlineBookMeta,
+) -> Result<(db::BookRow, bool), BackendError> {
+    // 兜底：0 页时 upsert 的页数钳制（page_count-1）会写出负进度。
+    if meta.page_count == 0 {
+        return Err(BackendError::Msg("在线书清单没有可读页面，无法入库".into()));
+    }
+    let id = db::book_id_for_path(&meta.canonical_url);
+    let new_hash = serde_json::from_str::<crate::online::StoredMeta>(&meta.meta_json)
+        .map_err(|e| BackendError::Msg(format!("内部元数据错误：{e}")))?
+        .manifest_hash;
+    st.db
+        .with(|conn| {
+            let old = db::get_book(conn, &id).map_err(|e| e.to_string())?;
+            // 旧 meta_json 损坏按“已变化”处理，避免脏行挡住清单更新。
+            let old_hash = old.as_ref().and_then(|b| {
+                serde_json::from_str::<crate::online::StoredMeta>(&b.meta_json)
+                    .ok()
+                    .map(|m| m.manifest_hash)
+            });
+            let changed = old_hash.as_deref() != Some(new_hash.as_str());
+            if changed && old.is_some() {
+                let active = db::has_active_batch(conn, &id).map_err(|e| e.to_string())?;
+                if active {
+                    return Err("清单已变化，请先取消该书的批量任务再更新".to_string());
+                }
+            }
+            // 入库与派生缓存清理必须同事务：中途失败不能留下“新清单 + 旧 OCR”。
+            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            db::upsert_online_book(
+                &tx,
+                &id,
+                &meta.canonical_url,
+                &meta.title,
+                meta.page_count as u32,
+                &meta.source_type,
+                &meta.meta_json,
+            )
+            .map_err(|e| e.to_string())?;
+            if changed && old.is_some() {
+                db::clear_book_derived(&tx, &id).map_err(|e| e.to_string())?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            let row = db::get_book(conn, &id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "在线书入库后回读失败".to_string())?;
+            Ok((row, changed))
+        })
+        .map_err(BackendError::Msg)
+}
+
+/// 解析 JSON 清单或单页 HTML 图集并入库/恢复；不改变已存在书的阅读进度。
 #[tauri::command]
 pub async fn resolve_online_url(
     state: State<'_, Arc<AppState>>,
@@ -1089,60 +1159,7 @@ pub async fn resolve_online_url(
         }
         let http = crate::online::http::UreqTransport::new(&s.online_proxy, &s.online_headers)?;
         let meta = crate::online::resolve(&http, &url)?;
-        // 兜底：部分历史路径可能把 0 页书入库，upsert 的页数钳制无法处理 0。
-        if meta.page_count == 0 {
-            return Err(BackendError::Msg("在线书清单没有可读页面，无法入库".into()));
-        }
-        let id = db::book_id_for_path(&meta.canonical_url);
-        let old = st
-            .db
-            .with(|conn| db::get_book(conn, &id).map_err(|e| e.to_string()))
-            .map_err(BackendError::Msg)?;
-        let old_hash = old.as_ref().and_then(|b| {
-            serde_json::from_str::<crate::online::StoredMeta>(&b.meta_json)
-                .ok()
-                .map(|m| m.manifest_hash)
-        });
-        let new_hash = serde_json::from_str::<crate::online::StoredMeta>(&meta.meta_json)
-            .map_err(|e| BackendError::Msg(format!("内部元数据错误：{e}")))?
-            .manifest_hash;
-        let changed = old_hash.as_deref() != Some(new_hash.as_str());
-        if changed && old.is_some() {
-            let active = st
-                .db
-                .with(|conn| db::has_active_batch(conn, &id).map_err(|e| e.to_string()))
-                .map_err(BackendError::Msg)?;
-            if active {
-                return Err(BackendError::Msg(
-                    "清单已变化，请先取消该书的批量任务再更新".into(),
-                ));
-            }
-        }
-        st.db
-            .with(|conn| {
-                db::upsert_online_book(
-                    conn,
-                    &id,
-                    &meta.canonical_url,
-                    &meta.title,
-                    meta.page_count as u32,
-                    &meta.source_type,
-                    &meta.meta_json,
-                )
-                .map_err(|e| e.to_string())
-            })
-            .map_err(BackendError::Msg)?;
-        if changed && old.is_some() {
-            st.db
-                .with(|conn| db::clear_book_derived(conn, &id).map_err(|e| e.to_string()))
-                .map_err(BackendError::Msg)?;
-        }
-        let row = st
-            .db
-            .with(|conn| db::get_book(conn, &id).map_err(|e| e.to_string()))
-            .map_err(BackendError::Msg)?
-            .ok_or_else(|| BackendError::Msg("在线书入库后回读失败".into()))?;
-        Ok((row, changed))
+        apply_resolved_meta(&st, &meta)
     })
     .await?;
 
@@ -1151,11 +1168,13 @@ pub async fn resolve_online_url(
         state.render.remove_book(&row.id);
         state.webtoon_layouts.lock().remove(&row.id);
         state.sources.lock().remove(&row.id);
+        // 在途预取/后台渲染无法撤回，旧页可能在此之后又写回 L1/L2；
+        // 本次不引入 generation key，接受该残留竞态（重新阅读会按新清单重建）。
     }
     Ok(to_book_info(row))
 }
 
-/// 只测试 JSON 清单 + 代理连通性，不写库。
+/// 只测试 JSON 清单或单页 HTML 图集 + 代理连通性，不写库。
 #[tauri::command]
 pub async fn test_online_connection(
     state: State<'_, Arc<AppState>>,
@@ -1170,18 +1189,27 @@ pub async fn test_online_connection(
         let http = crate::online::http::UreqTransport::new(&s.online_proxy, &s.online_headers)?;
         let t0 = Instant::now();
         let meta = crate::online::resolve(&http, &url)?;
+        // 与 resolve 相同的 0 页门禁：可连通但不可入库，ok 反映最终可用性。
+        let ok = meta.page_count > 0;
+        let page_count = meta.page_count as u32;
         Ok(OnlineProbe {
-            ok: true,
+            ok,
             title: meta.title,
-            page_count: meta.page_count as u32,
+            page_count,
             elapsed_ms: t0.elapsed().as_millis() as u64,
-            message: "可解析".into(),
+            message: if ok {
+                "可解析".into()
+            } else {
+                "在线书清单没有可读页面，无法入库".into()
+            },
         })
     })
     .await
 }
 
 /// 本地书删除源文件；在线书返回 false（不触碰远程源）。
+/// 本地路径已不存在也返回 false：记录仍会硬删，但 `deleted_files` 不计数
+/// （brief 的辅助语义：没有实际删除动作就不虚报）。
 fn delete_source_if_local(path: &str, source_type: &str) -> Result<bool, std::io::Error> {
     if source_type != "local" {
         return Ok(false);
@@ -1376,5 +1404,194 @@ mod tests {
     fn online_source_path_is_never_deleted() {
         let url = "https://example.com/gallery/1";
         assert_eq!(delete_source_if_local(url, "generic_manga").unwrap(), false);
+    }
+
+    // ---------- 清单入库/变化编排（离线：内存 SQLite，不发网络请求） ----------
+
+    use rusqlite::Connection;
+
+    /// 独立内存库的 `AppState`，与真实数据目录/网络隔离。
+    fn online_state() -> Arc<AppState> {
+        let st = AppState::new();
+        let conn = Connection::open_in_memory().expect("打开内存数据库");
+        db::init_schema(&conn).expect("初始化表结构");
+        st.db.set(conn);
+        Arc::new(st)
+    }
+
+    fn page_ref(index: u32) -> crate::online::PageRef {
+        crate::online::PageRef {
+            url: format!("https://example.com/pages/{index}.jpg"),
+            width: Some(800),
+            height: Some(1200),
+        }
+    }
+
+    fn pages(n: u32) -> Vec<crate::online::PageRef> {
+        (1..=n).map(page_ref).collect()
+    }
+
+    /// 构造与 `online::resolve` 同形状的解析结果（StoredMeta 落盘 JSON）。
+    fn online_meta(
+        canonical_url: &str,
+        title: &str,
+        hash: &str,
+        pages: Vec<crate::online::PageRef>,
+    ) -> crate::online::direct::OnlineBookMeta {
+        let stored = crate::online::StoredMeta {
+            schema: 1,
+            manifest_hash: hash.to_string(),
+            fetched_at: "2026-10-19 00:00:00".to_string(),
+            pages,
+        };
+        crate::online::direct::OnlineBookMeta {
+            canonical_url: canonical_url.to_string(),
+            source_type: "generic_manga".to_string(),
+            title: title.to_string(),
+            page_count: stored.pages.len(),
+            meta_json: serde_json::to_string(&stored).expect("序列化 StoredMeta"),
+        }
+    }
+
+    #[test]
+    fn apply_resolved_meta_inserts_new_online_book() {
+        let st = online_state();
+        let meta = online_meta("https://example.com/gallery/1", "新书", "h1", pages(2));
+
+        let (row, changed) = apply_resolved_meta(&st, &meta).expect("新书应入库");
+
+        assert!(changed, "首次入库应视为清单变化");
+        assert_eq!(row.id, db::book_id_for_path(&meta.canonical_url));
+        assert_eq!(row.title, "新书");
+        assert_eq!(row.page_count, 2);
+        assert_eq!(row.current_page, 0);
+        assert_eq!(row.source_type, "generic_manga");
+    }
+
+    #[test]
+    fn apply_resolved_meta_keeps_derived_caches_when_hash_unchanged() {
+        let st = online_state();
+        let meta = online_meta("https://example.com/gallery/2", "不变", "h1", pages(2));
+        let (row, _) = apply_resolved_meta(&st, &meta).expect("首次入库");
+        let id = row.id;
+
+        st.db
+            .with(|conn| {
+                db::save_page_ocr(conn, &id, 0, 800, 1200, "[]", r#"["原文"]"#)
+                    .map_err(|e| e.to_string())?;
+                db::cache_put(conn, "t1", "译文", &id).map_err(|e| e.to_string())
+            })
+            .expect("写入派生缓存");
+
+        let (row, changed) = apply_resolved_meta(&st, &meta).expect("同清单应可重复解析");
+
+        assert!(!changed, "hash 未变不应标记变化");
+        assert_eq!(row.id, id);
+        st.db
+            .with(|conn| {
+                assert!(db::get_page_ocr(conn, &id, 0).unwrap().is_some());
+                assert_eq!(db::cache_get(conn, "t1").unwrap().as_deref(), Some("译文"));
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn apply_resolved_meta_rejects_hash_change_with_active_batch() {
+        let st = online_state();
+        let original = online_meta("https://example.com/gallery/3", "旧标题", "h1", pages(2));
+        let (row, _) = apply_resolved_meta(&st, &original).expect("首次入库");
+        let id = row.id;
+        let changed_meta = online_meta("https://example.com/gallery/3", "新标题", "h2", pages(1));
+
+        for batch_state in ["queued", "paused"] {
+            st.db
+                .with(|conn| {
+                    conn.execute("DELETE FROM batch_jobs", [])
+                        .map_err(|e| e.to_string())?;
+                    let job = db::batch_create(conn, &id, "旧标题", 2)
+                        .map_err(|e| e.to_string())?;
+                    db::batch_set_state(conn, job, batch_state, "")
+                        .map_err(|e| e.to_string())
+                })
+                .expect("准备活动批量任务");
+
+            let err = apply_resolved_meta(&st, &changed_meta).expect_err("应拒绝更新");
+            assert!(
+                err.to_string().contains("请先取消该书的批量任务"),
+                "{batch_state}: {err}"
+            );
+
+            st.db
+                .with(|conn| {
+                    let row = db::get_book(conn, &id)
+                        .map_err(|e| e.to_string())?
+                        .expect("旧书仍在库");
+                    assert_eq!(row.title, "旧标题", "{batch_state}: 不应更新标题");
+                    assert_eq!(row.page_count, 2, "{batch_state}: 不应更新页数");
+                    Ok(())
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn apply_resolved_meta_clears_derived_and_clamps_progress_on_hash_change() {
+        let st = online_state();
+        let old = online_meta("https://example.com/gallery/4", "旧", "h1", pages(5));
+        let (row, _) = apply_resolved_meta(&st, &old).expect("首次入库");
+        let id = row.id;
+
+        st.db
+            .with(|conn| {
+                db::set_progress(conn, &id, 4, None).map_err(|e| e.to_string())?;
+                db::save_page_ocr(conn, &id, 0, 800, 1200, "[]", r#"["旧"]"#)
+                    .map_err(|e| e.to_string())?;
+                db::cache_put(conn, "t1", "旧译文", &id).map_err(|e| e.to_string())
+            })
+            .expect("写入进度与派生缓存");
+
+        // 页数不变的变化：进度保留，派生缓存清空。
+        let same_len = online_meta("https://example.com/gallery/4", "新", "h2", pages(5));
+        let (row, changed) = apply_resolved_meta(&st, &same_len).expect("清单变化应更新");
+        assert!(changed);
+        assert_eq!(row.title, "新");
+        assert_eq!(row.current_page, 4, "页数未缩小时进度应保留");
+        st.db
+            .with(|conn| {
+                assert!(
+                    db::get_page_ocr(conn, &id, 0).unwrap().is_none(),
+                    "page_ocr 应清空"
+                );
+                assert!(
+                    db::cache_get(conn, "t1").unwrap().is_none(),
+                    "trans_cache 应清空"
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        // 页数缩小的变化：进度钳制到新末页。
+        let shorter = online_meta("https://example.com/gallery/4", "新", "h3", pages(2));
+        let (row, changed) = apply_resolved_meta(&st, &shorter).expect("再次变化应更新");
+        assert!(changed);
+        assert_eq!(row.page_count, 2);
+        assert_eq!(row.current_page, 1, "进度应钳制到新末页");
+    }
+
+    #[test]
+    fn apply_resolved_meta_rejects_empty_manifest() {
+        let st = online_state();
+        let meta = online_meta("https://example.com/gallery/5", "空", "h0", Vec::new());
+
+        let err = apply_resolved_meta(&st, &meta).expect_err("0 页应拒绝");
+        assert!(err.to_string().contains("没有可读页面"), "{err}");
+        st.db
+            .with(|conn| {
+                let id = db::book_id_for_path(&meta.canonical_url);
+                assert!(db::get_book(conn, &id).unwrap().is_none(), "不应入库");
+                Ok(())
+            })
+            .unwrap();
     }
 }

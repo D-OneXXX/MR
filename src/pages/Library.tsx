@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderOpen, ListChecks, Plus, Search } from "lucide-react";
+import { FolderOpen, Link2, ListChecks, Plus, Search } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   api,
+  isOnlineEnabled,
   isTransEnabled,
+  onExperimentalChange,
   onTransToggle,
   type BatchJob,
   type BookInfo,
@@ -17,6 +19,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import ErrorState from "../components/ErrorState";
 import PixelPet from "../components/PixelPet";
 import DetailSheet from "../components/DetailSheet";
+import OnlineImportDialog from "../components/OnlineImportDialog";
 import { toast, toastErr, Toaster } from "../components/Toast";
 
 /**
@@ -49,6 +52,11 @@ export default function LibraryPage() {
   // 实验性翻译开关（镜像 + 订阅）：关闭时隐藏批量预翻译横条并停轮询。
   const [transOn, setTransOn] = useState(isTransEnabled());
   useEffect(() => onTransToggle(setTransOn), []);
+
+  // URL 在线直读入口（实验性开关门控 + 订阅变更）。
+  const [onlineOpen, setOnlineOpen] = useState(false);
+  const [onlineOn, setOnlineOn] = useState(isOnlineEnabled());
+  useEffect(() => onExperimentalChange(() => setOnlineOn(isOnlineEnabled())), []);
 
   // 批量预翻译进度轮询(工作台入队;仅在书库页轻量展示活跃任务)。
   useEffect(() => {
@@ -308,6 +316,15 @@ export default function LibraryPage() {
               aria-label="搜索书名"
             />
           </div>
+          {onlineOn && (
+            <button
+              className="btn"
+              onClick={() => setOnlineOpen(true)}
+              title="从 JSON 清单 URL 导入"
+            >
+              <Link2 size={14} /> URL 直读
+            </button>
+          )}
           <button
             className="btn primary"
             onClick={() => void onAddFiles()}
@@ -458,7 +475,7 @@ export default function LibraryPage() {
               onSelect: () => void doRemove([ctxBook.id]),
             },
             {
-              label: "删除源文件…",
+              label: ctxBook.sourceType === "local" ? "删除源文件…" : "彻底移除…",
               danger: true,
               onSelect: () => setConfirmDelete([ctxBook]),
             },
@@ -469,12 +486,16 @@ export default function LibraryPage() {
       {/* 删除源文件：二次确认，列出路径与文件（页）数 */}
       {deleteTargets && deleteTargets.length > 0 && (
         <ConfirmDialog
-          title={`删除源文件（${deleteTargets.length} 本 · 共 ${deletePages} 页）？`}
+          title={`${
+            deleteTargets.some((b) => b.sourceType !== "local") ? "彻底移除" : "删除源文件"
+          }（${deleteTargets.length} 本 · 共 ${deletePages} 页）？`}
           message={
-            "将从磁盘永久删除以下源文件/文件夹，并清理该书的进度、缩略图、翻译缓存等全部记录。此操作不可逆。"
+            deleteTargets.some((b) => b.sourceType !== "local")
+              ? "将从书库移除以下在线书，并清理进度、缩略图、翻译缓存等全部本地记录；不会删除远程源。此操作不可逆。"
+              : "将从磁盘永久删除以下源文件/文件夹，并清理该书的进度、缩略图、翻译缓存等全部记录。此操作不可逆。"
           }
           paths={deleteTargets.map((b) => `${b.path}（${b.pageCount} 页）`)}
-          confirmText="永久删除"
+          confirmText={deleteTargets.some((b) => b.sourceType !== "local") ? "彻底移除" : "永久删除"}
           onConfirm={() => void doDeleteConfirmed()}
           onCancel={() => setConfirmDelete(null)}
         />
@@ -501,6 +522,14 @@ export default function LibraryPage() {
             {importing.current}
           </div>
         </div>
+      )}
+
+      {onlineOpen && (
+        <OnlineImportDialog
+          onClose={() => setOnlineOpen(false)}
+          onImported={() => void reload(debounced)}
+          onRead={(b) => nav(`/reader/${encodeURIComponent(b.id)}`)}
+        />
       )}
 
       {/* 浮动详情 sheet（右侧滑出，非固定栏） */}

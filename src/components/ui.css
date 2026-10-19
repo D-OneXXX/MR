@@ -720,7 +720,7 @@
   flex-direction: column;
   gap: 10px;
 }
-.online-error {
+.online-dialog .online-error {
   color: #f87171;
 }
 .online-spin {

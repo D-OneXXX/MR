@@ -405,17 +405,7 @@ const WebtoonView = memo(function WebtoonView({
     fetchTile(i, t);
   };
 
-  if (err) {
-    return <ErrorState message={`条漫布局加载失败：${err}`} />;
-  }
-  if (!dims || !layout || vw <= 0) {
-    return (
-      <div className="reader-center">
-        <PixelPet mode="loading" message="正在展开长条" />
-      </div>
-    );
-  }
-
+  // 容器必须始终挂载：首次布局前 scrollerRef 为空，否则尺寸观察永远拿不到宽度。
   return (
     <div
       ref={scrollerRef}
@@ -424,28 +414,38 @@ const WebtoonView = memo(function WebtoonView({
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
     >
-      <div className="webtoon-strip" style={{ height: layout.total }}>
-        {layout.pages.flatMap((p, i) =>
-          Array.from({ length: p.tiles }, (_, t) => {
-            const key = `${i}:${t}`;
-            const tileH = p.dispH / p.tiles;
-            const top = p.start + t * tileH;
-            const src = tiles[key];
-            const isFailed = failed[key];
-            return (
-              <div key={key} className="webtoon-tile" style={{ top, height: tileH }}>
-                {src ? (
-                  <img src={src} alt={`第 ${i + 1} 页`} draggable={false} />
-                ) : isFailed ? (
-                  <button className="webtoon-tile-fail" onClick={() => retryTile(key)}>
-                    加载失败 · 点按重试
-                  </button>
-                ) : null}
-              </div>
-            );
-          }),
-        )}
-      </div>
+      {err ? (
+        <div className="reader-center">
+          <ErrorState message={`条漫布局加载失败：${err}`} />
+        </div>
+      ) : !dims || !layout || vw <= 0 ? (
+        <div className="reader-center">
+          <PixelPet mode="loading" message="正在展开长条" />
+        </div>
+      ) : (
+        <div className="webtoon-strip" style={{ height: layout.total }}>
+          {layout.pages.flatMap((p, i) =>
+            Array.from({ length: p.tiles }, (_, t) => {
+              const key = `${i}:${t}`;
+              const tileH = p.dispH / p.tiles;
+              const top = p.start + t * tileH;
+              const src = tiles[key];
+              const isFailed = failed[key];
+              return (
+                <div key={key} className="webtoon-tile" style={{ top, height: tileH }}>
+                  {src ? (
+                    <img src={src} alt={`第 ${i + 1} 页`} draggable={false} />
+                  ) : isFailed ? (
+                    <button className="webtoon-tile-fail" onClick={() => retryTile(key)}>
+                      加载失败 · 点按重试
+                    </button>
+                  ) : null}
+                </div>
+              );
+            }),
+          )}
+        </div>
+      )}
     </div>
   );
 });

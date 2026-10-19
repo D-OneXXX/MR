@@ -6,6 +6,7 @@ mod commands;
 pub mod db;
 pub mod logging;
 mod ocr;
+mod online;
 pub mod pipeline;
 pub mod render_cache;
 pub mod source;

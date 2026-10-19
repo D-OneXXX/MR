@@ -22,6 +22,8 @@ pub enum BackendError {
     Decode(String),
     #[error("数据库错误：{0}")]
     Db(String),
+    #[error("网络错误：{0}")]
+    Network(String),
     #[error("{0}")]
     Msg(String),
 }

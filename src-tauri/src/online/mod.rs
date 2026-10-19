@@ -1,6 +1,8 @@
 //! 在线源公共类型、URL 规范化、阻塞信号量与错误。
 //!
-//! 仅承载 Task 2 的纯逻辑（无网络）；HTTP 传输与 JSON/HTML 解析由后续任务追加。
+//! 仅承载纯逻辑与阻塞 HTTP 传输；JSON/HTML 解析由后续任务追加。
+
+pub mod http;
 
 use std::sync::{Condvar, Mutex};
 
@@ -38,10 +40,13 @@ pub struct StoredMeta {
 /// 在线源内部错误（最终统一映射为 [`BackendError::Network`]）。
 #[derive(Debug, thiserror::Error)]
 pub enum OnlineError {
-    #[error("网络错误：{0}")]
+    // 最终由 BackendError::Network 统一加"网络错误："前缀，此处不再重复。
+    #[error("{0}")]
     Network(String),
     #[error("代理无效：{0}")]
     Proxy(String),
+    #[error("请求头无效：{0}")]
+    HeaderInvalid(String),
     #[error("响应过大（上限 {0} 字节）")]
     TooLarge(usize),
 }
@@ -52,11 +57,11 @@ impl From<OnlineError> for BackendError {
     }
 }
 
-/// 规范化外部 URL：仅允许 http/https、拒绝 userinfo、去掉 fragment、限制 2048 字符。
+/// 规范化外部 URL：仅允许 http/https、拒绝 userinfo、去掉 fragment、限制 2048 字节。
 pub fn normalize_url(raw: &str) -> Result<url::Url, BackendError> {
     let raw = raw.trim();
     if raw.len() > 2048 {
-        return Err(BackendError::Msg("URL 过长（上限 2048 字符）".into()));
+        return Err(BackendError::Msg("URL 过长（上限 2048 字节）".into()));
     }
     let mut u = url::Url::parse(raw)
         .map_err(|e| BackendError::Msg(format!("URL 无效：{e}")))?;
@@ -107,10 +112,20 @@ pub fn validate_proxy(raw: &str) -> Result<(), String> {
     if !matches!(u.scheme(), "http" | "https" | "socks5") {
         return Err("代理仅支持 http/https/socks5".into());
     }
+    if u.host_str().map(str::is_empty).unwrap_or(true) {
+        return Err("代理地址缺少主机名".into());
+    }
     if !u.username().is_empty() || u.password().is_some() {
         return Err("代理地址不能包含用户名或密码".into());
     }
     Ok(())
+}
+
+/// 校验手动请求头：JSON 对象或单行 Cookie（供 set_settings 调用）。
+pub fn validate_headers(raw: &str) -> Result<(), String> {
+    http::RequestHeaders::parse(raw)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// 基于条件变量的阻塞信号量（并发上限夹取到 1..=8）。
@@ -147,6 +162,7 @@ impl BlockingSemaphore {
 }
 
 /// 许可守卫：析构时归还信号量。
+#[must_use = "丢弃守卫会立刻释放许可"]
 pub struct SemaphoreGuard<'a> {
     sem: &'a BlockingSemaphore,
 }
@@ -195,6 +211,26 @@ mod tests {
         assert!(validate_proxy("http://127.0.0.1:7890").is_ok());
         assert!(validate_proxy("ftp://127.0.0.1:21").is_err());
         assert!(validate_proxy("http://user:pass@127.0.0.1:7890").is_err());
+    }
+
+    #[test]
+    fn proxy_requires_nonempty_host() {
+        assert!(validate_proxy("socks5://").is_err());
+        assert!(validate_proxy("socks5://:1080").is_err());
+        assert!(validate_proxy("http://").is_err());
+    }
+
+    #[test]
+    fn network_error_has_single_prefix() {
+        let e: BackendError = OnlineError::Network("连接失败".into()).into();
+        assert_eq!(e.to_string(), "网络错误：连接失败");
+    }
+
+    #[test]
+    fn url_length_limit_reports_bytes() {
+        let raw = format!("http://example.com/{}", "a".repeat(2048));
+        let e = normalize_url(&raw).unwrap_err().to_string();
+        assert!(e.contains("2048 字节"), "{e}");
     }
 
     #[test]

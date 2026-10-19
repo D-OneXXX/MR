@@ -1054,11 +1054,23 @@ fn settings_persist_pairs(s: &Settings) -> Vec<(&'static str, String)> {
 #[tauri::command]
 pub async fn set_settings(
     state: State<'_, Arc<AppState>>,
-    settings: Settings,
+    mut settings: Settings,
 ) -> Result<(), String> {
+    // 在线源连接参数与请求头先校验；非法输入不落库、不改内存态。
+    crate::online::validate_proxy(&settings.online_proxy)?;
+    crate::online::validate_headers(&settings.online_headers)?;
+    settings.online_concurrency = settings.online_concurrency.clamp(1, 8);
+
     // 缩略图与页缓存预算即时生效（MB→字节；至少 16MB；同一滑杆管两级）。
     let budget = (settings.cache_budget_mb.max(16) as u64) * 1024 * 1024;
     state.cache.set_budgets(budget);
+
+    let old = state.settings.lock().clone();
+    // 代理/并发/请求头变化后，旧源句柄（含已解析 URL 与 Cookie 上下文）全部作废。
+    let online_conn_changed = old.online_proxy != settings.online_proxy
+        || old.online_concurrency != settings.online_concurrency
+        || old.online_headers != settings.online_headers;
+
     let persist = settings_persist_pairs(&settings);
     let res = state.db.with(|conn| {
         for (k, v) in persist {
@@ -1067,6 +1079,9 @@ pub async fn set_settings(
         Ok(())
     });
     *state.settings.lock() = settings;
+    if online_conn_changed {
+        state.sources.lock().clear();
+    }
     // 无库文件时（如首次启动内存态）仍接受设置，仅跳过持久化。
     match res {
         Ok(()) => Ok(()),

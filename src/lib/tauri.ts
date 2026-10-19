@@ -10,6 +10,10 @@ export interface BookInfo {
   updatedAt: string;
   /** 条漫滚动偏移百分比（0..1）；-1 = 无条漫阅读记录。 */
   scrollPct: number;
+  /** local | generic_manga | anime（预留）。 */
+  sourceType: string;
+  /** 条漫是否可用：本地 true；在线取决于清单尺寸。 */
+  webtoonReady: boolean;
 }
 
 export interface PageEntry {
@@ -153,6 +157,14 @@ export interface Settings {
   experimentalTrans: boolean;
   /** 实验性功能：条漫模式。默认关闭，关闭时版式只在单页/双页间切换。 */
   experimentalWebtoon: boolean;
+  /** 实验性功能：URL 在线直读（JSON 清单）。默认关闭。 */
+  experimentalOnline: boolean;
+  /** 在线源 HTTP 代理（空=直连；http/https/socks5）。 */
+  onlineProxy: string;
+  /** 单本在线书页面下载并发（1-8）。 */
+  onlineConcurrency: number;
+  /** 手动请求头：JSON 对象或单行 Cookie；仅用于自建/授权源，明文存储。 */
+  onlineHeaders: string;
   sidecarEndpoint: string;
   sidecarTimeoutS: number;
   wbDetector: string;
@@ -232,17 +244,28 @@ export interface SidecarHealth {
   models: Record<string, string>;
 }
 
+/** 在线源连通性探测结果（只解析清单，不写库）。 */
+export interface OnlineProbe {
+  ok: boolean;
+  title: string;
+  pageCount: number;
+  elapsedMs: number;
+  message: string;
+}
+
 // ---------- 实验性功能镜像：同步读取 + 变更事件 ----------
 // 设置的权威副本在 SQLite；这里维护 localStorage 镜像，让无法等待
 // 异步 getSettings 的组件（阅读器/导航）能同步读取开关状态。
 
 const EXP_KEY = "mr-exp-trans";
 const EXP_WT_KEY = "mr-exp-wt";
+const EXP_ONLINE_KEY = "mr-exp-online";
 
 function applySettingsMirror(s: Settings) {
   try {
     localStorage.setItem(EXP_KEY, s.experimentalTrans ? "1" : "0");
     localStorage.setItem(EXP_WT_KEY, s.experimentalWebtoon ? "1" : "0");
+    localStorage.setItem(EXP_ONLINE_KEY, s.experimentalOnline ? "1" : "0");
   } catch {
     /* 忽略 */
   }
@@ -261,6 +284,15 @@ export function isTransEnabled(): boolean {
 export function isWebtoonEnabled(): boolean {
   try {
     return localStorage.getItem(EXP_WT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** 同步读取在线直读开关（镜像）。 */
+export function isOnlineEnabled(): boolean {
+  try {
+    return localStorage.getItem(EXP_ONLINE_KEY) === "1";
   } catch {
     return false;
   }
@@ -331,6 +363,12 @@ export const api = {
       window.dispatchEvent(new CustomEvent("mr-settings-changed"));
     }),  ocrRegion: (bookId: string, index: number, rect: RegionRect) =>
     invoke<OcrResult>("ocr_region", { bookId, index, rect }),
+  // 解析 JSON 清单/单页 HTML 图集并入库或恢复；不改变已有书进度。
+  resolveOnlineUrl: (url: string) =>
+    invoke<BookInfo>("resolve_online_url", { url }),
+  // 只测试清单/图集 + 代理连通性，不写库。
+  testOnlineConnection: (url: string) =>
+    invoke<OnlineProbe>("test_online_connection", { url }),
   translateRegion: (text: string) =>
     invoke<TranslateResult>("translate_region", { text }),
   getTransStats: () => invoke<TransStats>("get_trans_stats"),

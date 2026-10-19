@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Activity, Cpu, Languages, RefreshCw, Server } from "lucide-react";
+import { Activity, Cpu, Languages, Link2, RefreshCw, Server } from "lucide-react";
 import {
   api,
   type MemoryStats,
@@ -137,6 +137,17 @@ export default function StatusPage() {
             暂无调用统计。
           </p>
         )}
+      </div>
+
+      <div className="card section-card">
+        <h3 className="section-title">
+          <Link2 size={15} /> 在线直读
+        </h3>
+        <p className="hint mono">
+          {settings?.experimentalOnline ? "已开启" : "未开启"} · 代理{" "}
+          {settings?.onlineProxy ? "已配置" : "直连"} · 并发{" "}
+          {settings?.onlineConcurrency ?? 3}
+        </p>
       </div>
 
       <div className="card section-card">

@@ -6,6 +6,7 @@ import {
   ImageOff,
   Keyboard,
   Languages,
+  Link2,
   Moon,
   Save,
   ScanLine,
@@ -37,6 +38,10 @@ const DEFAULT_FORM: Settings = {
   dstLang: "zh",
   experimentalTrans: false,
   experimentalWebtoon: false,
+  experimentalOnline: false,
+  onlineProxy: "",
+  onlineConcurrency: 3,
+  onlineHeaders: "",
   sidecarEndpoint: "http://127.0.0.1:8500",
   sidecarTimeoutS: 120,
   wbDetector: "ctd",
@@ -53,6 +58,9 @@ export default function SettingsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [regenThumbs, setRegenThumbs] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [onlineTestUrl, setOnlineTestUrl] = useState("");
+  const [onlineProbe, setOnlineProbe] = useState<string | null>(null);
+  const [testingOnline, setTestingOnline] = useState(false);
 
   const load = () => {
     let alive = true;
@@ -108,12 +116,17 @@ export default function SettingsPage() {
 
   // 实验性开关：点选即生效（持久化 + 镜像 + 广播）。
   const setExperimental = async (
-    key: "experimentalTrans" | "experimentalWebtoon",
+    key: "experimentalTrans" | "experimentalWebtoon" | "experimentalOnline",
     v: boolean,
   ) => {
     const next = { ...form, [key]: v };
     setForm(next);
-    const label = key === "experimentalTrans" ? "翻译功能" : "条漫模式";
+    const label =
+      key === "experimentalTrans"
+        ? "翻译功能"
+        : key === "experimentalWebtoon"
+          ? "条漫模式"
+          : "在线 URL 直读";
     try {
       await api.setSettings(next);
       toast(v ? `${label}已开启` : `${label}已关闭`);
@@ -138,6 +151,24 @@ export default function SettingsPage() {
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  const testOnline = async () => {
+    if (!onlineTestUrl.trim()) {
+      toast("请填写 JSON 清单 URL");
+      return;
+    }
+    setTestingOnline(true);
+    setOnlineProbe(null);
+    try {
+      const p = await api.testOnlineConnection(onlineTestUrl.trim());
+      setOnlineProbe(`${p.title} · ${p.pageCount} 页 · ${p.elapsedMs} ms`);
+      if (!p.ok) toast(p.message || "清单没有可读页面");
+    } catch (e) {
+      toastErr("test_online_connection", e);
+    } finally {
+      setTestingOnline(false);
+    }
+  };
 
   const onSave = async () => {
     setSaving(true);
@@ -242,6 +273,28 @@ export default function SettingsPage() {
             }
           >
             {form.experimentalWebtoon ? "关闭" : "开启"}
+          </button>
+        </div>
+        <div
+          className="field-row"
+          style={{ alignItems: "center", marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}
+        >
+          <span style={{ flex: 1 }}>
+            在线 URL 直读（JSON 清单 / HTML 图集）
+            <span className="badge" style={{ marginLeft: 8 }}>
+              {form.experimentalOnline ? "已开启" : "未开启"}
+            </span>
+            <p className="hint" style={{ margin: "4px 0 0" }}>
+              支持匿名 JSON 清单与单页 HTML 图集；不支持自动登录、JS 渲染或分页查看器。
+            </p>
+          </span>
+          <button
+            className={`btn${form.experimentalOnline ? " primary" : ""}`}
+            onClick={() =>
+              void setExperimental("experimentalOnline", !form.experimentalOnline)
+            }
+          >
+            {form.experimentalOnline ? "关闭" : "开启"}
           </button>
         </div>
         <p className="hint" style={{ marginTop: 8 }}>
@@ -479,6 +532,71 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+      )}
+
+      {form.experimentalOnline && (
+        <div className="card section-card">
+          <h3 className="section-title">
+            <Link2 size={15} /> 在线源与网络
+          </h3>
+          <p className="hint">
+            支持 JSON 清单与单页 HTML 直铺图集；请求头仅用于你自建/有权访问的网关，
+            会明文保存在本机。不支持分页查看器、切条反混淆、自动登录或 JS 渲染。
+          </p>
+          <div className="form-grid two" style={{ marginTop: 8 }}>
+            <label className="field">
+              <span>代理地址</span>
+              <input
+                className="input mono"
+                value={form.onlineProxy}
+                onChange={(e) => set("onlineProxy", e.currentTarget.value)}
+                placeholder="留空直连，或 http://127.0.0.1:7890 / socks5://..."
+              />
+            </label>
+            <label className="field">
+              <span>并发数</span>
+              <input
+                className="input mono"
+                type="number"
+                min={1}
+                max={8}
+                value={form.onlineConcurrency}
+                onChange={(e) =>
+                  set("onlineConcurrency", Number(e.currentTarget.value) || 1)
+                }
+              />
+            </label>
+            <label className="field" style={{ gridColumn: "1 / -1" }}>
+              <span>自定义请求头（JSON 或单行 Cookie）</span>
+              <textarea
+                className="input mono"
+                rows={3}
+                style={{ fontSize: "inherit", resize: "vertical" }}
+                value={form.onlineHeaders}
+                onChange={(e) => set("onlineHeaders", e.currentTarget.value)}
+                placeholder='{"Authorization":"Bearer ..."} 或 session=...; token=...'
+              />
+              <span className="hint">
+                敏感信息：将以明文保存在本机设置中，不会上传；仅填写你信任的源或网关。
+              </span>
+            </label>
+          </div>
+          <div className="field-row" style={{ marginTop: 12 }}>
+            <input
+              className="input mono"
+              style={{ flex: 1 }}
+              value={onlineTestUrl}
+              onChange={(e) => setOnlineTestUrl(e.currentTarget.value)}
+              placeholder="https://example.com/manifest.json"
+              aria-label="在线清单测试 URL"
+            />
+            <button className="btn" onClick={() => void testOnline()} disabled={testingOnline}>
+              {testingOnline ? "测试中…" : "测试连通性"}
+            </button>
+          </div>
+          <p className="hint">测试使用已保存的代理与请求头，修改后请先保存设置。</p>
+          {onlineProbe && <p className="hint mono">{onlineProbe}</p>}
+        </div>
       )}
 
       <div style={{ display: "flex", gap: 8 }}>

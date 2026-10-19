@@ -1,6 +1,6 @@
 # MangaReader 技术文档
 
-> 适用代码基线：`649324a`（2026-10-19）  
+> 适用代码基线：`d8f19a7`（2026-10-19）  
 > UI 版本：`v0.2.0`（`src/App.tsx`）；npm/Cargo/Tauri 清单版本：`0.1.0`  
 > 文档定位：面向接手开发、架构评审与排障的工程说明，不替代用户手册。  
 > 相关文档：[README](../README.md)、[Sidecar 接口契约](sidecar-api.md)、[真机冒烟清单](smoke-test.md)、[2026-10-19 冒烟报告](smoke-test-report-2026-10-19.md)、[在线直读设计](../superpowers/specs/2026-10-19-online-direct-reader-design.md)。
@@ -630,7 +630,7 @@ stateDiagram-v2
 **范围与边界**
 
 - 实验功能，`experimentalOnline` 默认 `false`；关闭时 `resolve_online_url` / `test_online_connection` 返回“在线直读未开启”，已入库在线书仍可阅读；
-- 只支持两类输入：**JSON 清单**；JSON 解析失败时回退**单页 HTML 直铺图集**（只提取当前页面 `<img>`）；
+- 只支持两类输入：**JSON 清单**；正文不是合法 JSON 时回退**单页 HTML 直铺图集**（只提取当前页面 `<img>`）。合法 JSON 但清单语义错误（版本、页数、页 URL 非法等）直接返回清单错误，不再回退 HTML；
 - 明确不支持：EH/ExHentai/JMComic 站点适配、`/g/`、`/s/` 等分页查看器链路、主图推断、图片切条反混淆（`slice_aid`/MD5）、自动登录/Cookie jar/验证码/反爬/JS 渲染；OPDS / Komga / Kavita 推迟到 1.1；
 - 允许私网/回环地址（自建源）；清单 URL、页面 URL 与代理均为用户显式输入。
 
@@ -638,7 +638,7 @@ stateDiagram-v2
 
 - `OnlineSource` 实现现有同步 `ImageSource`，构造只发生在 `spawn_blocking` 内；`UreqTransport` 为纯阻塞实现，不依赖 Tokio runtime；
 - 页下载使用 `ureq`（rustls；`http/https` 走 CONNECT，`socks5://` 走 SOCKS5），连接超时 10s、总超时 30s，固定 UA `MangaReader/0.1 online-direct`；
-- 重定向最多 5 跳，最终 URL 复验 `http/https`；跨主机重定向丢弃 Cookie；跨 origin（scheme+host+port）丢弃 Authorization；其他自定义头继续发送；429/500/502/503/504 最多重试 2 次（500ms/1500ms，`Retry-After` ≤5s），其余 4xx 不重试；
+- 重定向最多 5 跳，最终 URL 复验 `http/https`，并拒绝含 userinfo 或超过 2048 字节的目标；跨 origin（scheme+host+port）重定向丢弃**全部手动请求头**（Cookie/Authorization/自定义头），只保留由页面派生的 Referer/Origin；同 origin 重定向保留全部手动请求头；408/429/500/502/503/504 最多重试 2 次（500ms/1500ms，`Retry-After` ≤5s），其余 4xx 不重试；
 - 响应上限：清单/HTML 2MiB，单页 32MiB；页面必须有 2xx 状态并以 `image::guess_format` 魔数验证，HTML/JSON/文本不进入图片解码；
 - HTTP/传输失败映射为 `BackendError::Network`；URL/清单/HTML 解析错误为 `BackendError::Msg`，前端以字符串展示。
 
@@ -661,13 +661,13 @@ stateDiagram-v2
 **单页 HTML 图集（回退）**
 
 - 仅解析当前这一个 HTML 页面，不跟随分页链接、不执行脚本；标题取 `<title>`（去标签/常见实体，≤200 字符），缺失时从重定向后的最终 URL 推导；
-- `<img>` 按 `data-src` → `data-original` → `src` 取第一个非空地址；相对路径按**重定向后的最终 URL** `join`；跳过 `data:`/`blob:`/`javascript:` 与非法 URL；按出现顺序去重；1–5000 张；
+- `<img>` 按 `data-src` → `data-original` → `src` 取第一个非空地址；属性值先解码常见 HTML 实体（单次，`&amp;` 最后）再按**重定向后的最终 URL** `join`；跳过 `data:`/`blob:`/`javascript:` 与非法 URL；按出现顺序去重；1–5000 张；
 - 不推断主图；没有可用图片时报“未找到可读图片；分页查看器或依赖 JS 的页面不在支持范围”；
 - HTML 无法提供可靠宽高，`webtoonReady=false`，只支持单/双页。
 
 **导入 / 刷新（`resolve_online_url`）**
 
-1. 校验开关、URL、代理与 `onlineHeaders`；`blocking` 中只拉取一次，先 JSON 后 HTML；
+1. 校验开关、URL、代理与 `onlineHeaders`；`blocking` 中只拉取一次，先 JSON，正文不是合法 JSON 时才尝试 HTML；
 2. 0 页拒绝入库；
 3. 同 `book.id` 已存在 → `removed=0`、更新标题/页数/`meta_json`/`updated_at`，保留 `current_page` 与 `scroll_pct`，并按新页数钳制进度；
 4. 清单哈希**未变** → 幂等更新，不失效缓存；
@@ -690,7 +690,7 @@ stateDiagram-v2
 **请求头与隐私**
 
 - `onlineHeaders` 为空不附加；以 `{` 开头按 JSON 对象解析，否则视为单行 Cookie；拒绝 CR/LF 与 `Host`、`Content-Length`、`Connection`、`Transfer-Encoding`；
-- 图片请求自动附加 `Referer: <规范化页面 URL>` 与 `Origin: <scheme://host>`；用户显式配置的同名头优先；
+- 图片请求自动附加 `Referer: <规范化页面 URL>` 与 `Origin: <scheme://host>`；同 origin 请求（含首跳与同源重定向）中用户显式配置的同名头优先；跨 origin 重定向丢弃全部用户请求头后改用派生值；
 - 明文保存在本机 SQLite，不读取浏览器 Cookie，不做自动登录或全局 Cookie jar；`meta_json.pages[].url` 保存完整页面 URL（含 query，下载所需），但 `app.log` 只记 scheme/host/path、不含 query/fragment；`meta_json` 与日志均不含 `onlineHeaders`/凭据。
 
 **删除**
@@ -938,17 +938,17 @@ node scripts\verify-region.mjs
 npm run build
 ```
 
-当前基线：`cargo test` **102 项全部通过**（100 个库单元测试 + 2 个集成测试），类型检查与两个前端脚本通过。
+当前基线：`cargo test` **111 项全部通过**（109 个库单元测试 + 2 个集成测试），类型检查与两个前端脚本通过。
 
 覆盖重点：
 
 - `db.rs`：进度只增、软删/恢复、硬删级联、翻译缓存、术语表、页 OCR、批量任务生命周期、阅读日志迁移、在线列迁移与 upsert；
 - `cache.rs`：字节 LRU 淘汰、预算收缩、按书清理、200 页驻留；
 - `pipeline.rs`：尺寸计算、长图切片无缝覆盖；
-- `online/`：URL 规范化/标题回退、清单版本/页数/宽高/哈希、HTML 属性优先级/相对路径/去重/无图报错、JSON→HTML 调度回退；
-- `online/http.rs`：本地 stub server 的状态码/重试、重定向与凭据过滤（跨主机 Cookie / 跨 origin Authorization）、代理校验、禁止头、Referer/Origin 自动附加与显式覆盖；
+- `online/`：URL 规范化/标题回退、清单版本/页数/宽高/哈希、合法 JSON 语义错误不回退 HTML、HTML 属性优先级/实体解码/相对路径/去重/无图报错、JSON→HTML 调度回退；
+- `online/http.rs`：本地 stub server 的状态码/重试（含 408）、重定向与请求头过滤（跨 origin 丢弃全部用户头，含自定义 `X-Api-Key`；同 origin 保留）、拒绝 userinfo/超长重定向目标、代理校验、禁止头、Referer/Origin 自动附加与显式覆盖；
 - `source.rs`：在线源的 URL/referer、状态/魔数校验、页名、`read_partial` 拒绝；
-- `state.rs`：按书打开本地/在线源、句柄池复用与来源类型错误；
+- `state.rs`：按书打开本地/在线源、句柄池复用、`invalidate_sources` 代际失效与来源类型错误；
 - `sidecar.rs`：健康响应/错误体/框默认值；
 - `workbench.rs`：翻译缓存键敏感性、术语表 prompt；
 - `translate.rs`：OpenAI 请求形状、缺少 Endpoint/Model、Bearer、响应解析；

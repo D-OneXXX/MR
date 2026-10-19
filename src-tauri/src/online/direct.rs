@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::online::http::HttpTransport;
 use crate::online::{
-    normalize_url, title_from_url, truncate_chars, PageRef, StoredMeta, MANIFEST_MAX_BYTES,
-    MAX_PAGES,
+    normalize_url, redact_url_for_log, title_from_url, truncate_chars, PageRef, StoredMeta,
+    MANIFEST_MAX_BYTES, MAX_PAGES,
 };
 use crate::source::BackendError;
 
@@ -76,7 +76,8 @@ impl DirectImageProvider {
         if !(200..300).contains(&resp.status) {
             return Err(BackendError::Network(format!(
                 "清单 HTTP {}：{}",
-                resp.status, resp.final_url
+                resp.status,
+                redact_url_for_log(&resp.final_url)
             )));
         }
         parse_manifest(&resp.body, &url)

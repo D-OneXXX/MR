@@ -157,7 +157,7 @@ export interface Settings {
   experimentalTrans: boolean;
   /** 实验性功能：条漫模式。默认关闭，关闭时版式只在单页/双页间切换。 */
   experimentalWebtoon: boolean;
-  /** 实验性功能：URL 在线直读（JSON 清单）。默认关闭。 */
+  /** 实验性功能：URL 在线直读（JSON 清单 / 单页 HTML 图集）。默认关闭。 */
   experimentalOnline: boolean;
   /** 在线源 HTTP 代理（空=直连；http/https/socks5）。 */
   onlineProxy: string;

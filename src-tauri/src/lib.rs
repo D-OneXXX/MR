@@ -182,7 +182,7 @@ pub struct Settings {
     pub wb_detector: String,
     pub wb_ocr: String,
     pub wb_inpaint: String,
-    /// 实验性功能：URL 在线直读（JSON 清单）。
+    /// 实验性功能：URL 在线直读（JSON 清单 / 单页 HTML 图集）。
     pub experimental_online: bool,
     /// 在线源 HTTP 代理（空=直连；http/https/socks5）。
     pub online_proxy: String,

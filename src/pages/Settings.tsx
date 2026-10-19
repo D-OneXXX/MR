@@ -154,7 +154,7 @@ export default function SettingsPage() {
 
   const testOnline = async () => {
     if (!onlineTestUrl.trim()) {
-      toast("请填写 JSON 清单 URL");
+      toast("请填写清单或图集 URL");
       return;
     }
     setTestingOnline(true);
@@ -588,7 +588,7 @@ export default function SettingsPage() {
               value={onlineTestUrl}
               onChange={(e) => setOnlineTestUrl(e.currentTarget.value)}
               placeholder="https://example.com/manifest.json"
-              aria-label="在线清单测试 URL"
+              aria-label="在线清单或图集测试 URL"
             />
             <button className="btn" onClick={() => void testOnline()} disabled={testingOnline}>
               {testingOnline ? "测试中…" : "测试连通性"}

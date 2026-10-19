@@ -6,6 +6,7 @@
 ## 文档
 
 - [技术文档](docs/TECHNICAL.md)
+- [在线直读设计（JSON 清单 + 单页 HTML 图集）](docs/superpowers/specs/2026-10-19-online-direct-reader-design.md)
 - [Sidecar 接口契约](docs/sidecar-api.md)
 - [真机冒烟清单](docs/smoke-test.md)
 - [最近冒烟报告（2026-10-19）](docs/smoke-test-report-2026-10-19.md)
@@ -19,6 +20,8 @@ Index-Translate           # 翻译 LLM（:8080，外部应用，用户自行启�
 ```
 
 测试：`cargo test`（src-tauri 下，含 200 页内存验收）；前端 `npx tsc --noEmit`。
+
+在线 URL 直读为实验功能（设置 → 实验性功能中开启），支持 JSON 清单或单页 HTML 直铺图集。
 
 ## 待办 · 冻结功能池（本阶段禁止实现）
 

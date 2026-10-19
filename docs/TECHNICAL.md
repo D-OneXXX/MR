@@ -1,9 +1,9 @@
 # MangaReader 技术文档
 
-> 适用代码基线：`065776c`（2026-10-19）  
+> 适用代码基线：`649324a`（2026-10-19）  
 > UI 版本：`v0.2.0`（`src/App.tsx`）；npm/Cargo/Tauri 清单版本：`0.1.0`  
 > 文档定位：面向接手开发、架构评审与排障的工程说明，不替代用户手册。  
-> 相关文档：[README](../README.md)、[Sidecar 接口契约](sidecar-api.md)、[真机冒烟清单](smoke-test.md)、[2026-10-19 冒烟报告](smoke-test-report-2026-10-19.md)。
+> 相关文档：[README](../README.md)、[Sidecar 接口契约](sidecar-api.md)、[真机冒烟清单](smoke-test.md)、[2026-10-19 冒烟报告](smoke-test-report-2026-10-19.md)、[在线直读设计](../superpowers/specs/2026-10-19-online-direct-reader-design.md)。
 
 ## 目录
 
@@ -33,10 +33,12 @@
 MangaReader 是一个 **local-first 的 Windows 桌面漫画阅读器**：
 
 - 书库、阅读进度、统计、OCR/翻译缓存全部保存在本机；
-- 支持图片文件夹、`.zip`、`.cbz`；
+- 支持图片文件夹、`.zip`、`.cbz`；实验性支持 URL 在线直读（JSON 清单或单页 HTML 直铺图集）；
 - 阅读器支持单页 / 双页 / 条漫三种版式，日式右开（RTL）与西式左开（LTR）；
 - 集成一条本地 AI 流水线：文本检测（ctd）→ OCR（mit48px）→ 翻译（OpenAI 兼容 LLM）→ 擦除（LaMa）→ 嵌字；
 - 提供逐页翻译工作台、整话批量预翻译、术语表、阅读统计看板与服务状态页。
+
+在线直读默认关闭，需在设置 → 实验性功能中开启；已下载页面仍进入本地 L1/L2 缓存，进度与书库记录始终在本机。
 
 ### 1.1 设计原则
 
@@ -47,7 +49,8 @@ MangaReader 是一个 **local-first 的 Windows 桌面漫画阅读器**：
 | 预算制内存 | L1 按字节 LRU；长图按显示宽度缩放解码；条漫切片后释放整页栅格 |
 | 人机协同翻译 | 检测/OCR 后允许人工删框，再翻译/擦除，避免误擦拟声词 |
 | 可回滚的删除 | “移除”为软删（保留进度），与“删除源文件”严格区分 |
-| 实验功能门控 | 翻译、条漫默认关闭，开启后入口才出现 |
+| 实验功能门控 | 翻译、条漫、在线直读默认关闭，开启后入口才出现 |
+| 在线合规边界 | 只解析用户提供的清单/图集与图片直链；不做站点适配、查看器链路、切条反混淆或自动登录 |
 
 ### 1.2 冻结功能池（当前阶段不实现）
 
@@ -56,7 +59,7 @@ MangaReader 是一个 **local-first 的 Windows 桌面漫画阅读器**：
 - 标签系统（自定义分类/颜色标签）
 - 跨设备同步（进度/书库云同步）
 - 阅读统计分享（数据页导出/分享卡片）
-- 漫画源订阅（在线源抓取、RSS、站点插件）
+- 漫画源订阅（自动抓取/RSS/站点插件；手动 URL 直读不在此列，已作为实验功能实现）
 - 云端模型（把检测/OCR/擦除/翻译切到云端 API）
 
 ---
@@ -88,6 +91,10 @@ MangaReader 是一个 **local-first 的 Windows 桌面漫画阅读器**：
 | jpeg-decoder | 0.3 | 长 JPEG 的 IDCT 缩放解码 |
 | lru / parking_lot | 0.12 | 字节预算 LRU |
 | reqwest | 0.12（rustls） | 访问 sidecar 与 LLM |
+| ureq | 2（rustls / socks-proxy） | 在线直读的同步阻塞 HTTP；**不复用** `reqwest` |
+| url / percent-encoding | 2 | URL 规范化与文件名百分号解码 |
+| regex | 1 | 单页 HTML 图集的 `<img>` 提取 |
+| sha2 / hex | 0.10 / 0.4 | 书籍 ID（`sha256(path)`）与清单哈希 |
 | windows | 0.62（仅 Windows） | WinRT `Windows.Media.Ocr` |
 | sysinfo | 0.31 | 进程内存统计 |
 
@@ -116,7 +123,10 @@ flowchart LR
     CMD --> DB[("SQLite<br/>library.db")]
     CMD --> L1["L1 内存 LRU<br/>页 / 缩略图 / 条漫切片"]
     CMD --> L2["L2 磁盘渲染缓存<br/>成品 JPEG"]
-    CMD --> SRC["Source<br/>Folder / Zip"]
+    CMD --> SRC["SourceHandle<br/>Folder / Zip / Online"]
+    CMD -->|导入/测试 URL| ONP["online/<br/>JSON → HTML Provider"]
+    ONP -->|ureq 阻塞 GET| NET["在线清单 / 图集 / 图片直链"]
+    SRC -->|在线页 read_raw| NET
     SRC --> PIPE["图片管线<br/>解码 / 缩放 / JPEG"]
     PIPE --> L2
     PIPE --> L1
@@ -128,6 +138,8 @@ flowchart LR
 
   UI -.->|localStorage 镜像| LS["主题 / 版式 / 实验开关"]
 ```
+
+在线直读只在开启实验开关后由 `resolve_online_url` 入库；阅读、缩略图、条漫、OCR、工作台与批量都复用现有管线与 L1/L2，只把 `SourceHandle` 的读取分支换成 HTTP 下载。
 
 ### 3.1 进程与端口
 
@@ -195,7 +207,8 @@ manga-reader-tauri/
 │   │   ├── Reader/region.ts      # 选区归一化纯函数
 │   │   ├── Reader/shortcuts.ts   # 快捷键单一数据源
 │   │   ├── DetailSheet.tsx       # 右侧滑出详情 + shared-element
-│   │   ├── BookCard.tsx          # 封面卡片
+│   │   ├── BookCard.tsx          # 封面卡片（在线书显示 URL 徽标）
+│   │   ├── OnlineImportDialog.tsx# URL 直读：测试 / 仅入库 / 解析并阅读
 │   │   └── ...
 │   ├── theme.css                 # 设计 token（深浅色）
 │   └── components/ui.css         # 通用组件样式
@@ -204,7 +217,12 @@ manga-reader-tauri/
 │   │   ├── lib.rs                # 数据契约、Settings、启动、命令注册
 │   │   ├── commands.rs           # 书库/阅读/缓存/OCR/翻译/统计/术语表
 │   │   ├── db.rs                 # SQLite schema、迁移、CRUD
-│   │   ├── source.rs             # 文件夹/zip 统一图片源与常开句柄
+│   │   ├── source.rs             # 文件夹/zip/在线统一图片源与常开句柄
+│   │   ├── online/
+│   │   │   ├── mod.rs            # URL 规范化、resolve 调度、元数据、信号量
+│   │   │   ├── http.rs           # ureq 阻塞传输、代理、请求头、重试、大小上限
+│   │   │   ├── direct.rs         # JSON 清单解析与哈希
+│   │   │   └── html.rs           # 单页 HTML 直铺图集解析
 │   │   ├── pipeline.rs           # 解码/缩放/JPEG/长图/条漫切片
 │   │   ├── cache.rs              # L1 字节预算 LRU
 │   │   ├── render_cache.rs       # L2 磁盘缓存与 2GB trim
@@ -258,6 +276,8 @@ erDiagram
     TEXT updated_at
     INTEGER removed
     REAL scroll_pct
+    TEXT source_type
+    TEXT meta_json
   }
   reading_log {
     TEXT date PK
@@ -312,9 +332,11 @@ erDiagram
 
 ### 5.1 表说明
 
-| 表 | 作用 | 关键约束/约定 |
+| 表/字段 | 作用 | 关键约束/约定 |
 |---|---|---|
-| `books` | 书库条目 | `id = sha256(path)`；`path` 唯一；`removed=1` 为软删；`scroll_pct=-1` 表示无条漫记录 |
+| `books` | 书库条目 | `id = sha256(path)`；`path` 唯一（本地为绝对路径，在线为规范化清单/图集 URL）；`removed=1` 为软删；`scroll_pct=-1` 表示无条漫记录 |
+| `books.source_type` | 来源类型 | `local` / `generic_manga`（本阶段在线书）/ `anime`（预留，命令不写入）；旧库默认 `local` |
+| `books.meta_json` | 在线书派生元数据 | 默认 `{}`；`{schema, manifestHash, fetchedAt, pages:[{url,width?,height?}]}`；**不含** Cookie/账号/代理凭据，也不通过 `BookInfo` 暴露 |
 | `reading_log` | 逐日逐书阅读页数 | 主键 `(date, book_id)`；只累计“前进页数”，回翻不扣减；迁移旧数据时 `book_id=''` |
 | `settings` | 设置键值 | `k/v` 文本；启动时 `hydrate_settings` 回读 |
 | `trans_log` | OCR/翻译调用日志 | 保留最近 5000 条；统计取最近 50 条明细 |
@@ -329,16 +351,20 @@ erDiagram
 
 1. `reading_log` 旧形状 `(date PK, pages)` → `(date, book_id) PK`，旧数据归入 `book_id=''`；
 2. `books` 增加 `removed`、`scroll_pct`；
-3. `trans_cache` 增加 `book_id`（便于删除书籍时级联清理）。
+3. `books` 增加 `source_type TEXT NOT NULL DEFAULT 'local'`、`meta_json TEXT NOT NULL DEFAULT '{}'`（旧行自动成为本地书）；
+4. `trans_cache` 增加 `book_id`（便于删除书籍时级联清理）。
 
 新增列一律走“检测列是否存在 → `ALTER TABLE ADD COLUMN`”，兼容已有用户库。
 
 ### 5.3 关键不变量
 
-- **书籍 ID 稳定**：由绝对路径 SHA-256 得到；同一路径重导入保留进度。
+- **书籍 ID 稳定**：由本地绝对路径或在线规范化 URL（`books.path`）的 SHA-256 得到；同一路径重导入保留进度。
 - **移除 ≠ 删除**：
-  - 移除：`removed=1`，源文件与进度保留；重导入/重扫描自动恢复；
-  - 删除源文件：先删除文件/目录，成功后才级联清理 DB 记录与缓存。
+  - 移除：`removed=1`，源文件/远程源与进度保留；重导入/重扫描自动恢复；
+  - 删除源文件：先删除文件/目录，成功后才级联清理 DB 记录与缓存；
+  - 在线书“彻底移除”：跳过文件系统，`deleted_files=0`，**不触碰远程源**，只硬删 DB 记录、缓存与句柄。
+- **在线元数据不外泄**：`meta_json` 只含页面 URL 与可选宽高；`BookInfo` 只增加 `sourceType`、`webtoonReady`，不返回页面 URL、请求头或凭据。
+- **在线书条漫可用性**：`sourceType='local'` 恒为 `webtoonReady=true`；在线书要求全部页面具有正数宽高，否则 `false`（HTML 图集恒为 `false`）。
 - **阅读统计只增**：`set_progress` 只在 `page > prev` 时累加当日页数。
 - **页 OCR 先存后翻**：工作台步骤一成功即 `wb_save_ocr`；批量 worker 也先存 `page_ocr` 再翻译。
 - **翻译缓存键包含页码与目标语言**：同页同原文只命中同语言缓存。
@@ -375,14 +401,19 @@ erDiagram
 | `wbDetector` | `ctd` | 工作台检测器槽位 |
 | `wbOcr` | `mit48pxctc` | 工作台 OCR 槽位 |
 | `wbInpaint` | `lama_large_512px` | 工作台擦除槽位 |
+| `experimentalOnline` | `false` | 在线 URL 直读总开关（镜像 `mr-exp-online`） |
+| `onlineProxy` | `""` | 在线源代理；空=直连，支持 `http/https/socks5`，拒绝内嵌凭据 |
+| `onlineConcurrency` | `3` | 单本在线书页面下载并发，保存时钳制 1–8 |
+| `onlineHeaders` | `""` | 手动请求头：JSON 对象或单行 Cookie；明文保存 |
 
-持久化：`set_settings` 将全部字段写入 `settings` 表，并即时调整 L1 预算；`trans_api_key` 也以明文形式存于 SQLite。
+持久化：`set_settings` 将全部字段写入 `settings` 表，并即时调整 L1 预算；`trans_api_key`、`onlineHeaders` 均以明文形式存于 SQLite。`onlineProxy` 与 `onlineHeaders` 在保存时校验（代理 scheme/主机/凭据；请求头名称/CRLF/禁止头）；`onlineProxy`、`onlineConcurrency` 或 `onlineHeaders` 变化时清空 `AppState.sources` 常开池，让新配置立即生效。
 
 ### 6.2 命令分层
 
 完整命令清单见 [附录 A](#附录-atauri-命令契约)。按职责分组：
 
 - **书库**：`scan_library`、`import_books`、`remove_books`、`list_books`、`get_book`；
+- **在线源**：`resolve_online_url`、`test_online_connection`（均受 `experimentalOnline` 门控）；
 - **阅读**：`list_entries`、`get_page`、`get_thumbnail`、`set_progress`、`clear_pages`；
 - **条漫**：`get_webtoon_layout`、`get_webtoon_tile`；
 - **统计**：`get_memory_stats`、`get_dashboard`、`get_reading_log`、`get_reading_by_book`；
@@ -407,8 +438,10 @@ trait ImageSource {
 
 - `FolderSource`：扫描目录下图片扩展名（jpg/jpeg/png/gif/webp），按文件名排序；
 - `ZipSource`：列出归档内图片名并排序；每次读取重新打开归档，只解压命中的单条目；
+- `OnlineSource`：页列表来自 `meta_json.pages`；`read_raw` 用 `ureq` 阻塞 GET（≤32MiB、状态码 + 图片魔数校验、自动携带 `Referer`/`Origin`），每本书一个阻塞信号量限制并发（1–8）；`entry_names` 取 URL 文件名（百分号解码）或“第 N 页”；
+- `source_handle_for_book`：按 `source_type` 统一打开本地/在线源；`generic_manga` 用 `onlineProxy` + `onlineHeaders` 构造 `UreqTransport` 与 `OnlineSource`，`anime` 返回“预留未实现”；
 - `SourceHandle`：热路径常开句柄池（最多 16 本；超限整体清空重开），zip 中央目录只解析一次；
-- `read_partial`：只读条目前 256KB 用于条漫 header 尺寸解析，失败回退全读；
+- `read_partial`：只读条目前 256KB 用于条漫 header 尺寸解析，失败回退全读；在线源直接返回“在线源不支持 header 探测”，在线条漫布局分支不调用它；
 - ZipSlip 防护：`entry.enclosed_name()` 校验条目名。
 
 ### 6.4 图片管线（`pipeline.rs`）
@@ -436,7 +469,7 @@ L2 磁盘成品 JPEG（RenderCache）
   └─ <book>/000003t00@640.jpg
 
 L3 源 + 管线
-  └─ Folder/Zip → 解码 → 缩放 → JPEG
+  └─ Folder/Zip/Online → 解码 → 缩放 → JPEG
 ```
 
 - L1 只驻留 `data_url`，`bytes` 在 `put` 入口剥离（权威副本在 L2）；
@@ -473,20 +506,21 @@ sequenceDiagram
     end
     T->>L1: put(data_url)
     T-->>R: PageImage
-    T->>T: 后台预取 index±1、±2
+    T->>T: 后台预取（本地 ±1/±2；在线仅 +1/+2）
   end
 ```
 
-- 后端在主请求落地后异步预取 ±1/±2 页；
-- 前端在阅读器空闲时再预取当前页 ±3 页（`requestIdleCallback`，250ms 超时兜底）；
-- 前端 `requestedRef` 去重请求；页滑出 ±3 窗口时释放 dataURL 与请求 key，防止回翻卡死。
+- 后端在主请求落地后异步预取：本地 ±1/±2；在线仅 **+1/+2**（不回读历史页）；
+- 前端在阅读器空闲时再预取：本地当前页 ±3；在线仅当前页起 +2（`requestIdleCallback`，250ms 超时兜底）；
+- 前端 `requestedRef` 去重请求；页滑出窗口时释放 dataURL 与请求 key，防止回翻卡死；
+- 在线页 L2 命中时不发网络请求，断网仍可回翻已缓存页；未缓存页返回网络错误。
 
 ### 6.7 OCR（`ocr.rs` + `commands.rs`）
 
 框选 OCR（阅读器）：
 
 1. 前端传相对矩形 `RegionRect{x,y,w,h}`（0..1，相对原图）；
-2. 后端读取**原图**（非展示缩放图），按相对坐标裁剪；
+2. 后端读取**原图**（非展示缩放图），按相对坐标裁剪；在线书通过同一 `source_handle_for_book` 下载原图（不走 L2，未缓存时会再次请求网络）；
 3. 宽或高 <4px 视为误触；
 4. `ocrEndpoint` 为空 → WinRT `Windows.Media.Ocr`（需系统语言包，单边超限先降采样）；
 5. 非空 → `POST <ocrEndpoint>`，请求 `{"image": "<base64 png>"}`，响应要求 `{"text": "..."}`；
@@ -553,7 +587,7 @@ sequenceDiagram
 约束：
 
 - 原图永不修改；被删除的框不翻译、不擦除；
-- `wb_detect` / `wb_ocr` / `wb_inpaint` 各自重新读取原图并编码 PNG；
+- `wb_detect` / `wb_ocr` / `wb_inpaint` 各自重新读取原图并编码 PNG；在线书每次都会重新下载原图（不走 L2），OCR/工作台因此可能产生额外网络请求；
 - 页 OCR 存档是“翻过的页秒出”的基础；
 - 擦除结果目前**不缓存**，每次执行都会重新请求 sidecar（见已知问题）。
 
@@ -577,7 +611,7 @@ stateDiagram-v2
 - 每页处理前重读任务状态，暂停/取消即时生效（当前页会跑完）；
 - 每页流程：
   1. 查 `page_ocr`；有存档 → 直接取文本；
-  2. 无存档 → `load_page_png` → sidecar detect → OCR → 写 `page_ocr`；
+  2. 无存档 → `load_page_png` → sidecar detect → OCR → 写 `page_ocr`；`load_page_png` 对本地/在线统一按 bookId 取源，在线页重新下载原图并受并发信号量限制；
   3. 文本非空 → `translate_texts_cached`（翻译缓存 + 术语表）；
 - 更新 `done/ok/fail/last_error`；
 - 开头连续 3 页全失败且成功数为 0 → 任务 `failed`，避免空转数百页；
@@ -586,10 +620,87 @@ stateDiagram-v2
 
 ### 6.11 错误与日志
 
-- 统一错误 `BackendError`：IO / Zip / Decode / Db / Msg，最终 `to_string()` 给前端；
-- 页面获取失败会写 `logs/app.log`，含书名、页码、原因；
+- 统一错误 `BackendError`：IO / Zip / Decode / Db / Network / Msg，最终 `to_string()` 给前端；
+- 页面获取失败会写 `logs/app.log`，含书名、页码、原因；在线请求另记 `online_page` / `online_meta` scope，只记页码、状态码与主机，不记录完整 query/token；
 - 前端统一 `toastErr(command, error)` 展示可读错误；
 - 日志/缓存失败静默降级，不拖垮主流程。
+
+### 6.12 在线直读（`online/`）
+
+**范围与边界**
+
+- 实验功能，`experimentalOnline` 默认 `false`；关闭时 `resolve_online_url` / `test_online_connection` 返回“在线直读未开启”，已入库在线书仍可阅读；
+- 只支持两类输入：**JSON 清单**；JSON 解析失败时回退**单页 HTML 直铺图集**（只提取当前页面 `<img>`）；
+- 明确不支持：EH/ExHentai/JMComic 站点适配、`/g/`、`/s/` 等分页查看器链路、主图推断、图片切条反混淆（`slice_aid`/MD5）、自动登录/Cookie jar/验证码/反爬/JS 渲染；OPDS / Komga / Kavita 推迟到 1.1；
+- 允许私网/回环地址（自建源）；清单 URL、页面 URL 与代理均为用户显式输入。
+
+**同步 `ImageSource` + 阻塞 HTTP**
+
+- `OnlineSource` 实现现有同步 `ImageSource`，构造只发生在 `spawn_blocking` 内；`UreqTransport` 为纯阻塞实现，不依赖 Tokio runtime；
+- 页下载使用 `ureq`（rustls；`http/https` 走 CONNECT，`socks5://` 走 SOCKS5），连接超时 10s、总超时 30s，固定 UA `MangaReader/0.1 online-direct`；
+- 重定向最多 5 跳，最终 URL 复验 `http/https`；跨主机重定向丢弃 Cookie/Authorization；429/500/502/503/504 最多重试 2 次（500ms/1500ms，`Retry-After` ≤5s），其余 4xx 不重试；
+- 响应上限：清单/HTML 2MiB，单页 32MiB；页面必须有 2xx 状态并以 `image::guess_format` 魔数验证，HTML/JSON/文本不进入图片解码；
+- 失败统一映射为 `BackendError::Network`，前端以字符串展示。
+
+**身份与元数据**
+
+- `books.path` = 规范化清单/图集 URL（trim、仅 http/https、拒绝 userinfo、去 fragment、保留 query，≤2048 字节）；
+- `book.id = sha256(path)`；`source_type='generic_manga'`；
+- `meta_json = {schema:1, manifestHash, fetchedAt, pages:[{url,width?,height?}]}`；页顺序即阅读顺序；宽高必须同时为正数才保存；不含任何请求头/凭据；
+- `manifestHash = sha256(serde_json(规范化 {title, pages}))`，`fetchedAt` 不参与哈希。
+
+**JSON 清单**
+
+| 字段 | 规则 |
+|---|---|
+| `version` | 可选，出现时必须为 `1` |
+| `title` | 可选，trim 后 ≤200 字符；空则从 URL 路径推导（无则 host） |
+| `pages` | 必填，1–5000 项；字符串或 `{url,width,height}` 对象 |
+| 页面 `url` | 绝对 `http/https`、无 userinfo、≤2048 字节；任一页非法则**整份拒绝** |
+
+**单页 HTML 图集（回退）**
+
+- 仅解析当前这一个 HTML 页面，不跟随分页链接、不执行脚本；标题取 `<title>`（去标签/常见实体，≤200 字符），缺失时从重定向后的最终 URL 推导；
+- `<img>` 按 `data-src` → `data-original` → `src` 取第一个非空地址；相对路径按**重定向后的最终 URL** `join`；跳过 `data:`/`blob:`/`javascript:` 与非法 URL；按出现顺序去重；1–5000 张；
+- 不推断主图；没有可用图片时报“未找到可读图片；分页查看器或依赖 JS 的页面不在支持范围”；
+- HTML 无法提供可靠宽高，`webtoonReady=false`，只支持单/双页。
+
+**导入 / 刷新（`resolve_online_url`）**
+
+1. 校验开关、URL、代理与 `onlineHeaders`；`blocking` 中只拉取一次，先 JSON 后 HTML；
+2. 0 页拒绝入库；
+3. 同 `book.id` 已存在 → `removed=0`、更新标题/页数/`meta_json`/`updated_at`，保留 `current_page` 与 `scroll_pct`，并按新页数钳制进度；
+4. 清单哈希**未变** → 幂等更新，不失效缓存；
+5. 清单哈希**变化**：
+   - 该书存在 `queued/running/paused` 批量任务 → 拒绝并提示先取消；
+   - 同一事务内清 `page_ocr`、`trans_cache`；提交后清 L1、L2、条漫布局缓存与常开句柄池；
+   - 保留 `reading_log`；
+6. `test_online_connection` 只解析、不写库，返回 `{ok,title,pageCount,elapsedMs,message}`；代理/请求头来自当前设置，不使用页面并发信号量。
+
+**阅读与缓存**
+
+- `get_page` / `get_thumbnail` / `get_webtoon_tile` / `list_entries` / `ocr_region` / `wb_*` / `batch` 都通过 `source_handle_for_book`；在线页下载后与本地页共用管线、L1/L2、页 OCR、翻译缓存与批量任务表；
+- L1/L2 命中不联网；缩略图实际取第 1 页，L2 键 `(book,0,edge,edge)`，失败不阻塞书库列表；
+- 每本在线书一个阻塞信号量，`onlineConcurrency`（默认 3，1–8）覆盖主请求、预取、OCR、工作台与批量；
+- 后端预取仅 +1/+2，前端 idle 预取仅当前页起 +2；不回读历史页；
+- `list_entries` 在线书由 `meta_json` 生成页名，不联网；
+- 条漫：`get_webtoon_layout` 在线分支只读 `meta_json` 宽高，不联网；任一页缺宽高返回“该在线书籍缺少页面尺寸，无法使用条漫模式”；`webtoonReady=false` 时前端禁用按钮与自动建议，后端仍兜底报错；
+- 在线页的展示缓存是“按视口渲染后的 JPEG”；选区 OCR、工作台、批量读取原图时会重新下载（不走 L2），见[已知问题](#13-已知问题与限制)。
+
+**请求头与隐私**
+
+- `onlineHeaders` 为空不附加；以 `{` 开头按 JSON 对象解析，否则视为单行 Cookie；拒绝 CR/LF 与 `Host`、`Content-Length`、`Connection`、`Transfer-Encoding`；
+- 图片请求自动附加 `Referer: <规范化页面 URL>` 与 `Origin: <scheme://host>`；用户显式配置的同名头优先；
+- 明文保存在本机 SQLite，不读取浏览器 Cookie，不做自动登录或全局 Cookie jar；`meta_json` 与日志不包含请求头/完整 query。
+
+**删除**
+
+- “移除”只置 `removed=1`；重新导入同一 URL 恢复；
+- “彻底移除”对在线书跳过文件系统删除（`deleted_files=0`），级联清 `reading_log`、`page_ocr`、`trans_cache`、`batch_jobs`、L1/L2/条漫布局/句柄，远程源文件不动。
+
+**扩展点**
+
+`online::resolve` 固定“一次拉取 → JSON → HTML”的调度；未来 OPDS/Komga/Kavita Provider（1.1）可在 scheme/host 层增加匹配，不需要改阅读器与缓存链路。本阶段没有 EH/JM 站点适配器。
 
 ---
 
@@ -608,7 +719,7 @@ stateDiagram-v2
 
 | 路由 | 页面 | 说明 |
 |---|---|---|
-| `/` | `Library` | 封面流、导入、移除/删除、详情 sheet |
+| `/` | `Library` | 封面流、导入、URL 直读、移除/删除、详情 sheet |
 | `/reader/:id` | `Reader` | 全屏沉浸阅读器 |
 | `/data` | `DataView` | 统计看板 |
 | `/workbench` | `Workbench` | 翻译工作台（需实验开关） |
@@ -621,13 +732,13 @@ stateDiagram-v2
 
 | 页面 | 关键行为 |
 |---|---|
-| Library | 搜索防抖 250ms；文件/文件夹导入；全窗口拖放；单击封面打开 `DetailSheet`；双击进阅读器；多选移除/删除；批量任务横条 3s 轮询 |
-| Reader | 单/双页/条漫；缩放 0.5–4；拖拽平移；双击重置；目录；阅读设置；快捷键；选区 OCR/翻译；3s 控制条自动隐藏；进度 500ms 防抖保存 |
-| Workbench | 四个 provider 下拉；sidecar 健康；载入页面；检测+OCR；删框；翻译+擦除+嵌字；批量队列；术语表；2s 任务轮询 |
+| Library | 搜索防抖 250ms；文件/文件夹导入；全窗口拖放；单击封面打开 `DetailSheet`；双击进阅读器；多选移除/删除；批量任务横条 3s 轮询；实验开关开启时显示「URL 直读」按钮与 `OnlineImportDialog`（测试/仅加入书库/解析并阅读）；在线书显示 URL 徽标、「彻底移除…」与不删远程源的确认文案 |
+| Reader | 单/双页/条漫；缩放 0.5–4；拖拽平移；双击重置；目录；阅读设置；快捷键；选区 OCR/翻译；3s 控制条自动隐藏；进度 500ms 防抖保存；`webtoonReady=false` 时禁用条漫按钮与自动建议；在线书 idle 预取只从当前页 +2 |
+| Workbench | 四个 provider 下拉；sidecar 健康；载入页面；检测+OCR；删框；翻译+擦除+嵌字；批量队列；术语表；2s 任务轮询；在线书按 bookId 下载原图 |
 | DataView | 四格统计、Top3、26 周热力图、近 14 天堆叠趋势；无图表库 |
 | Glossary | 按书维护术语；重复原文覆盖；删除二次确认 |
-| Status | 只读展示 sidecar 健康、翻译服务、调用统计、内存/缓存 |
-| Settings | 主题、实验开关（即时持久化）、缓存预算、扫描目录、翻译服务、统计、快捷键表 |
+| Status | 只读展示 sidecar 健康、翻译服务、调用统计、内存/缓存；在线直读卡片展示开关、代理是否配置、并发数（不回显请求头） |
+| Settings | 主题、实验开关（翻译/条漫/在线直读，即时持久化）、缓存预算、扫描目录、翻译服务、在线源与网络（代理/并发/请求头/测试 URL）、统计、快捷键表 |
 
 ### 7.3 阅读器
 
@@ -679,7 +790,8 @@ stateDiagram-v2
 
 ### 7.4 条漫视图（`Webtoon.tsx`）
 
-- `get_webtoon_layout` 返回逐页源尺寸（header 解析，不解码），后端按书缓存；
+- `get_webtoon_layout` 返回逐页源尺寸：本地 header 解析（不解码），在线直接读 `meta_json` 宽高（不联网），后端按书缓存；
+- 在线书任一页缺宽高时返回错误，前端回退单页；HTML 图集没有宽高，因此不能进入条漫；
 - 显示高度 = `source_h / source_w × 容器宽`；
 - 切片数 = `ceil(显示高度 / 2048)`（设备像素）；
 - 使用绝对定位占位撑起总高，只挂载视口上下窗口内的切片；
@@ -697,6 +809,7 @@ stateDiagram-v2
 |---|---|
 | `mr-exp-trans` | 翻译功能开关（`"1"`/`"0"`） |
 | `mr-exp-wt` | 条漫模式开关 |
+| `mr-exp-online` | 在线 URL 直读开关 |
 | `mr-theme` | 当前主题 |
 | `mr-theme-v2` | 一次性深色迁移标记 |
 | `mr-reader-mode` | 全局版式偏好 |
@@ -726,10 +839,11 @@ stateDiagram-v2
 见 [6.1](#61-数据契约与设置)。设置页包含：
 
 - 主题（亮/暗，点选即生效）；
-- 实验性功能（翻译/条漫，点选即持久化）；
+- 实验性功能（翻译/条漫/在线直读，点选即持久化）；
 - 缓存预算（64–2048MB 滑块，另有数字输入）；
 - 重新生成缩略图；
 - 扫描目录（选择/输入 + 立即扫描）；
+- 在线源与网络（仅在线开关开启时显示）：代理地址、并发数 1–8、自定义请求头、测试 URL + 测试连通性；
 - 翻译服务（Endpoint、API Key、Model、Temperature、语言对、超时、OCR Endpoint、Sidecar Endpoint/超时、调用统计）；
 - 快捷键表。
 
@@ -746,9 +860,9 @@ stateDiagram-v2
 
 ### 8.3 API Key 与隐私
 
-- `trans_api_key` 以明文存储在 SQLite `settings.v`，随数据库文件留在本机；
-- 请求只发往用户配置的 `transEndpoint`；
-- 默认无遥测、无云端同步、无在线书源；
+- `trans_api_key` 与 `onlineHeaders` 以明文存储在 SQLite `settings.v`，随数据库文件留在本机；
+- 翻译请求只发往用户配置的 `transEndpoint`；在线直读开启后只访问用户输入的清单/图集 URL、其图片直链与配置的代理，不读取浏览器 Cookie，不做自动登录或全局 Cookie jar；
+- 默认无遥测、无云端同步、在线直读默认关闭；
 - Sidecar 与 LLM 默认均为回环地址，但 LLM 可被配置为远端 URL。
 
 ### 8.4 许可与分发
@@ -824,20 +938,26 @@ node scripts\verify-region.mjs
 npm run build
 ```
 
-当前基线：`cargo test` **36 项全部通过**（34 个单元测试 + 2 个集成测试），类型检查与两个前端脚本通过。
+当前基线：`cargo test` **101 项全部通过**（99 个库单元测试 + 2 个集成测试），类型检查与两个前端脚本通过。
 
 覆盖重点：
 
-- `db.rs`：进度只增、软删/恢复、硬删级联、翻译缓存、术语表、页 OCR、批量任务生命周期、阅读日志迁移；
+- `db.rs`：进度只增、软删/恢复、硬删级联、翻译缓存、术语表、页 OCR、批量任务生命周期、阅读日志迁移、在线列迁移与 upsert；
 - `cache.rs`：字节 LRU 淘汰、预算收缩、按书清理、200 页驻留；
 - `pipeline.rs`：尺寸计算、长图切片无缝覆盖；
+- `online/`：URL 规范化/标题回退、清单版本/页数/宽高/哈希、HTML 属性优先级/相对路径/去重/无图报错、JSON→HTML 调度回退；
+- `online/http.rs`：本地 stub server 的状态码/重试、重定向与跨主机凭据过滤、代理校验、禁止头、Referer/Origin 自动附加与显式覆盖；
+- `source.rs`：在线源的 URL/referer、状态/魔数校验、页名、`read_partial` 拒绝；
+- `state.rs`：按书打开本地/在线源、句柄池复用与来源类型错误；
 - `sidecar.rs`：健康响应/错误体/框默认值；
 - `workbench.rs`：翻译缓存键敏感性、术语表 prompt；
 - `translate.rs`：OpenAI 请求形状、缺少 Endpoint/Model、Bearer、响应解析；
 - `ocr.rs`：相对裁剪钳制、过小选区、HTTP 协议；
-- `commands.rs`：持久化键覆盖、文件夹导入语义；
+- `commands.rs`：持久化键覆盖、文件夹导入语义、在线 upsert/清单变化失效/活跃批量拒绝/在线删除、`BookInfo` 条漫门控；
 - `render_cache.rs`：落盘/读取/删除；
 - `logging.rs`：追加日志。
+
+在线相关测试只使用 `FakeTransport` 或 `127.0.0.1` 本地 stub server，不访问公网。
 
 ### 10.2 集成与内存验收
 
@@ -857,6 +977,8 @@ npm run build
 - 通过：sidecar 健康、检测/OCR、单页翻译、OCR 缓存秒出、批量暂停/继续、自动测试；
 - 不通过：二次执行不秒出（擦除未缓存，整步约 8.7s）、批量 2 成功/7 失败（LLM 卡顿 + 30s 超时）、看板卡片缺成功/失败计数、工作台 OCR 不计入统计；
 - 文档问题：翻译默认关闭且 `Model` 为空、`启动翻译代理.bat` 监听 8081 而应用直连 8080。
+
+在线直读的手工 GUI 冒烟（本地 stub JSON 清单/HTML 图集、L2 回翻、条漫、工作台、删除、关闭开关）尚未在实现环境中执行；自动化只覆盖后端测试、类型检查、纯函数脚本与构建，GUI 验收需按[在线设计](../superpowers/specs/2026-10-19-online-direct-reader-design.md) 15.2 补跑。
 
 ---
 
@@ -885,9 +1007,10 @@ npm run build
 1. **减少全分辨率解码**：长 JPEG 用 IDCT 缩放；条漫按显示宽度解码。
 2. **减少重复 IO**：SourceHandle 常开；L2 成品缓存命中约 1ms；L1 命中约 0.1ms。
 3. **减少内存驻留**：L1 只存 dataURL；条漫整页物化后立即丢栅格；切片独立预算。
-4. **减少请求尖峰**：后端预取 ±1/±2、前端 idle 预取 ±3、`requestedRef` 去重。
+4. **减少请求尖峰**：本地后端预取 ±1/±2、前端 idle 预取 ±3；在线仅 +1/+2 且受信号量限制；`requestedRef` 去重。
 5. **控制缓存尺寸**：页缓存的 key 含请求尺寸，64px 桶避免缩放手势产生大量近似尺寸。
 6. **后台任务让出**：批量每页后 sleep 30ms；渲染 trim 与预取在线程池执行。
+7. **在线流量可控**：每本在线书一个阻塞信号量（1–8），预取仅 +1/+2；已读页复用 L1/L2，缩略图只取第 1 页；原图读取（OCR/工作台/批量）不进 L2，会产生额外下载。
 
 ---
 
@@ -904,9 +1027,16 @@ npm run build
 | P1 | 本地推理速度不稳 | 检测单页 49–76s（CPU/机器负载高时） | 空载复测；考虑 GPU 或更小检测尺寸；批量前提示 |
 | P2 | 书库批量卡片 | 标题固定“进行中”，无成功/失败计数 | 按状态切换标题；补 `成功 X · 失败 Y` |
 | P2 | 工作台 OCR 统计缺失 | 9 页 OCR 后设置页 OCR 仍为 0 | 在 `wb_ocr` 成功/失败时写 `trans_log` |
+| P2 | 在线 OCR/工作台/批量重新下载原图 | 在线页展示缓存是视口 JPEG；OCR/工作台/批量读原图不走 L2，每次操作都会重新请求 | 流量敏感时后续增加“原始页字节”缓存；当前按需重下 |
+| P2 | 在线清单 URL 过期需重导入 | 页面直链带时效 token；第一版没有“刷新清单”按钮 | 重新导入同一清单 URL 触发刷新；后续可加显式刷新 |
+| P2 | 单页 HTML 图集不能条漫 | HTML 没有可靠宽高，`webtoonReady=false` | 单/双页阅读；需要条漫时改用带 `width`/`height` 的 JSON 清单 |
+| P2 | 在线请求头明文且可能过期 | `onlineHeaders`（Cookie/Authorization）明文存于 SQLite | 设置页已提示风险；需要时接系统凭据库 |
 | P2 | 载入页面无预览 | 图片仅在检测完成后渲染 | `page` 就绪即显示，框图层叠加 |
 | P3 | 工作台默认选书会变 | 书库刷新/排序变化后可能切到另一本 | 首次选默认，后续保留当前选择 |
+| P3 | 在线清单刷新后的在途缓存竞态 | 在途预取/后台渲染无法撤回，旧页可能在新清单失效后又写回 L1/L2 | 重新进入阅读会按新源重建；后续引入 generation key |
 | P3 | 版本号不一致 | UI `v0.2.0`；npm/Cargo/Tauri `0.1.0` | 统一版本来源 |
+| 信息 | 在线直读边界 | 不支持 EH/ExHentai/JMComic、分页查看器（`/g/`、`/s/`）、主图推断、切条反混淆、自动登录/Cookie jar、JS 渲染 | 超出本阶段范围需另立项 |
+| 信息 | OPDS/Komga/Kavita 未实现 | 规划到 1.1 | 当前仅支持 JSON 清单与单页 HTML 直铺图集 |
 | 信息 | 测试期间数据库被外部写入 | 495 页书恢复、进度 +9、阅读日志 +10，非本轮自动化 | 冒烟使用独立数据目录/profile |
 | 信息 | CSP 关闭 | `tauri.conf.json` `"csp": null` | 对外分发前评估收紧 |
 | 信息 | API Key 明文 | SQLite `settings.v` | 如需更强保护，改用系统凭据库 |
@@ -977,6 +1107,10 @@ npm run build
 | Rail | 左侧图标导航轨 |
 | 页 OCR 存档 | `page_ocr` 表中的框 + 文本，供批量/工作台秒出 |
 | 选区翻译 | 阅读器内框选任意区域 → OCR → 翻译浮层 |
+| 在线书 | `source_type='generic_manga'` 的书籍；`books.path` 存规范化清单/图集 URL |
+| JSON 清单 | 含 `title` 与 `pages` 的 JSON；在线直读的首选格式 |
+| HTML 图集 | 单页 HTML 中的直铺图片集合；JSON 失败后的回退格式，无宽高 |
+| manifestHash | 标题 + 规范化页面的 SHA-256，用于判断清单是否变化 |
 
 ---
 
@@ -991,6 +1125,8 @@ npm run build
 | `remove_books` | `ids: string[]`, `deleteSourceFiles: boolean` | `{removed, deletedFiles, errors}` |
 | `list_books` | `query?: string \| null` | `BookInfo[]` |
 | `get_book` | `bookId` | `BookInfo` |
+| `resolve_online_url` | `url` | `BookInfo`（需开启 `experimentalOnline`；幂等入库/恢复） |
+| `test_online_connection` | `url` | `{ok,title,pageCount,elapsedMs,message}`（需开启开关；不写库） |
 | `list_entries` | `bookId` | `{index, name}[]` |
 | `get_page` | `bookId`, `index`, `maxWidth?`, `maxHeight?` | `PageImage` |
 | `get_thumbnail` | `bookId`, `maxSize?` | `PageImage` |
@@ -1024,6 +1160,13 @@ npm run build
 | `batch_cancel` | `bookId` | `void` |
 | `batch_list` | – | `BatchJob[]`（最近 50 条） |
 
+`BookInfo` 在原有字段（`id`、`title`、`path`、`pageCount`、`currentPage`、`updatedAt`、`scrollPct`）之外新增：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `sourceType` | `string` | `local` / `generic_manga` / `anime`（预留） |
+| `webtoonReady` | `boolean` | 本地书恒 `true`；在线书要求清单全部页宽高为正，HTML 图集为 `false` |
+
 ---
 
 ## 附录 B：常见故障排查
@@ -1039,6 +1182,12 @@ npm run build
 | 封面异常/缺图 | 渲染缓存损坏 | 设置页“重新生成缩略图” |
 | 翻译入口消失 | 实验性翻译关闭 | 设置 → 实验性功能 → 开启翻译 |
 | 条漫入口消失 | 实验性条漫关闭 | 设置 → 实验性功能 → 开启条漫 |
+| “在线直读未开启” | `experimentalOnline=false` | 设置 → 实验性功能 → 开启“在线 URL 直读” |
+| URL 直读按钮消失 | 实验开关关闭，或镜像未刷新 | 同上；已导入在线书仍可打开 |
+| “无法解析为 JSON 或 HTML 图集”/“未找到可读图片” | 不是清单/图集，或页面依赖分页查看器/JS | 换 JSON 清单或单页直铺图集；查看器链路不在支持范围 |
+| “该在线书籍缺少页面尺寸” | 清单未给全部页宽高，或来源是 HTML 图集 | 改用带宽高的 JSON 清单；HTML 图集只能单/双页 |
+| “清单已变化，请先取消该书的批量任务再更新” | 该书存在 queued/running/paused 批量任务 | 取消或等待任务结束后重新导入 |
+| 在线页 404/网络错误 | 直链过期、需要 Referer/Cookie、代理或并发配置不当 | 重新导入清单；检查“在线源与网络”的代理/请求头/并发 |
 
 ---
 
@@ -1059,3 +1208,7 @@ npm run build
    - 本文档第 11 节
 4. 新增实验功能必须默认关闭，并在 `App.tsx` / 阅读器 / 设置页做三处守卫。
 5. 任何“缓存命中秒出”的承诺都必须有实测证据；当前已知擦除未缓存，不要在工作台文案中声称整步秒出。
+6. 修改在线契约（JSON/HTML 解析、`meta_json`、请求头/Referer 规则、缓存失效）时，同时更新：
+   - `docs/superpowers/specs/2026-10-19-online-direct-reader-design.md`
+   - `src-tauri/src/online/{mod,direct,html,http}.rs`
+   - 本文 6.12、附录 A 与[已知问题](#13-已知问题与限制)。

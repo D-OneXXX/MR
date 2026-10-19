@@ -17,12 +17,14 @@ export default function OnlineImportDialog({ onClose, onImported, onRead }: Prop
   const aliveRef = useRef(true);
 
   // 关闭后（含父组件卸载）不再触发导入/阅读回调或写入结果。
-  useEffect(
-    () => () => {
+  // setup 中重置为 true：StrictMode 会执行 setup → cleanup → setup，
+  // 若不重置，cleanup 置 false 后存活标记将永远为 false。
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
       aliveRef.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const close = useCallback(() => {
     aliveRef.current = false;

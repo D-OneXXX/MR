@@ -37,8 +37,33 @@ fn is_forbidden_header(name: &str) -> bool {
     )
 }
 
+/// RFC 7230 token：字母/数字与 `!#$%&'*+-.^_`|~`，用于请求头名称校验。
+fn is_token_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
 impl RequestHeaders {
-    /// 解析手动请求头；拒绝 CR/LF 与 Host/Content-Length/Connection/Transfer-Encoding。
+    /// 解析手动请求头；拒绝非法名称/CRLF 与 Host/Content-Length/Connection/Transfer-Encoding。
     pub fn parse(raw: &str) -> Result<Self, OnlineError> {
         let raw = raw.trim();
         if raw.is_empty() {
@@ -58,22 +83,20 @@ impl RequestHeaders {
                     )));
                 }
             }
-            let cookie = raw
-                .strip_prefix("Cookie:")
-                .or_else(|| raw.strip_prefix("cookie:"))
-                .unwrap_or(raw)
-                .trim()
-                .to_string();
+            // `Cookie:` 前缀大小写不敏感，输出统一为规范的 `Cookie`。
+            let cookie = match raw.split_once(':') {
+                Some((name, rest)) if name.trim().eq_ignore_ascii_case("cookie") => {
+                    rest.trim().to_string()
+                }
+                _ => raw.to_string(),
+            };
             vec![("Cookie".to_string(), cookie)]
         };
         for (k, v) in &values {
-            if k.trim().is_empty()
-                || k.contains('\r')
-                || k.contains('\n')
-                || v.contains('\r')
-                || v.contains('\n')
-            {
-                return Err(OnlineError::HeaderInvalid("请求头包含非法字符".into()));
+            if !is_token_name(k) || v.contains('\r') || v.contains('\n') {
+                return Err(OnlineError::HeaderInvalid(
+                    "请求头名称或值包含非法字符".into(),
+                ));
             }
             if is_forbidden_header(k) {
                 return Err(OnlineError::HeaderInvalid(format!("不允许设置 {k}")));
@@ -101,20 +124,54 @@ struct RawResponse {
     content_type: Option<String>,
     body: Vec<u8>,
     retry_after_s: Option<u64>,
+    location: Option<String>,
+}
+
+/// 最多跟随的重定向次数；第 6 个重定向响应视为错误。
+const MAX_REDIRECTS: usize = 5;
+
+/// 归一化代理地址：小写 scheme；https 按 HTTP CONNECT 代理映射为 http；
+/// 仅保留 http/socks5，并要求非空 host。
+fn normalize_proxy(raw: &str) -> Result<Option<String>, OnlineError> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    validate_proxy(raw).map_err(OnlineError::Proxy)?;
+    let u =
+        url::Url::parse(raw).map_err(|e| OnlineError::Proxy(format!("代理地址无效：{e}")))?;
+    let scheme = match u.scheme() {
+        "http" | "https" => "http",
+        "socks5" => "socks5",
+        other => {
+            return Err(OnlineError::Proxy(format!(
+                "代理仅支持 http/https/socks5，收到 {other}"
+            )))
+        }
+    };
+    let host = u
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| OnlineError::Proxy("代理地址缺少主机名".into()))?;
+    Ok(Some(match (scheme, u.port_or_known_default()) {
+        ("socks5", None) => format!("socks5://{host}"),
+        (_, Some(port)) => format!("{scheme}://{host}:{port}"),
+        (_, None) => format!("{scheme}://{host}"),
+    }))
 }
 
 impl UreqTransport {
     pub fn new(proxy: &str, headers: &str) -> Result<Self, OnlineError> {
-        validate_proxy(proxy).map_err(OnlineError::Proxy)?;
+        let proxy = normalize_proxy(proxy)?;
         let headers = RequestHeaders::parse(headers)?;
         let mut builder = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
-            .redirects(5)
+            // 关闭 ureq 自动重定向：手动跟随以便每个 hop 重新应用请求头。
+            .redirects(0)
             .user_agent(ONLINE_UA);
-        if !proxy.trim().is_empty() {
-            let p =
-                ureq::Proxy::new(proxy.trim()).map_err(|e| OnlineError::Proxy(e.to_string()))?;
+        if let Some(proxy) = proxy {
+            let p = ureq::Proxy::new(&proxy).map_err(|e| OnlineError::Proxy(e.to_string()))?;
             builder = builder.proxy(p);
         }
         Ok(Self {
@@ -123,13 +180,14 @@ impl UreqTransport {
         })
     }
 
-    fn get_once(
+    /// 单次请求：应用手动请求头与派生的 Referer/Origin。
+    fn execute(
         &self,
-        url: &str,
+        url: &url::Url,
         max_bytes: usize,
         referer: Option<&str>,
     ) -> Result<RawResponse, OnlineError> {
-        let mut req = self.agent.get(url);
+        let mut req = self.agent.get(url.as_str());
         for (k, v) in &self.headers.values {
             req = req.set(k, v);
         }
@@ -149,10 +207,43 @@ impl UreqTransport {
             }
         }
         match req.call() {
-            Ok(resp) => read_response(resp, max_bytes),
-            Err(ureq::Error::Status(_, resp)) => read_response(resp, max_bytes),
+            Ok(resp) => read_response(resp, url, max_bytes),
+            Err(ureq::Error::Status(_, resp)) => read_response(resp, url, max_bytes),
             Err(ureq::Error::Transport(t)) => Err(OnlineError::Network(t.to_string())),
         }
+    }
+
+    /// 手动跟随 301/302/303/307/308；每一跳都重新应用请求头。
+    fn get_once(
+        &self,
+        url: &url::Url,
+        max_bytes: usize,
+        referer: Option<&str>,
+    ) -> Result<RawResponse, OnlineError> {
+        let mut current = url.clone();
+        for hop in 0..=MAX_REDIRECTS {
+            let raw = self.execute(&current, max_bytes, referer)?;
+            if !is_redirect(raw.status) {
+                return Ok(raw);
+            }
+            if hop == MAX_REDIRECTS {
+                return Err(OnlineError::Network(format!(
+                    "重定向次数过多（上限 {MAX_REDIRECTS} 次）"
+                )));
+            }
+            let location = raw
+                .location
+                .as_deref()
+                .ok_or_else(|| OnlineError::Network("重定向缺少 Location".into()))?;
+            let next = current.join(location).map_err(|e| {
+                OnlineError::Network(format!("重定向地址无效：{e}"))
+            })?;
+            if !matches!(next.scheme(), "http" | "https") {
+                return Err(OnlineError::Network("重定向到非 HTTP(S) URL".into()));
+            }
+            current = next;
+        }
+        unreachable!("redirect loop always returns")
     }
 }
 
@@ -165,12 +256,18 @@ fn ensure_http_url(raw: &str) -> Result<url::Url, OnlineError> {
     Ok(u)
 }
 
-fn read_response(resp: ureq::Response, max_bytes: usize) -> Result<RawResponse, OnlineError> {
+fn is_redirect(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+fn read_response(
+    resp: ureq::Response,
+    url: &url::Url,
+    max_bytes: usize,
+) -> Result<RawResponse, OnlineError> {
     let status = resp.status();
-    let final_url = resp.get_url().to_string();
-    // 重定向后的最终 URL 必须仍是 HTTP(S)。
-    ensure_http_url(&final_url)
-        .map_err(|_| OnlineError::Network("重定向到非 HTTP(S) URL".into()))?;
+    let final_url = url.to_string();
+    let location = resp.header("location").map(str::to_string);
     let content_type = resp.header("content-type").map(str::to_string);
     let retry_after_s = resp
         .header("retry-after")
@@ -189,6 +286,7 @@ fn read_response(resp: ureq::Response, max_bytes: usize) -> Result<RawResponse, 
         content_type,
         body,
         retry_after_s,
+        location,
     })
 }
 
@@ -203,9 +301,9 @@ impl HttpTransport for UreqTransport {
         max_bytes: usize,
         referer: Option<&str>,
     ) -> Result<HttpResponse, OnlineError> {
-        ensure_http_url(url)?;
+        let url = ensure_http_url(url)?;
         for attempt in 0..=2u32 {
-            match self.get_once(url, max_bytes, referer)? {
+            match self.get_once(&url, max_bytes, referer)? {
                 raw if should_retry(raw.status) && attempt < 2 => {
                     let wait_ms = raw
                         .retry_after_s
@@ -292,6 +390,33 @@ mod tests {
     }
 
     #[test]
+    fn retries_503_then_succeeds() {
+        let (url, h) = spawn_server(vec![
+            (503, "text/plain", b"busy".to_vec()),
+            (200, "image/png", b"ok".to_vec()),
+        ]);
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t.get(&url, 1024, None).unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.body, b"ok");
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn retry_exhaustion_returns_last_503() {
+        let (url, h) = spawn_server(vec![
+            (503, "text/plain", b"first".to_vec()),
+            (503, "text/plain", b"second".to_vec()),
+            (503, "text/plain", b"third".to_vec()),
+        ]);
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t.get(&url, 1024, None).unwrap();
+        assert_eq!(r.status, 503);
+        assert_eq!(r.body, b"third");
+        h.join().unwrap();
+    }
+
+    #[test]
     fn rejects_body_larger_than_limit() {
         let (url, h) = spawn_server(vec![(200, "image/png", vec![0u8; 16])]);
         let t = UreqTransport::new("", "").unwrap();
@@ -312,6 +437,26 @@ mod tests {
     }
 
     #[test]
+    fn accepts_supported_proxy_forms() {
+        assert!(UreqTransport::new("http://127.0.0.1:7890", "").is_ok());
+        assert!(UreqTransport::new("socks5://127.0.0.1:1080", "").is_ok());
+        // 大写 scheme 与 https（按 HTTP CONNECT 代理处理）必须在构造期归一化。
+        assert!(UreqTransport::new("HTTPS://127.0.0.1:7890", "").is_ok());
+        assert_eq!(
+            normalize_proxy("HTTPS://127.0.0.1:7890")
+                .unwrap()
+                .as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        assert_eq!(
+            normalize_proxy("socks5://127.0.0.1:1080")
+                .unwrap()
+                .as_deref(),
+            Some("socks5://127.0.0.1:1080")
+        );
+    }
+
+    #[test]
     fn rejects_non_http_url_without_network() {
         let t = UreqTransport::new("", "").unwrap();
         assert!(matches!(
@@ -325,15 +470,23 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let h = std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
             let (mut s, _) = listener.accept().unwrap();
-            let mut buf = [0u8; 4096];
-            let _ = s.read(&mut buf);
+            let n = s.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            assert!(req.starts_with("GET /start "), "{req}");
+            assert!(req.contains("Cookie: sid=abc"), "{req}");
+            assert!(req.contains("Referer: http://gallery.example/g/1"), "{req}");
             s.write_all(
                 b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             )
             .unwrap();
             let (mut s2, _) = listener.accept().unwrap();
-            let _ = s2.read(&mut buf);
+            let n = s2.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            assert!(req.starts_with("GET /final "), "{req}");
+            assert!(req.contains("Cookie: sid=abc"), "{req}");
+            assert!(req.contains("Referer: http://gallery.example/g/1"), "{req}");
             s2.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
             )
@@ -345,10 +498,38 @@ mod tests {
     #[test]
     fn follows_redirect_and_reports_final_url() {
         let (url, h) = spawn_redirect();
-        let t = UreqTransport::new("", "").unwrap();
-        let r = t.get(&url, 1024, None).unwrap();
+        let t = UreqTransport::new("", "Cookie: sid=abc").unwrap();
+        let r = t
+            .get(&url, 1024, Some("http://gallery.example/g/1"))
+            .unwrap();
         assert_eq!(r.status, 200);
-        assert!(r.final_url.ends_with("/final"));
+        assert_eq!(r.body, b"ok");
+        assert!(r.final_url.ends_with("/final"), "{}", r.final_url);
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_more_than_five_redirects() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let h = std::thread::spawn(move || {
+            for _ in 0..6 {
+                let (mut s, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                s.write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: /loop\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            }
+        });
+        let t = UreqTransport::new("", "").unwrap();
+        let err = match t.get(&format!("http://{addr}/loop"), 1024, None) {
+            Ok(_) => panic!("超过 5 次重定向应报错"),
+            Err(OnlineError::Network(msg)) => msg,
+            Err(other) => panic!("unexpected error: {other}"),
+        };
+        assert!(err.contains("重定向"), "{err}");
         h.join().unwrap();
     }
 
@@ -366,6 +547,11 @@ mod tests {
         assert!(RequestHeaders::parse("{\"X\\r\\nInjected\":\"b\"}").is_err());
         assert!(RequestHeaders::parse(r#"{"":"x"}"#).is_err());
         assert!(RequestHeaders::parse("{not-json}").is_err());
+        // 请求头名称必须是 RFC 7230 token：空格、控制符、分隔符均拒绝。
+        assert!(RequestHeaders::parse(r#"{"Bad Name":"x"}"#).is_err());
+        assert!(RequestHeaders::parse("{\"X\\tY\":\"x\"}").is_err());
+        assert!(RequestHeaders::parse(r#"{"X@Y":"x"}"#).is_err());
+        assert!(RequestHeaders::parse(r#"{"X[Y":"x"}"#).is_err());
     }
 
     fn spawn_header_server(expected: &'static [&'static str]) -> (String, JoinHandle<()>) {
@@ -398,6 +584,20 @@ mod tests {
         let r = t
             .get(&url, 1024, Some("http://gallery.example/g/1"))
             .unwrap();
+        assert_eq!(r.status, 200);
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn cookie_prefix_strip_is_case_insensitive() {
+        assert_eq!(
+            RequestHeaders::parse("CoOkIe: sid=xyz").unwrap().values,
+            vec![("Cookie".to_string(), "sid=xyz".to_string())]
+        );
+        // 线上请求头也必须是规范的 `Cookie` 名与去掉前缀后的值。
+        let (url, h) = spawn_header_server(&["Cookie: sid=xyz"]);
+        let t = UreqTransport::new("", "COOKIE: sid=xyz").unwrap();
+        let r = t.get(&url, 1024, None).unwrap();
         assert_eq!(r.status, 200);
         h.join().unwrap();
     }

@@ -3,6 +3,13 @@
 本地优先的漫画阅读器：Tauri 2 + React + TypeScript 前端，Rust 后端（SQLite 书库 /
 三级图片缓存 / 翻译工作台 / sidecar 检测-OCR-擦除）。
 
+## 文档
+
+- [技术文档](docs/TECHNICAL.md)
+- [Sidecar 接口契约](docs/sidecar-api.md)
+- [真机冒烟清单](docs/smoke-test.md)
+- [最近冒烟报告（2026-10-19）](docs/smoke-test-report-2026-10-19.md)
+
 ## 开发
 
 ```

@@ -150,9 +150,11 @@ export default function Reader() {
   // 缩放/resize 后静默升级清晰度而不闪烁。
   const imgKeyRef = useRef<Record<number, string>>({});
   const uiLockRef = useRef(false);
-  // 生效版式：按书记忆优先，否则全局偏好；条漫实验开关关闭时回退到分页。
+  // 生效版式：按书记忆优先，否则全局偏好；条漫开关关闭或本书不支持条漫时回退到分页。
   const rawMode: PageMode = bookMode ?? prefs.mode;
-  const mode: PageMode = !wtOn && rawMode === "webtoon" ? prefs.mode : rawMode;
+  const webtoonAllowed = wtOn && (book?.webtoonReady !== false);
+  const mode: PageMode =
+    !webtoonAllowed && rawMode === "webtoon" ? prefs.mode : rawMode;
   const trackRef = useRef({
     book: null as BookInfo | null,
     page: 0,
@@ -363,7 +365,7 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, n]);
 
-  /* ---------- silent preload: current ±3（后端 L1/L2 命中时近乎零成本） ---------- */
+  /* ---------- silent preload: 本地 current ±3；在线仅当前页起 +2（不回翻） ---------- */
   useEffect(() => {
     if (bookState !== "ready" || !book || n === 0) return;
     if (mode === "webtoon") return; // 条漫由 WebtoonView 预取
@@ -371,7 +373,10 @@ export default function Reader() {
       const t = trackRef.current;
       if (!t.book || t.book.id !== book.id) return;
       const vis = new Set(spreadFor(t.page, n, t.mode, t.dir));
-      for (let i = t.page - 3; i <= t.page + 3; i++) {
+      const online = book.sourceType !== "local";
+      const start = online ? t.page : t.page - 3;
+      const end = online ? Math.min(n - 1, t.page + 2) : Math.min(n - 1, t.page + 3);
+      for (let i = Math.max(0, start); i <= end; i++) {
         if (i < 0 || i >= n || vis.has(i)) continue;
         if (imgs[i]) continue;
         fetchIdx(i, { silent: true });
@@ -527,10 +532,10 @@ export default function Reader() {
     [poke],
   );
 
-  /* ---------- 版式（三态，按书记忆；条漫受实验开关门控） ---------- */
+  /* ---------- 版式（三态，按书记忆；条漫受实验开关与本书可用性门控） ---------- */
   const setMode = useCallback(
     (m: PageMode) => {
-      if (m === "webtoon" && !wtOn) return; // 实验开关关闭：不接受条漫
+      if (m === "webtoon" && !webtoonAllowed) return;
       const t = trackRef.current;
       // 条漫 → 分页：带上滚动位置对应的页码，位置无缝衔接。
       if (t.mode === "webtoon" && m !== "webtoon" && t.book) {
@@ -547,15 +552,18 @@ export default function Reader() {
       setPan({ x: 0, y: 0 });
       poke();
     },
-    [bookId, poke, wtOn],
+    [bookId, poke, webtoonAllowed],
   );
 
   const toggleMode = useCallback(() => {
     const cur = trackRef.current.mode;
-    const cycle: PageMode[] = wtOn ? ["single", "double", "webtoon"] : ["single", "double"];
+    const canWebtoon = wtOn && book?.webtoonReady !== false;
+    const cycle: PageMode[] = canWebtoon
+      ? ["single", "double", "webtoon"]
+      : ["single", "double"];
     const idx = cycle.indexOf(cur);
     setMode(cycle[(idx + 1) % cycle.length]);
-  }, [setMode, wtOn]);
+  }, [setMode, wtOn, book]);
 
   /* ---------- 条漫进度提交（WebtoonView 内已节流） ---------- */
   const commitWt = useCallback((pct: number, page: number) => {
@@ -1230,7 +1238,7 @@ export default function Reader() {
           <div className="set-row">
             <span>版式</span>
             <div className="seg-dark" role="group" aria-label="版式">
-              {(wtOn
+              {(wtOn && book?.webtoonReady !== false
                 ? (["single", "double", "webtoon"] as const)
                 : (["single", "double"] as const)
               ).map((m) => (
@@ -1342,8 +1350,8 @@ export default function Reader() {
         </div>
       )}
 
-      {/* 条漫自动建议：检测到长条画面且本书未记忆过选择（受实验开关门控） */}
-      {wtOn && wtSuggest && mode !== "webtoon" && (
+      {/* 条漫自动建议：检测到长条画面且本书未记忆过选择（受实验开关与本书可用性门控） */}
+      {wtOn && book?.webtoonReady !== false && wtSuggest && mode !== "webtoon" && (
         <div className="wt-suggest glass-bar fade-in">
           <span>检测到长条画面，是否切换条漫模式？</span>
           <button

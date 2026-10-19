@@ -291,17 +291,23 @@ impl ImageSource for OnlineSource {
         let _guard = self.permits.acquire();
         let resp = self
             .http
-            .get(&page.url, PAGE_MAX_BYTES, Some(&self.referer))?;
+            .get(&page.url, PAGE_MAX_BYTES, Some(&self.referer))
+            .map_err(|e| {
+                // 传输层失败（连接/超时/过大等）也带页 URL 留痕，便于定位。
+                let msg = format!("第 {} 页请求失败（{}）：{e}", index + 1, page.url);
+                crate::logging::log_error("online_page", &msg);
+                BackendError::from(e)
+            })?;
         if !(200..300).contains(&resp.status) {
             let msg = format!("第 {} 页 HTTP {}", index + 1, resp.status);
-            crate::logging::log_error("online_page", &msg);
+            crate::logging::log_error("online_page", &format!("{msg}：{}", page.url));
             return Err(BackendError::Network(msg));
         }
         let fmt = match image::guess_format(&resp.body) {
             Ok(f) => f,
             Err(_) => {
                 let msg = format!("第 {} 页返回的不是图片", index + 1);
-                crate::logging::log_error("online_page", &msg);
+                crate::logging::log_error("online_page", &format!("{msg}：{}", page.url));
                 return Err(BackendError::Network(msg));
             }
         };
@@ -495,27 +501,23 @@ mod tests {
 
     use super::ImageSource;
 
-    /// 固定响应的假传输：记录每次请求的 Referer，便于断言透传。
+    /// 固定响应的假传输：记录每次请求的 (url, referer, max_bytes)，便于断言参数透传。
     struct FakeHttp {
         status: u16,
         body: Vec<u8>,
-        referers: Mutex<Vec<Option<String>>>,
+        requests: Mutex<Vec<(String, Option<String>, usize)>>,
     }
 
     impl FakeHttp {
         fn ok(body: Vec<u8>) -> Self {
-            Self {
-                status: 200,
-                body,
-                referers: Mutex::new(Vec::new()),
-            }
+            Self::status(200, body)
         }
 
         fn status(status: u16, body: Vec<u8>) -> Self {
             Self {
                 status,
                 body,
-                referers: Mutex::new(Vec::new()),
+                requests: Mutex::new(Vec::new()),
             }
         }
     }
@@ -523,15 +525,15 @@ mod tests {
     impl HttpTransport for FakeHttp {
         fn get(
             &self,
-            _url: &str,
+            url: &str,
             max_bytes: usize,
             referer: Option<&str>,
         ) -> Result<HttpResponse, OnlineError> {
-            assert_eq!(max_bytes, crate::online::PAGE_MAX_BYTES);
-            self.referers
-                .lock()
-                .unwrap()
-                .push(referer.map(str::to_string));
+            self.requests.lock().unwrap().push((
+                url.to_string(),
+                referer.map(str::to_string),
+                max_bytes,
+            ));
             Ok(HttpResponse {
                 status: self.status,
                 final_url: "http://x/1.png".into(),
@@ -575,11 +577,52 @@ mod tests {
         assert_eq!(raw.ext, "png");
         assert!(raw.bytes.starts_with(b"\x89PNG"));
         assert!(src.read_raw(2).is_err());
-        // Amendment E：整本规范化 URL 作为 Referer 传给传输层。
+        // 单页请求携带页 URL、整本规范化 URL 作为 Referer，以及单页字节上限。
         assert_eq!(
-            *http.referers.lock().unwrap(),
-            vec![Some("http://x/gallery/1".to_string())]
+            *http.requests.lock().unwrap(),
+            vec![(
+                "http://x/001.png".to_string(),
+                Some("http://x/gallery/1".to_string()),
+                crate::online::PAGE_MAX_BYTES,
+            )]
         );
+    }
+
+    #[test]
+    fn online_source_maps_image_magic_to_extensions() {
+        // (用例名, 魔数字节, 期望扩展名)：只校验魔数识别与扩展名映射，不涉及解码。
+        let cases: &[(&str, &[u8], &str)] = &[
+            ("jpeg", &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10], "jpg"),
+            ("png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\r", "png"),
+            ("gif", b"GIF89a\x01\x00\x01\x00", "gif"),
+            ("webp", b"RIFF\x10\x00\x00\x00WEBPVP8 ", "webp"),
+        ];
+        for (name, bytes, ext) in cases {
+            let src = super::OnlineSource::new(
+                pages(),
+                Arc::new(FakeHttp::ok(bytes.to_vec())),
+                1,
+                "http://x/gallery/1".into(),
+            );
+            let raw = src
+                .read_raw(0)
+                .unwrap_or_else(|e| panic!("{name} 魔数应识别为图片：{e}"));
+            assert_eq!(raw.ext, *ext, "{name}");
+        }
+
+        // 可识别但不支持编码的 BMP：明确报错，而不是当成未知图片放行。
+        let bmp = super::OnlineSource::new(
+            pages(),
+            Arc::new(FakeHttp::ok(b"BM\x00\x00\x00\x00".to_vec())),
+            1,
+            "http://x/gallery/1".into(),
+        );
+        let err = bmp
+            .read_raw(0)
+            .err()
+            .expect("BMP 应返回格式不支持")
+            .to_string();
+        assert!(err.contains("图片格式不支持"), "{err}");
     }
 
     #[test]

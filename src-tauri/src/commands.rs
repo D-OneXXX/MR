@@ -361,8 +361,9 @@ pub async fn remove_books(
         state.cache.remove_book(id);
         state.render.remove_book(id);
         state.webtoon_layouts.lock().remove(id);
-        state.sources.lock().remove(id);
     }
+    // 句柄池按代际整体失效：避免删除与在途打开竞态时旧句柄重新插回。
+    state.invalidate_sources();
     Ok(RemoveResult {
         removed,
         deleted_files,
@@ -893,13 +894,15 @@ pub async fn get_webtoon_tile(
             return assembled_page(bytes);
         }
         // 3) 整页物化（串行；一次解码直接切全部片，无中间编解码往返）。
+        // 先读原页再抢切片锁：在线源 read_raw 可能下载 30s+，持全局锁会阻塞
+        // 其它书/页的切片请求；锁内只做“双检 + 解码切片 + 落盘”。
+        let handle = st.source_handle_for_book(&book)?;
+        let raw = handle.read_raw(index as usize)?;
         let _guard = st.tile_lock.lock();
         // 双检：等锁期间可能已被别的请求物化。
         if let Some(bytes) = st.render.get_tile(&book, index, tile, w) {
             return assembled_page(bytes);
         }
-        let handle = st.source_handle_for_book(&book)?;
-        let raw = handle.read_raw(index as usize)?;
         let (tiles, pages) = pipeline::render_webtoon_tiles(&raw, w)?;
         if tile >= tiles {
             return Err(BackendError::Msg(format!(
@@ -1167,7 +1170,7 @@ pub async fn resolve_online_url(
         state.cache.remove_book(&row.id);
         state.render.remove_book(&row.id);
         state.webtoon_layouts.lock().remove(&row.id);
-        state.sources.lock().remove(&row.id);
+        state.invalidate_sources();
         // 在途预取/后台渲染无法撤回，旧页可能在此之后又写回 L1/L2；
         // 本次不引入 generation key，接受该残留竞态（重新阅读会按新清单重建）。
     }
@@ -1255,7 +1258,7 @@ pub async fn set_settings(
     });
     *state.settings.lock() = settings;
     if online_conn_changed {
-        state.sources.lock().clear();
+        state.invalidate_sources();
     }
     // 无库文件时（如首次启动内存态）仍接受设置，仅跳过持久化。
     match res {

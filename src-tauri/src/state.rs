@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -59,6 +60,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// 常开源句柄池（book_id → 已打开的 zip/目录），热路径免重复开卷。
     pub sources: Mutex<HashMap<String, Arc<SourceHandle>>>,
+    /// 源句柄代际：清单/设置/删除变化时递增，防止旧数据打开的新句柄插回池中。
+    source_epoch: AtomicU64,
     /// 邻页预取在途标记，防止快速翻页时重复渲染同一页。
     pub prefetching: Mutex<HashSet<(String, u32, u32, u32)>>,
     /// 条漫切片"整页物化"全局锁：一次只解码一张长图到显示宽度，
@@ -80,6 +83,7 @@ impl AppState {
             cache: ImageCache::new(),
             http: reqwest::Client::new(),
             sources: Mutex::new(HashMap::new()),
+            source_epoch: AtomicU64::new(0),
             prefetching: Mutex::new(HashSet::new()),
             tile_lock: Mutex::new(()),
             webtoon_layouts: Mutex::new(HashMap::new()),
@@ -111,10 +115,23 @@ impl AppState {
     }
 
     /// 按 bookId 打开本地或在线源，并复用 16 本常开池。
+    ///
+    /// 打开句柄前记录源代际；插入池前复核。若期间发生清单更新/设置变化/删除，
+    /// 丢弃本次句柄并用新数据有界重试一次，避免旧 meta 或旧代理/请求头打开的
+    /// 句柄污染池。第二次仍变化则返回可读错误。
     pub fn source_handle_for_book(
         &self,
         book_id: &str,
     ) -> Result<Arc<SourceHandle>, crate::source::BackendError> {
+        self.source_handle_for_book_checked(book_id, true)
+    }
+
+    fn source_handle_for_book_checked(
+        &self,
+        book_id: &str,
+        allow_retry: bool,
+    ) -> Result<Arc<SourceHandle>, crate::source::BackendError> {
+        let epoch = self.source_epoch.load(Ordering::SeqCst);
         {
             let pool = self.sources.lock();
             if let Some(h) = pool.get(book_id) {
@@ -156,11 +173,32 @@ impl AppState {
         };
 
         let mut pool = self.sources.lock();
+        if self.source_epoch.load(Ordering::SeqCst) != epoch {
+            drop(pool);
+            return if allow_retry {
+                self.source_handle_for_book_checked(book_id, false)
+            } else {
+                Err(crate::source::BackendError::Msg(
+                    "源配置已变化，请重试".into(),
+                ))
+            };
+        }
         if pool.len() >= 16 {
             pool.clear();
         }
         pool.insert(book_id.to_string(), handle.clone());
         Ok(handle)
+    }
+
+    /// 使全部常开源句柄失效：先递增代际，再清空池。
+    ///
+    /// 必须先递增再清空：反向顺序会让“旧代际读取、清空后插入”的句柄漏网。
+    /// 残留竞态：在途预取/后台渲染无法撤回，旧页可能在此后写回 L1/L2；
+    /// 这里只保证句柄池不插入旧配置句柄，不充当 L2 的 generation key。
+    pub fn invalidate_sources(&self) {
+        let mut pool = self.sources.lock();
+        self.source_epoch.fetch_add(1, Ordering::SeqCst);
+        pool.clear();
     }
 
     pub fn set_db_path(&self, p: std::path::PathBuf) {
@@ -258,6 +296,40 @@ mod tests {
         assert!(
             Arc::ptr_eq(&first, &second),
             "同一 bookId 的第二次调用应返回同一个 Arc"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn invalidate_sources_clears_pool_and_advances_epoch() {
+        let state = test_state();
+        let dir = temp_dir("invalidate");
+        write_tiny_png(&dir.join("001.png"));
+        let path = dir.to_string_lossy().to_string();
+        let book_id = crate::db::book_id_for_path(&path);
+        state
+            .db
+            .with(|conn| {
+                crate::db::upsert_book(conn, &book_id, &path, "失效测试", 1)
+                    .map_err(|e| e.to_string())
+            })
+            .expect("写入本地书");
+
+        let first = state.source_handle_for_book(&book_id).expect("打开本地书");
+        assert!(state.sources.lock().contains_key(&book_id));
+
+        let before = state.source_epoch.load(Ordering::SeqCst);
+        state.invalidate_sources();
+        assert_eq!(state.source_epoch.load(Ordering::SeqCst), before + 1);
+        assert!(state.sources.lock().is_empty(), "失效后句柄池应为空");
+
+        let second = state
+            .source_handle_for_book(&book_id)
+            .expect("失效后应能重新打开");
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "失效后应返回新打开的句柄，而不是旧池中的 Arc"
         );
 
         std::fs::remove_dir_all(&dir).ok();

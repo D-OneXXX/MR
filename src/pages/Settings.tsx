@@ -61,6 +61,7 @@ export default function SettingsPage() {
   const [onlineTestUrl, setOnlineTestUrl] = useState("");
   const [onlineProbe, setOnlineProbe] = useState<string | null>(null);
   const [testingOnline, setTestingOnline] = useState(false);
+  const [experimentalBusy, setExperimentalBusy] = useState<string | null>(null);
 
   const load = () => {
     let alive = true;
@@ -114,13 +115,16 @@ export default function SettingsPage() {
     }
   };
 
-  // 实验性开关：点选即生效（持久化 + 镜像 + 广播）。
+  // 实验性开关：只提交“已持久化设置 + 本次开关”，避免把未保存的代理/请求头写库；
+  // 失败时回滚该开关（乐观翻转只为即时反馈）。
   const setExperimental = async (
     key: "experimentalTrans" | "experimentalWebtoon" | "experimentalOnline",
     v: boolean,
   ) => {
-    const next = { ...form, [key]: v };
-    setForm(next);
+    if (experimentalBusy !== null) return;
+    const prev = form[key];
+    setExperimentalBusy(key);
+    setForm((f) => ({ ...f, [key]: v }));
     const label =
       key === "experimentalTrans"
         ? "翻译功能"
@@ -128,10 +132,16 @@ export default function SettingsPage() {
           ? "条漫模式"
           : "在线 URL 直读";
     try {
-      await api.setSettings(next);
+      const persisted = await api.getSettings();
+      await api.setSettings({ ...persisted, [key]: v });
+      // 成功只确认该开关，保留表单里其他未保存编辑。
+      setForm((f) => ({ ...f, [key]: v }));
       toast(v ? `${label}已开启` : `${label}已关闭`);
     } catch (e) {
+      setForm((f) => ({ ...f, [key]: prev }));
       toastErr("set_settings", e);
+    } finally {
+      setExperimentalBusy(null);
     }
   };
 
@@ -249,8 +259,13 @@ export default function SettingsPage() {
           <button
             className={`btn${form.experimentalTrans ? " primary" : ""}`}
             onClick={() => void setExperimental("experimentalTrans", !form.experimentalTrans)}
+            disabled={experimentalBusy !== null}
           >
-            {form.experimentalTrans ? "关闭" : "开启"}
+            {experimentalBusy === "experimentalTrans"
+              ? "处理中…"
+              : form.experimentalTrans
+                ? "关闭"
+                : "开启"}
           </button>
         </div>
         <div
@@ -271,8 +286,13 @@ export default function SettingsPage() {
             onClick={() =>
               void setExperimental("experimentalWebtoon", !form.experimentalWebtoon)
             }
+            disabled={experimentalBusy !== null}
           >
-            {form.experimentalWebtoon ? "关闭" : "开启"}
+            {experimentalBusy === "experimentalWebtoon"
+              ? "处理中…"
+              : form.experimentalWebtoon
+                ? "关闭"
+                : "开启"}
           </button>
         </div>
         <div
@@ -285,7 +305,8 @@ export default function SettingsPage() {
               {form.experimentalOnline ? "已开启" : "未开启"}
             </span>
             <p className="hint" style={{ margin: "4px 0 0" }}>
-              支持匿名 JSON 清单与单页 HTML 图集；不支持自动登录、JS 渲染或分页查看器。
+              支持 JSON 清单与单页 HTML 图集，并可手动配置 Cookie / Authorization /
+              自定义请求头；不支持自动登录、JS 渲染或分页查看器。
             </p>
           </span>
           <button
@@ -293,8 +314,13 @@ export default function SettingsPage() {
             onClick={() =>
               void setExperimental("experimentalOnline", !form.experimentalOnline)
             }
+            disabled={experimentalBusy !== null}
           >
-            {form.experimentalOnline ? "关闭" : "开启"}
+            {experimentalBusy === "experimentalOnline"
+              ? "处理中…"
+              : form.experimentalOnline
+                ? "关闭"
+                : "开启"}
           </button>
         </div>
         <p className="hint" style={{ marginTop: 8 }}>
@@ -540,8 +566,9 @@ export default function SettingsPage() {
             <Link2 size={15} /> 在线源与网络
           </h3>
           <p className="hint">
-            支持 JSON 清单与单页 HTML 直铺图集；请求头仅用于你自建/有权访问的网关，
-            会明文保存在本机。不支持分页查看器、切条反混淆、自动登录或 JS 渲染。
+            支持 JSON 清单与单页 HTML 直铺图集，并可手动配置 Cookie / Authorization /
+            自定义请求头；不支持分页查看器、切条反混淆、自动登录或 JS 渲染。
+            请求头以明文保存在本机，并会随请求发送到你配置的源或网关。
           </p>
           <div className="form-grid two" style={{ marginTop: 8 }}>
             <label className="field">
@@ -577,7 +604,7 @@ export default function SettingsPage() {
                 placeholder='{"Authorization":"Bearer ..."} 或 session=...; token=...'
               />
               <span className="hint">
-                敏感信息：将以明文保存在本机设置中，不会上传；仅填写你信任的源或网关。
+                敏感信息：请求头以明文保存在本机设置中，并会随请求发送到你配置的源或网关；请只填写你信任的源或网关。
               </span>
             </label>
           </div>

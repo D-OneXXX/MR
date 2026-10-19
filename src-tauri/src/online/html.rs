@@ -76,7 +76,7 @@ fn first_image_url(tag: &str, base_url: &url::Url, patterns: &[&Regex]) -> Optio
         let Some(caps) = re.captures(tag) else {
             continue;
         };
-        let raw = caps[1].trim();
+        let raw = decode_entities(caps[1].trim());
         if raw.is_empty()
             || raw.starts_with("data:")
             || raw.starts_with("blob:")
@@ -84,7 +84,7 @@ fn first_image_url(tag: &str, base_url: &url::Url, patterns: &[&Regex]) -> Optio
         {
             continue;
         }
-        let Ok(joined) = base_url.join(raw) else {
+        let Ok(joined) = base_url.join(&raw) else {
             continue;
         };
         let Ok(normalized) = normalize_url(joined.as_str()) else {
@@ -216,6 +216,16 @@ mod tests {
         assert_eq!(meta.page_count, 1);
         let stored: crate::online::StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
         assert_eq!(stored.pages[0].url, "http://gallery.example/real.png");
+    }
+
+    #[test]
+    fn decodes_entities_in_image_urls_before_join() {
+        let page = url::Url::parse("http://gallery.example/view/1").unwrap();
+        let html =
+            br#"<html><body><img src="/a.png?x=1&amp;y=2"></body></html>"#;
+        let meta = parse_gallery(html, &page, &page).unwrap();
+        let stored: crate::online::StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
+        assert_eq!(stored.pages[0].url, "http://gallery.example/a.png?x=1&y=2");
     }
 
     #[test]

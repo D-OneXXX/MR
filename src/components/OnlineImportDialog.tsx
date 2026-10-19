@@ -79,19 +79,28 @@ export default function OnlineImportDialog({ onClose, onImported, onRead }: Prop
   };
 
   return (
-    <div className="dialog-mask" onClick={close} role="presentation">
+    <div
+      className="dialog-mask"
+      onClick={() => {
+        // 解析中禁止点遮罩关闭：后端可能已提交，必须等结果回调刷新书库。
+        if (busy === null) close();
+      }}
+      role="presentation"
+    >
       <div
         className="dialog online-dialog"
         role="dialog"
         aria-modal="true"
         aria-label="URL 在线直读"
+        aria-busy={busy !== null}
         onClick={(e) => e.stopPropagation()}
       >
         <h4>
           <Link2 size={15} /> URL 在线直读
         </h4>
         <p className="hint">
-          粘贴 JSON 清单或单页 HTML 图集的 URL。只导入你信任的地址；当前版本不支持 Cookie、登录或需要脚本渲染的网页。
+          粘贴 JSON 清单或单页 HTML 图集的 URL。可在设置中手动填写 Cookie /
+          Authorization / 自定义请求头；不支持自动登录或需要脚本渲染的网页。
         </p>
         <input
           className="input mono"
@@ -114,6 +123,7 @@ export default function OnlineImportDialog({ onClose, onImported, onRead }: Prop
         />
         {err && <p className="hint online-error">{err}</p>}
         {probe && <p className="hint mono">{probe}</p>}
+        {busy !== null && <p className="hint">正在处理，完成前无法关闭…</p>}
         <div className="dialog-actions">
           <button className="btn" onClick={() => void run("test")} disabled={busy !== null}>
             {busy === "test" ? <Loader2 size={14} className="online-spin" /> : null} 测试
@@ -124,7 +134,12 @@ export default function OnlineImportDialog({ onClose, onImported, onRead }: Prop
           <button className="btn primary" onClick={() => void run("read")} disabled={busy !== null}>
             {busy === "read" ? <Loader2 size={14} className="online-spin" /> : null} 解析并直接阅读
           </button>
-          <button className="btn" onClick={close} title="关闭">
+          <button
+            className="btn"
+            onClick={close}
+            disabled={busy !== null}
+            title={busy !== null ? "解析进行中，完成前无法关闭" : "关闭"}
+          >
             <X size={14} />
           </button>
         </div>

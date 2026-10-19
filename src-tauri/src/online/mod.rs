@@ -109,14 +109,19 @@ pub fn resolve(
     if !(200..300).contains(&resp.status) {
         return Err(BackendError::Network(format!(
             "内容 HTTP {}：{}",
-            resp.status, resp.final_url
+            resp.status,
+            redact_url_for_log(&resp.final_url)
         )));
     }
     // 书身份保持用户请求的规范化 URL；HTML 相对图片与标题回退则使用重定向后的最终 URL。
     // final_url 非法时退回请求 URL，避免因传输层给出的异常值中断解析。
     let base_url = normalize_url(&resp.final_url).unwrap_or_else(|_| url.clone());
+    // 只有正文根本不是 JSON 时才回退 HTML；合法 JSON 但清单语义错误
+    // （版本、页数、页 URL 非法等）必须原样返回清单错误，避免误当图集导入。
+    let body_is_json = serde_json::from_slice::<serde_json::Value>(&resp.body).is_ok();
     match direct::parse_manifest(&resp.body, &url) {
         Ok(meta) => Ok(meta),
+        Err(json_err) if body_is_json => Err(json_err),
         Err(json_err) => match html::parse_gallery(&resp.body, &base_url, &url) {
             Ok(meta) => Ok(meta),
             Err(html_err) => Err(BackendError::Msg(format!(
@@ -403,6 +408,20 @@ mod tests {
     }
 
     #[test]
+    fn resolve_keeps_invalid_json_manifest_errors_without_html_fallback() {
+        // 合法 JSON、但页 URL 非法（夹带 <img> 仅用于证明没有走 HTML 回退）。
+        let t = StubTransport::ok(
+            br#"{"version":1,"pages":["file:///bad.png"],"note":"<img src='http://x/ok.jpg'>"}"#,
+        );
+        let err = resolve(&t, "http://example.com/manifest.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("第 1 页 URL 非法"), "{err}");
+        assert!(!err.contains("HTML="), "{err}");
+        assert_eq!(t.calls(), 1);
+    }
+
+    #[test]
     fn resolve_falls_back_to_html() {
         let t = StubTransport::ok(
             br#"<html><head><title>HTML</title></head><body><img src="/1.png"></body></html>"#,
@@ -446,5 +465,19 @@ mod tests {
         };
         let err = resolve(&t, "http://example.com/x").unwrap_err().to_string();
         assert!(err.contains("404"), "{err}");
+    }
+
+    #[test]
+    fn resolve_non_2xx_error_redacts_url_query() {
+        let t = StubTransport {
+            status: 404,
+            body: b"missing".to_vec(),
+            final_url: "http://example.com/missing?token=secret#frag".into(),
+            ..StubTransport::ok(b"")
+        };
+        let err = resolve(&t, "http://example.com/x").unwrap_err().to_string();
+        assert!(err.contains("404"), "{err}");
+        assert!(err.contains("http://example.com/missing"), "{err}");
+        assert!(!err.contains("token=secret"), "{err}");
     }
 }

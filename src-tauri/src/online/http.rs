@@ -145,18 +145,6 @@ fn same_origin(a: &url::Url, b: &url::Url) -> bool {
         && a.port_or_known_default() == b.port_or_known_default()
 }
 
-/// 重定向跳的请求头策略：跨主机丢弃 Cookie，跨 origin 丢弃 Authorization，
-/// 其余自定义头照常发送。
-fn allows_header(name: &str, target: &url::Url, original: &url::Url) -> bool {
-    if name.eq_ignore_ascii_case("cookie") {
-        return same_host(target, original);
-    }
-    if name.eq_ignore_ascii_case("authorization") {
-        return same_origin(target, original);
-    }
-    true
-}
-
 /// 归一化代理地址：小写 scheme；https 按 HTTP CONNECT 代理映射为 http；
 /// 仅保留 http/socks5，并要求非空 host。
 fn normalize_proxy(raw: &str) -> Result<Option<String>, OnlineError> {
@@ -208,7 +196,9 @@ impl UreqTransport {
     }
 
     /// 单次请求：应用手动请求头与派生的 Referer/Origin。
-    /// Cookie 仅在目标与原始请求同主机时发送，Authorization 仅在同 origin 时发送。
+    /// 仅当目标与原始请求同 origin（scheme+host+port）时应用全部用户请求头；
+    /// 跨 origin 重定向丢弃全部用户请求头（含 Cookie/Authorization/自定义密钥头），
+    /// 只保留由页面 URL 派生的 Referer/Origin。
     fn execute(
         &self,
         target: &url::Url,
@@ -216,21 +206,23 @@ impl UreqTransport {
         max_bytes: usize,
         referer: Option<&str>,
     ) -> Result<RawResponse, OnlineError> {
+        let cross_origin = !same_origin(target, original);
         let mut req = self.agent.get(target.as_str());
-        for (k, v) in &self.headers.values {
-            if !allows_header(k, target, original) {
-                continue;
+        if !cross_origin {
+            for (k, v) in &self.headers.values {
+                req = req.set(k, v);
             }
-            req = req.set(k, v);
         }
         if let Some(page) = referer {
             if let Ok(u) = url::Url::parse(page) {
                 if matches!(u.scheme(), "http" | "https") {
                     if let Some(host) = u.host_str() {
-                        if !self.headers.has("referer") {
+                        // 跨 origin 时用户头已被丢弃，必须使用派生值；
+                        // 同 origin 时显式配置的同名头优先。
+                        if cross_origin || !self.headers.has("referer") {
                             req = req.set("Referer", page);
                         }
-                        if !self.headers.has("origin") {
+                        if cross_origin || !self.headers.has("origin") {
                             let origin = format!("{}://{}", u.scheme(), host);
                             req = req.set("Origin", &origin);
                         }
@@ -249,7 +241,8 @@ impl UreqTransport {
         }
     }
 
-    /// 手动跟随 301/302/303/307/308；每一跳都重新应用请求头（凭据按目标 host/origin 过滤）。
+    /// 手动跟随 301/302/303/307/308；每一跳都重新应用请求头
+    /// （用户请求头只在同 origin 时发送，跨 origin 仅派生 Referer/Origin）。
     fn get_once(
         &self,
         url: &url::Url,
@@ -276,6 +269,17 @@ impl UreqTransport {
             })?;
             if !matches!(next.scheme(), "http" | "https") {
                 return Err(OnlineError::Network("重定向到非 HTTP(S) URL".into()));
+            }
+            // 重定向目标同样受输入约束：拒绝 userinfo 与超长 URL。
+            if !next.username().is_empty() || next.password().is_some() {
+                return Err(OnlineError::Network(
+                    "重定向目标不能包含用户名或密码".into(),
+                ));
+            }
+            if next.as_str().len() > 2048 {
+                return Err(OnlineError::Network(
+                    "重定向目标 URL 过长（上限 2048 字节）".into(),
+                ));
             }
             current = next;
         }
@@ -327,7 +331,7 @@ fn read_response(
 }
 
 fn should_retry(status: u16) -> bool {
-    matches!(status, 429 | 500 | 502 | 503 | 504)
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
 }
 
 impl HttpTransport for UreqTransport {
@@ -380,6 +384,7 @@ mod tests {
                 let reason = match status {
                     200 => "OK",
                     404 => "Not Found",
+                    408 => "Request Timeout",
                     429 => "Too Many Requests",
                     503 => "Service Unavailable",
                     _ => "Error",
@@ -416,6 +421,19 @@ mod tests {
     fn retries_429_then_succeeds() {
         let (url, h) = spawn_server(vec![
             (429, "text/plain", b"slow".to_vec()),
+            (200, "image/png", b"ok".to_vec()),
+        ]);
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t.get(&url, 1024, None).unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.body, b"ok");
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn retries_408_then_succeeds() {
+        let (url, h) = spawn_server(vec![
+            (408, "text/plain", b"timeout".to_vec()),
             (200, "image/png", b"ok".to_vec()),
         ]);
         let t = UreqTransport::new("", "").unwrap();
@@ -631,11 +649,11 @@ mod tests {
     }
 
     const CREDENTIAL_HEADERS: &str =
-        r#"{"Cookie":"sid=abc","Authorization":"Bearer secret","X-Test":"yes"}"#;
+        r#"{"Cookie":"sid=abc","Authorization":"Bearer secret","X-Test":"yes","X-Api-Key":"secret-key"}"#;
 
     #[test]
-    fn redirect_same_host_other_port_drops_authorization_only() {
-        // 第二个 stub 与起点同主机不同端口：Cookie 保留，Authorization 丢弃。
+    fn redirect_same_host_other_port_drops_all_user_headers() {
+        // 同主机不同端口即跨 origin：所有用户请求头都不得重放。
         let (target_url, target_h) = spawn_hop(None);
         let (start_url, start_h) = spawn_hop(Some(target_url));
         let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
@@ -644,15 +662,17 @@ mod tests {
         let first = start_h.join().unwrap();
         assert_eq!(header_value(&first, "cookie"), Some("sid=abc"));
         assert_eq!(header_value(&first, "authorization"), Some("Bearer secret"));
+        assert_eq!(header_value(&first, "x-api-key"), Some("secret-key"));
         let second = target_h.join().unwrap();
-        assert_eq!(header_value(&second, "cookie"), Some("sid=abc"));
+        assert_eq!(header_value(&second, "cookie"), None, "{second}");
         assert_eq!(header_value(&second, "authorization"), None, "{second}");
-        assert_eq!(header_value(&second, "x-test"), Some("yes"));
+        assert_eq!(header_value(&second, "x-test"), None, "{second}");
+        assert_eq!(header_value(&second, "x-api-key"), None, "{second}");
     }
 
     #[test]
-    fn redirect_cross_host_drops_cookie_and_authorization() {
-        // 127.0.0.1 → localhost 视为跨主机：Cookie 与 Authorization 都丢弃。
+    fn redirect_cross_host_drops_all_user_headers() {
+        // 127.0.0.1 → localhost 视为跨主机：Cookie、Authorization 与自定义头都丢弃。
         let (target_url, target_h) = spawn_hop(None);
         let port = url::Url::parse(&target_url).unwrap().port().unwrap();
         let (start_url, start_h) = spawn_hop(Some(format!("http://localhost:{port}/final")));
@@ -662,10 +682,27 @@ mod tests {
         let first = start_h.join().unwrap();
         assert_eq!(header_value(&first, "cookie"), Some("sid=abc"));
         assert_eq!(header_value(&first, "authorization"), Some("Bearer secret"));
+        assert_eq!(header_value(&first, "x-api-key"), Some("secret-key"));
         let second = target_h.join().unwrap();
         assert_eq!(header_value(&second, "cookie"), None, "{second}");
         assert_eq!(header_value(&second, "authorization"), None, "{second}");
-        assert_eq!(header_value(&second, "x-test"), Some("yes"));
+        assert_eq!(header_value(&second, "x-test"), None, "{second}");
+        assert_eq!(header_value(&second, "x-api-key"), None, "{second}");
+    }
+
+    #[test]
+    fn redirect_cross_host_drops_api_key() {
+        // 自定义密钥头（X-Api-Key）跨主机时同样不得重放。
+        let (target_url, target_h) = spawn_hop(None);
+        let port = url::Url::parse(&target_url).unwrap().port().unwrap();
+        let (start_url, start_h) = spawn_hop(Some(format!("http://localhost:{port}/final")));
+        let t = UreqTransport::new("", r#"{"X-Api-Key":"secret-key"}"#).unwrap();
+        let r = t.get(&start_url, 1024, None).unwrap();
+        assert_eq!(r.status, 200);
+        let first = start_h.join().unwrap();
+        assert_eq!(header_value(&first, "x-api-key"), Some("secret-key"));
+        let second = target_h.join().unwrap();
+        assert_eq!(header_value(&second, "x-api-key"), None, "{second}");
     }
 
     #[test]
@@ -681,6 +718,34 @@ mod tests {
             Some("Bearer secret")
         );
         assert_eq!(header_value(&second, "x-test"), Some("yes"));
+        assert_eq!(header_value(&second, "x-api-key"), Some("secret-key"));
+    }
+
+    #[test]
+    fn rejects_redirect_target_with_userinfo() {
+        let (start_url, h) = spawn_hop(Some("http://user:pass@127.0.0.1:1/final".into()));
+        let t = UreqTransport::new("", "").unwrap();
+        let msg = match t.get(&start_url, 1024, None) {
+            Ok(_) => panic!("重定向目标含 userinfo 时应报错"),
+            Err(OnlineError::Network(msg)) => msg,
+            Err(other) => panic!("unexpected error: {other}"),
+        };
+        assert!(msg.contains("用户名或密码"), "{msg}");
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_overlong_redirect_target() {
+        let target = format!("http://127.0.0.1:1/{}", "a".repeat(2100));
+        let (start_url, h) = spawn_hop(Some(target));
+        let t = UreqTransport::new("", "").unwrap();
+        let msg = match t.get(&start_url, 1024, None) {
+            Ok(_) => panic!("重定向目标超长时应报错"),
+            Err(OnlineError::Network(msg)) => msg,
+            Err(other) => panic!("unexpected error: {other}"),
+        };
+        assert!(msg.contains("2048 字节"), "{msg}");
+        h.join().unwrap();
     }
 
     #[test]

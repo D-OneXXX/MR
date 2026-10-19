@@ -8,8 +8,12 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use thiserror::Error;
+
+use crate::online::http::HttpTransport;
+use crate::online::{BlockingSemaphore, PageRef, PAGE_MAX_BYTES};
 
 /// 后端统一错误（最终 `.to_string()` 后传给前端）。
 #[derive(Debug, Error)]
@@ -239,6 +243,87 @@ impl ImageSource for AnySource {
     }
 }
 
+/// 在线图片源：页列表来自 meta_json；read_raw 按需下载单页。
+pub struct OnlineSource {
+    pages: Vec<PageRef>,
+    http: Arc<dyn HttpTransport>,
+    permits: Arc<BlockingSemaphore>,
+    /// 整本规范化 URL：作为单页请求的 Referer/Origin 来源（防盗链站点需要）。
+    referer: String,
+}
+
+impl OnlineSource {
+    pub fn new(
+        pages: Vec<PageRef>,
+        http: Arc<dyn HttpTransport>,
+        concurrency: usize,
+        referer: String,
+    ) -> Self {
+        Self {
+            pages,
+            http,
+            permits: Arc::new(BlockingSemaphore::new(concurrency)),
+            referer,
+        }
+    }
+}
+
+impl ImageSource for OnlineSource {
+    fn page_count(&self) -> Result<usize, BackendError> {
+        Ok(self.pages.len())
+    }
+
+    fn entry_names(&self) -> Result<Vec<String>, BackendError> {
+        Ok(self
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| crate::online::page_name(p, i))
+            .collect())
+    }
+
+    fn read_raw(&self, index: usize) -> Result<RawPage, BackendError> {
+        let page = self
+            .pages
+            .get(index)
+            .ok_or_else(|| BackendError::Msg(format!("页码越界：{index}")))?;
+        // 每本书独立的并发闸门：限制同时在途的页面下载数。
+        let _guard = self.permits.acquire();
+        let resp = self
+            .http
+            .get(&page.url, PAGE_MAX_BYTES, Some(&self.referer))?;
+        if !(200..300).contains(&resp.status) {
+            let msg = format!("第 {} 页 HTTP {}", index + 1, resp.status);
+            crate::logging::log_error("online_page", &msg);
+            return Err(BackendError::Network(msg));
+        }
+        let fmt = match image::guess_format(&resp.body) {
+            Ok(f) => f,
+            Err(_) => {
+                let msg = format!("第 {} 页返回的不是图片", index + 1);
+                crate::logging::log_error("online_page", &msg);
+                return Err(BackendError::Network(msg));
+            }
+        };
+        let ext = match fmt {
+            image::ImageFormat::Jpeg => "jpg",
+            image::ImageFormat::Png => "png",
+            image::ImageFormat::Gif => "gif",
+            image::ImageFormat::WebP => "webp",
+            _ => {
+                return Err(BackendError::Network(format!(
+                    "第 {} 页图片格式不支持",
+                    index + 1
+                )))
+            }
+        };
+        Ok(RawPage {
+            bytes: resp.body,
+            ext: ext.into(),
+        })
+    }
+}
+
 /// 常开句柄（热路径用）：zip 归档保持打开（避免每页重开+解析中央目录），
 /// 文件夹缓存文件清单。内部 Mutex 只在单页读取时短暂持锁。
 pub struct SourceHandle {
@@ -247,11 +332,14 @@ pub struct SourceHandle {
 }
 
 enum HandleKind {
-    Folder { files: Vec<PathBuf> },
+    Folder {
+        files: Vec<PathBuf>,
+    },
     Zip {
         archive: parking_lot::Mutex<zip::ZipArchive<File>>,
         names: Vec<String>,
     },
+    Online(OnlineSource),
 }
 
 impl SourceHandle {
@@ -290,16 +378,30 @@ impl SourceHandle {
         &self.path
     }
 
-    pub fn page_count(&self) -> Result<usize, BackendError> {
-        Ok(match &self.kind {
-            HandleKind::Folder { files } => files.len(),
-            HandleKind::Zip { names, .. } => names.len(),
+    /// 在线源句柄：`canonical_url` 同时作为路径标识与整本 Referer。
+    pub fn open_online(
+        canonical_url: String,
+        pages: Vec<PageRef>,
+        http: Arc<dyn HttpTransport>,
+        concurrency: usize,
+    ) -> Result<Self, BackendError> {
+        Ok(Self {
+            path: PathBuf::from(&canonical_url),
+            kind: HandleKind::Online(OnlineSource::new(pages, http, concurrency, canonical_url)),
         })
     }
 
+    pub fn page_count(&self) -> Result<usize, BackendError> {
+        match &self.kind {
+            HandleKind::Folder { files } => Ok(files.len()),
+            HandleKind::Zip { names, .. } => Ok(names.len()),
+            HandleKind::Online(s) => s.page_count(),
+        }
+    }
+
     pub fn entry_names(&self) -> Result<Vec<String>, BackendError> {
-        Ok(match &self.kind {
-            HandleKind::Folder { files } => files
+        match &self.kind {
+            HandleKind::Folder { files } => Ok(files
                 .iter()
                 .map(|p| {
                     p.file_name()
@@ -307,9 +409,10 @@ impl SourceHandle {
                         .unwrap_or("?")
                         .to_string()
                 })
-                .collect(),
-            HandleKind::Zip { names, .. } => names.clone(),
-        })
+                .collect()),
+            HandleKind::Zip { names, .. } => Ok(names.clone()),
+            HandleKind::Online(s) => s.entry_names(),
+        }
     }
 
     pub fn read_raw(&self, index: usize) -> Result<RawPage, BackendError> {
@@ -340,6 +443,7 @@ impl SourceHandle {
                 let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
                 Ok(RawPage { bytes, ext })
             }
+            HandleKind::Online(s) => s.read_raw(index),
         }
     }
 
@@ -375,6 +479,160 @@ impl SourceHandle {
                 let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
                 Ok(RawPage { bytes, ext })
             }
+            // 在线页没有可廉价读取的本地 header：头部探测必须走整页下载，直接拒绝。
+            HandleKind::Online(_) => Err(BackendError::Msg("在线源不支持 header 探测".into())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    use crate::online::http::{HttpResponse, HttpTransport};
+    use crate::online::{OnlineError, PageRef};
+
+    use super::ImageSource;
+
+    /// 固定响应的假传输：记录每次请求的 Referer，便于断言透传。
+    struct FakeHttp {
+        status: u16,
+        body: Vec<u8>,
+        referers: Mutex<Vec<Option<String>>>,
+    }
+
+    impl FakeHttp {
+        fn ok(body: Vec<u8>) -> Self {
+            Self {
+                status: 200,
+                body,
+                referers: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn status(status: u16, body: Vec<u8>) -> Self {
+            Self {
+                status,
+                body,
+                referers: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl HttpTransport for FakeHttp {
+        fn get(
+            &self,
+            _url: &str,
+            max_bytes: usize,
+            referer: Option<&str>,
+        ) -> Result<HttpResponse, OnlineError> {
+            assert_eq!(max_bytes, crate::online::PAGE_MAX_BYTES);
+            self.referers
+                .lock()
+                .unwrap()
+                .push(referer.map(str::to_string));
+            Ok(HttpResponse {
+                status: self.status,
+                final_url: "http://x/1.png".into(),
+                content_type: Some("image/png".into()),
+                body: self.body.clone(),
+            })
+        }
+    }
+
+    fn tiny_png() -> Vec<u8> {
+        use image::ImageEncoder as _;
+        let mut buf = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(&[255, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        buf
+    }
+
+    fn pages() -> Vec<PageRef> {
+        vec![
+            PageRef {
+                url: "http://x/001.png".into(),
+                width: Some(1),
+                height: Some(1),
+            },
+            PageRef {
+                url: "http://x/002.png".into(),
+                width: None,
+                height: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn online_source_reads_pages_and_names() {
+        let http = Arc::new(FakeHttp::ok(tiny_png()));
+        let src = super::OnlineSource::new(pages(), http.clone(), 2, "http://x/gallery/1".into());
+        assert_eq!(src.page_count().unwrap(), 2);
+        assert_eq!(src.entry_names().unwrap(), vec!["001.png", "002.png"]);
+        let raw = src.read_raw(0).unwrap();
+        assert_eq!(raw.ext, "png");
+        assert!(raw.bytes.starts_with(b"\x89PNG"));
+        assert!(src.read_raw(2).is_err());
+        // Amendment E：整本规范化 URL 作为 Referer 传给传输层。
+        assert_eq!(
+            *http.referers.lock().unwrap(),
+            vec![Some("http://x/gallery/1".to_string())]
+        );
+    }
+
+    #[test]
+    fn online_source_rejects_bad_status_and_non_image() {
+        let bad_status = super::OnlineSource::new(
+            pages(),
+            Arc::new(FakeHttp::status(404, b"missing".to_vec())),
+            1,
+            "http://x/gallery/1".into(),
+        );
+        let err = bad_status
+            .read_raw(0)
+            .err()
+            .expect("非 2xx 应返回错误")
+            .to_string();
+        assert!(err.contains("HTTP 404"), "{err}");
+
+        let not_image = super::OnlineSource::new(
+            pages(),
+            Arc::new(FakeHttp::ok(b"plain text".to_vec())),
+            1,
+            "http://x/gallery/1".into(),
+        );
+        let err = not_image
+            .read_raw(0)
+            .err()
+            .expect("非图片应返回错误")
+            .to_string();
+        assert!(err.contains("不是图片"), "{err}");
+    }
+
+    #[test]
+    fn online_source_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<super::OnlineSource>();
+    }
+
+    #[test]
+    fn online_handle_rejects_header_probe() {
+        let handle = super::SourceHandle::open_online(
+            "http://x/gallery/1".into(),
+            pages(),
+            Arc::new(FakeHttp::ok(tiny_png())),
+            2,
+        )
+        .unwrap();
+        assert_eq!(handle.page_count().unwrap(), 2);
+        assert_eq!(handle.path(), Path::new("http://x/gallery/1"));
+        let err = handle
+            .read_partial(0, 1024)
+            .err()
+            .expect("在线源 header 探测应返回错误")
+            .to_string();
+        assert_eq!(err, "在线源不支持 header 探测");
     }
 }

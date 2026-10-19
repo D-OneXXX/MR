@@ -110,6 +110,59 @@ impl AppState {
         Ok(handle)
     }
 
+    /// 按 bookId 打开本地或在线源，并复用 16 本常开池。
+    pub fn source_handle_for_book(
+        &self,
+        book_id: &str,
+    ) -> Result<Arc<SourceHandle>, crate::source::BackendError> {
+        {
+            let pool = self.sources.lock();
+            if let Some(h) = pool.get(book_id) {
+                return Ok(h.clone());
+            }
+        }
+        let (path, source_type, meta_json) = self
+            .db
+            .with(|conn| {
+                crate::db::get_book(conn, book_id)
+                    .map_err(|e| e.to_string())?
+                    .map(|b| (b.path, b.source_type, b.meta_json))
+                    .ok_or_else(|| "书籍不存在".to_string())
+            })
+            .map_err(crate::source::BackendError::Msg)?;
+
+        let handle = if source_type == "local" {
+            Arc::new(SourceHandle::open(std::path::Path::new(&path))?)
+        } else if source_type == "generic_manga" {
+            let stored: crate::online::StoredMeta = serde_json::from_str(&meta_json)
+                .map_err(|e| crate::source::BackendError::Msg(format!("在线书元数据损坏：{e}")))?;
+            let s = self.settings.lock().clone();
+            let transport =
+                crate::online::http::UreqTransport::new(&s.online_proxy, &s.online_headers)?;
+            Arc::new(SourceHandle::open_online(
+                path,
+                stored.pages,
+                Arc::new(transport),
+                s.online_concurrency as usize,
+            )?)
+        } else if source_type == "anime" {
+            return Err(crate::source::BackendError::Msg(
+                "第二阶段视频源尚未实现".into(),
+            ));
+        } else {
+            return Err(crate::source::BackendError::Msg(format!(
+                "未知来源类型：{source_type}"
+            )));
+        };
+
+        let mut pool = self.sources.lock();
+        if pool.len() >= 16 {
+            pool.clear();
+        }
+        pool.insert(book_id.to_string(), handle.clone());
+        Ok(handle)
+    }
+
     pub fn set_db_path(&self, p: std::path::PathBuf) {
         *self.db_path.lock() = p;
     }

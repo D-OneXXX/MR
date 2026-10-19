@@ -30,7 +30,30 @@ pub(crate) fn err(e: impl ToString) -> String {
     e.to_string()
 }
 
+fn webtoon_ready(r: &db::BookRow) -> bool {
+    if r.source_type == "local" {
+        return true;
+    }
+    match serde_json::from_str::<crate::online::StoredMeta>(&r.meta_json) {
+        Ok(meta) => {
+            !meta.pages.is_empty()
+                && meta
+                    .pages
+                    .iter()
+                    .all(|p| p.width.unwrap_or(0) > 0 && p.height.unwrap_or(0) > 0)
+        }
+        Err(e) => {
+            crate::logging::log_error(
+                "online_meta",
+                &format!("书籍 {} 元数据损坏：{e}", r.id),
+            );
+            false
+        }
+    }
+}
+
 fn to_book_info(r: db::BookRow) -> BookInfo {
+    let webtoon_ready = webtoon_ready(&r);
     BookInfo {
         id: r.id,
         title: r.title,
@@ -39,6 +62,8 @@ fn to_book_info(r: db::BookRow) -> BookInfo {
         current_page: r.current_page,
         updated_at: r.updated_at,
         scroll_pct: r.scroll_pct,
+        source_type: r.source_type,
+        webtoon_ready,
     }
 }
 
@@ -1188,5 +1213,40 @@ mod tests {
         assert!(items.iter().all(|i| i.status == "skipped"), "{items:?}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn book_info_webtoon_ready_depends_on_dims() {
+        let local = db::BookRow {
+            id: "l".into(), path: "p".into(), title: "L".into(),
+            page_count: 1, current_page: 0, updated_at: String::new(),
+            scroll_pct: -1.0, source_type: "local".into(), meta_json: "{}".into(),
+        };
+        assert!(to_book_info(local).webtoon_ready);
+
+        let online = db::BookRow {
+            id: "o".into(), path: "http://x/a".into(), title: "O".into(),
+            page_count: 2, current_page: 0, updated_at: String::new(),
+            scroll_pct: -1.0, source_type: "generic_manga".into(),
+            meta_json: r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg","width":800,"height":1200},{"url":"http://x/2.jpg"}]}"#.into(),
+        };
+        assert!(!to_book_info(online).webtoon_ready);
+
+        let online_ok = db::BookRow {
+            id: "o2".into(), path: "http://x/b".into(), title: "O2".into(),
+            page_count: 1, current_page: 0, updated_at: String::new(),
+            scroll_pct: -1.0, source_type: "generic_manga".into(),
+            meta_json: r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg","width":800,"height":1200}]}"#.into(),
+        };
+        assert!(to_book_info(online_ok).webtoon_ready);
+
+        // 元数据损坏：只降级为不可条漫，不阻断列表。
+        let corrupt = db::BookRow {
+            id: "o3".into(), path: "http://x/c".into(), title: "O3".into(),
+            page_count: 1, current_page: 0, updated_at: String::new(),
+            scroll_pct: -1.0, source_type: "generic_manga".into(),
+            meta_json: "{not-json".into(),
+        };
+        assert!(!to_book_info(corrupt).webtoon_ready);
     }
 }

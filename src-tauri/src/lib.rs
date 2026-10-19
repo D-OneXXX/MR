@@ -35,6 +35,10 @@ pub struct BookInfo {
     pub updated_at: String,
     /// 条漫滚动偏移百分比（0.0..1.0）；-1 = 无条漫阅读记录。
     pub scroll_pct: f64,
+    /// local | generic_manga | anime（预留）。
+    pub source_type: String,
+    /// 条漫是否可用：本地 true；在线取决于清单尺寸。
+    pub webtoon_ready: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,9 +1,11 @@
-# URL 在线漫画直读（第一阶段：JSON 清单直链）设计
+# URL 在线漫画直读（第一阶段：JSON 清单 + 单页 HTML 图集）设计
 
 - 日期：2026-10-19
 - 状态：已批准（2026-10-19）
 - 适用基线：`065776c`
 - 相关文档：[技术文档](../../TECHNICAL.md)、[Sidecar 契约](../../sidecar-api.md)、[冒烟报告](../../smoke-test-report-2026-10-19.md)
+
+> **2026-10-19 修订（已批准）**：在 JSON 清单之外增加“单页 HTML 直铺图集”和“手动请求头”。仍然**不做** EH/ExHentai/JMComic 的站点适配、分页查看器链路（`/g/`、`/s/`）、主图推导、图片切条反混淆（`slice_aid`/MD5）、自动登录、反爬或 JS 渲染。该修订覆盖下文中“只支持 JSON”“完全不做 Cookie”“不解析 HTML”的旧表述。
 
 ## 1. 背景与目标
 
@@ -20,9 +22,9 @@ MangaReader 目前只支持本地图片文件夹与 `.zip`/`.cbz`。本阶段新
 
 本阶段明确**不做**：
 
-- E-Hentai / ExHentai / JMComic 的站点抓取、Cookie、登录、反混淆、反爬绕过；
-- 任意网页 HTML/JavaScript 嗅探；
-- 浏览器 Cookie / 账号密码 / 验证码登录；
+- E-Hentai / ExHentai / JMComic 的站点适配、分页查看器链路（`/g/`、`/s/`）、主图推导、图片切条反混淆（`slice_aid`/MD5）、反爬绕过；
+- 自动登录、账号密码、验证码、全局 Cookie jar；
+- 执行 JavaScript 或依赖 JS 渲染的页面；
 - OPDS / Komga / Kavita（推迟到 1.1）；
 - 动漫视频播放（仅保留 `source_type='anime'` 类型值，不加可见路由）；
 - 下载整本、离线批量缓存、在线书自动刷新。
@@ -30,7 +32,10 @@ MangaReader 目前只支持本地图片文件夹与 `.zip`/`.cbz`。本阶段新
 允许：
 
 - 用户有权访问的公开 JSON 清单 URL；
-- 清单中指向的公网或局域网图片直链；
+- 单页 HTML 直铺图集：从公开/授权页面提取直接图片地址（`img src` / `data-src` / `data-original`），不跟随分页查看器链路；
+- 清单/HTML 页面中指向的公网或局域网图片直链；
+- 用户为自建/授权网关手动填写 Cookie / Authorization / 自定义请求头；
+- 图片请求默认携带页面来源的 `Referer` / `Origin`（用户显式提供的头优先）；
 - 通过 HTTP/HTTPS/SOCKS5 代理访问；
 - 使用现有 L1/L2 缓存、阅读器、OCR 与翻译链路。
 
@@ -38,9 +43,11 @@ MangaReader 目前只支持本地图片文件夹与 `.zip`/`.cbz`。本阶段新
 
 | 决策 | 结论 |
 |---|---|
-| 首期来源 | JSON 清单型直链图片集 |
-| 输入格式 | JSON；不支持 HTML 嗅探 |
-| Cookie / 登录 | 第一阶段完全不做 |
+| 首期来源 | JSON 清单 + 单页 HTML 直铺图集 |
+| 输入格式 | JSON 清单；JSON 解析失败时回退单页 HTML 直接图片提取；不跟随分页查看器 |
+| Cookie / 登录 | 仅手动 `onlineHeaders`（用户自建/授权源）；不做自动登录/Cookie jar |
+| 请求头 | `onlineHeaders`：JSON 对象或单行 Cookie；图片请求自动带 Referer/Origin |
+| 切片反混淆 | 不做 `slice_aid` / MD5 切条还原 |
 | 同步 `ImageSource` | 保持同步；页面下载走阻塞 HTTP |
 | 阻塞 HTTP 库 | `ureq`（纯阻塞，支持 HTTP CONNECT / SOCKS4/5）；不用 `reqwest::blocking` |
 | 在线书 ID | `sha256(规范化清单 URL)` |
@@ -238,13 +245,30 @@ webtoonReady: boolean;   // 本地书 true；在线书取决于清单尺寸
 
 `book.id = sha256(canonical_url)`。
 
+### 6.5 单页 HTML 图集（回退解析）
+
+当 `resolve_online_url` 拉取到内容后，先尝试 JSON 清单；失败则尝试单页 HTML 直铺图集：
+
+- 只在**当前这一个 HTML 页面**内提取图片，不跟随 `/g/`、`/s/` 等分页查看器链路，不在后续页面继续抓取；
+- 标题：`<title>` 文本，去标签与常见实体，trim 后 ≤200 字符；缺失则从 URL 推导；
+- 图片：扫描 `<img>`，按 `data-src` → `data-original` → `src` 的优先级取第一个非空地址；相对路径用 `page_url.join()` 转绝对；仅保留 `http/https`；跳过 `data:`、`blob:`、`javascript:`；按出现顺序去重；1–5000 张；
+- 不推断“页面内最大主图”，不执行脚本，不解析分页链接；
+- 没有可用图片 → 返回“未找到可读图片；分页查看器或依赖 JS 的页面不在支持范围”；
+- 结果写入同一个 `StoredMeta`，`source_type='generic_manga'`；HTML 无法提供可靠宽高，`webtoonReady=false`；
+- `manifestHash` 仍按最终标题 + pages 计算；页面 URL 变化会触发缓存失效。
+
 ## 7. HTTP 传输
 
 ### 7.1 抽象
 
 ```rust
 pub trait HttpTransport: Send + Sync {
-    fn get(&self, url: &str, max_bytes: usize) -> Result<HttpResponse, OnlineError>;
+    fn get(
+        &self,
+        url: &str,
+        max_bytes: usize,
+        referer: Option<&str>,
+    ) -> Result<HttpResponse, OnlineError>;
 }
 
 pub struct HttpResponse {
@@ -255,9 +279,16 @@ pub struct HttpResponse {
 }
 ```
 
-- 生产实现：`UreqTransport`；
+- 生产实现：`UreqTransport`；构造参数为 `proxy` 与 `onlineHeaders`；
 - 测试实现：`FakeTransport`，按 URL/次数返回脚本化响应，不访问网络；
-- 语义：`get` 对所有 HTTP 响应返回 `Ok(HttpResponse)`（含 4xx/5xx）；429/5xx 的重试在 transport 内部完成，最终非 2xx 仍由上层转成可读错误；网络失败、超时、重定向超限、响应超限返回 `Err(OnlineError)`。
+- 语义：`get` 对所有 HTTP 响应返回 `Ok(HttpResponse)`（含 4xx/5xx）；429/5xx 的重试在 transport 内部完成，最终非 2xx 仍由上层转成可读错误；网络失败、超时、重定向超限、响应超限返回 `Err(OnlineError)`；
+- 请求头：
+  - `onlineHeaders` 为空 → 不附加自定义头；
+  - 以 `{` 开头 → 按 JSON 对象解析 `{ "Cookie": "...", "Authorization": "..." }`；
+  - 否则视为单行 Cookie 值，等价于 `Cookie: <value>`；
+  - 拒绝包含 CR/LF 的值，拒绝 `Host`、`Content-Length`、`Connection`、`Transfer-Encoding`；
+  - `referer` 非空时，自动附加 `Referer: <page_url>` 与 `Origin: <scheme://host>`；用户在 `onlineHeaders` 中显式提供的 `Referer`/`Origin` 优先；
+  - 清单请求 `referer=None`；图片请求传画廊/HTML 页面 URL。
 
 ### 7.2 生产实现
 
@@ -269,13 +300,13 @@ pub struct HttpResponse {
   - 拒绝 URL 内嵌认证信息；无效代理在发起请求前报错。
 - 超时：连接 10s，单次请求总计 30s（本阶段不新增设置项）。
 - 重定向：最多 5 跳；最终 URL 复验 `http/https`；不接受非 HTTP(S) 重定向。
-- User-Agent：`MangaReader/0.1 online-direct`；不伪造浏览器 UA 或 Referer。
-- 不保存、不发送任何 Cookie。
-- 响应大小：清单 ≤2MB；页面 ≤32MB；超过立即终止并报错。
+- User-Agent：固定 `MangaReader/0.1 online-direct`；不伪造浏览器 UA。
+- 请求头：默认不发送 Cookie；仅当用户手动配置 `onlineHeaders` 时附加。图片请求自动带页面来源的 `Referer`/`Origin`，用户显式配置优先。
+- 响应大小：清单/HTML ≤2MB；页面 ≤32MB；超过立即终止并报错。
 - 页面响应：
   - 状态 200；
   - Content-Type 可为 `image/jpeg/png/gif/webp` 或 `application/octet-stream`；
-  - 以图片魔数（`image::guess_format`）为准；HTML/JSON/文本一律拒绝。
+  - 以图片魔数（`image::guess_format`）为准；HTML/JSON/文本一律不进入图片解码路径（HTML 只在图集解析阶段处理）。
 - 重试：
   - 429、500、502、503、504 最多重试 2 次；
   - 退避 500ms、1500ms；
@@ -315,7 +346,7 @@ pub trait OnlineProvider {
 }
 ```
 
-本阶段只注册 `DirectImageProvider`。`can_handle` 对任意 `http/https` 返回 true；解析失败即报错。未来 OPDS Provider 可按 scheme/host/路径优先匹配。
+本阶段注册 `DirectImageProvider`（JSON）与 `HtmlGalleryProvider`（单页 HTML 直铺图集），由 `online::resolve` 统一拉取一次后先试 JSON、再试 HTML；两者都不匹配则报错。未来 OPDS Provider 可按 scheme/host/路径优先匹配。实现上 `OnlineProvider` 只承担 `resolve`，`OnlineSource` 由 `source.rs` / `AppState` 构造，以避免模块环依赖。
 
 ### 8.2 `OnlineSource`
 
@@ -326,10 +357,12 @@ pub struct OnlineSource {
     pages: Vec<PageRef>,
     http: Arc<dyn HttpTransport>,
     permits: Arc<BlockingSemaphore>,
+    referer: String,
 }
 ```
 
 - `page_count` = `pages.len()`；
+- `read_raw` 调用 `http.get(url, PAGE_MAX_BYTES, Some(&self.referer))`；`referer` 为规范化后的清单/HTML 页面 URL；
 - `entry_names` = URL 文件名或 `第 N 页`；
 - `read_raw(index)`：
   1. 取页 URL；
@@ -345,7 +378,8 @@ pub struct OnlineSource {
 - `onlineConcurrency` 默认 3，钳制 1–8；
 - 每本在线书一个信号量（`Mutex<usize> + Condvar` 或等价阻塞实现）；
 - 覆盖所有 `read_raw` 调用：主请求、后台预取、工作台、OCR、批量；
-- 页面读取失败必须释放许可（RAII）。
+- 页面读取失败必须释放许可（RAII）；
+- 图片请求的 `referer` 固定为该书规范化页面 URL；`onlineHeaders` 中的显式 `Referer`/`Origin` 优先。
 
 ### 8.4 统一打开源
 
@@ -354,7 +388,7 @@ pub struct OnlineSource {
 1. 查 `books` 行（path、source_type、meta_json）；
 2. 命中 16 本常开池则复用；
 3. `local` → `SourceHandle::open(path)`；
-4. 在线 → 解析 `meta_json`，构造 `UreqTransport` + `OnlineSource`；
+4. 在线 → 解析 `meta_json`，用 `onlineProxy` + `onlineHeaders` 构造 `UreqTransport`，再把 `path` 作为 `referer`、`online_concurrency as usize` 作为并发数构造 `OnlineSource`；
 5. 池满时沿用现有“整体清空重开”策略。
 
 替换以下调用点：
@@ -375,8 +409,8 @@ pub struct OnlineSource {
 1. 前端校验非空 URL，调用 `resolve_online_url`。
 2. 后端：
    - 规范化 URL；
-   - 校验代理；
-   - `blocking` 中执行 `DirectImageProvider::resolve`；
+   - 校验代理与 `onlineHeaders`；
+   - `blocking` 中执行 `online::resolve`（先 JSON，失败后单页 HTML）；
    - 成功则写入/恢复书库；
    - 清单哈希变化时执行缓存失效；
    - 返回 `BookInfo`。
@@ -475,7 +509,7 @@ pub struct OnlineSource {
 `src/lib/tauri.ts`：
 
 - `BookInfo` 增加 `sourceType`、`webtoonReady`；
-- `Settings` 增加 `experimentalOnline`、`onlineProxy`、`onlineConcurrency`；
+- `Settings` 增加 `experimentalOnline`、`onlineProxy`、`onlineConcurrency`、`onlineHeaders`；
 - 新增 `OnlineProbe` 类型；
 - 新增 API：
   ```ts
@@ -511,21 +545,22 @@ pub struct OnlineSource {
 
 - 从 `book.webtoonReady` 控制条漫选项与自动建议。
 - `book.sourceType !== "local"` 时：
-  - idle 预取范围改为 +1/+2；
+  - idle 预取只遍历当前页到 `page + 2`，不向后请求历史页；
   - 条漫布局失败时提示并回退单页；
   - 其余单/双页、缩放、选区 OCR、进度逻辑不变。
 
 ### 11.5 Settings
 
-- 「实验性功能」新增「在线 URL 直读（JSON 清单）」开关：
+- 「实验性功能」新增「在线 URL 直读（JSON 清单 + HTML 图集）」开关：
   - 复用现有 `setExperimental` 持久化与广播；
   - 默认关闭。
 - 新增「在线源与网络」卡片（仅开关开启时显示）：
-  - 代理地址：空 / `http://` / `https://` / `socks5://`；密码框不需要；
+  - 代理地址：空 / `http://` / `https://` / `socks5://`；
   - 并发数：1–8，默认 3；
+  - 自定义请求头：JSON 对象或单行 Cookie；输入框与说明“仅用于你自建/有权访问的网关；会明文保存在本机”；
   - 测试 URL + 「测试连通性」；
-  - 说明：当前仅支持匿名 JSON 清单，不支持 Cookie、登录、HTML 嗅探。
-- 不新增 Cookie / JM 域名字段。
+  - 说明：支持 JSON 清单与单页 HTML 直铺图集；不支持分页查看器、图片切条反混淆、自动登录或 JS 渲染。
+- 不新增 JM 域名或账号密码字段；`onlineHeaders` 只接受手动请求头。
 - **Status 页面**：使用现有 `getSettings` 新增只读卡片“在线直读”，展示开关状态、代理是否配置（只显示 scheme/host，不回显完整凭据）、并发数；不新增全局测试按钮，连通性测试由 URL 模态框或设置卡片中的测试 URL 触发。
 
 ### 11.6 App.tsx
@@ -547,6 +582,7 @@ pub struct OnlineSource {
 | `experimentalOnline` | `false` | `experimental_online` |
 | `onlineProxy` | `""` | `online_proxy` |
 | `onlineConcurrency` | `3` | `online_concurrency` |
+| `onlineHeaders` | `""` | `online_headers` |
 
 同步更新：
 
@@ -557,7 +593,7 @@ pub struct OnlineSource {
 - 持久化键覆盖测试；
 - `mr-exp-online` 镜像。
 
-`onlineConcurrency` 在保存时钳制 1–8；`onlineProxy` 在保存时立即校验：空合法，非空必须是合法 `http/https/socks5` URL 且无内嵌凭据，否则 `set_settings` 返回错误。`onlineProxy` 或 `onlineConcurrency` 变化时清空 `AppState.sources` 常开池（本地与在线都重开），确保新配置立即生效。
+`onlineConcurrency` 在保存时钳制 1–8；`onlineProxy` 在保存时立即校验：空合法，非空必须是合法 `http/https/socks5` URL 且无内嵌凭据，否则 `set_settings` 返回错误。`onlineHeaders` 在保存时校验：JSON 分支必须是字符串键值对象；单行 Cookie 分支不得含 CR/LF；禁止 `Host`、`Content-Length`、`Connection`、`Transfer-Encoding`。`onlineProxy`、`onlineConcurrency` 或 `onlineHeaders` 变化时清空 `AppState.sources` 常开池（本地与在线都重开），确保新配置立即生效。
 
 ## 13. 错误处理
 
@@ -565,15 +601,15 @@ pub struct OnlineSource {
 |---|---|---|
 | URL 非 http/https / 带凭据 / 超长 | toast + 模态框内联错误 | 拒绝，不联网 |
 | 代理非法 | 设置页/导入错误 | 拒绝，不联网 |
-| 清单网络失败/超时 | “清单获取失败：…” | 不写库 |
-| 清单非 JSON / schema 错 | “清单格式不符：字段…” | 不写库 |
+| 网络失败/超时 | “内容获取失败：…” | 不写库 |
+| JSON 与 HTML 都无法解析 | “未找到可读图片；分页查看器或依赖 JS 的页面不在支持范围” | 不写库 |
 | pages 空 / 超 5000 | 明确提示 | 不写库 |
 | 任一页 URL 非法 | 指出第几页并拒绝整份清单 | 不写库 |
 | 重复导入且未变化 | “已在书库，清单未变化” | 幂等，不失效缓存 |
 | 清单变化但有活跃批量任务 | “请先取消批量任务” | 拒绝更新 |
 | 单页 404/403 | “第 N 页加载失败：HTTP 404” | 当前页失败；L1/L2 不受影响 |
 | 单页 429/5xx | 重试后仍失败则报错 | 2 次退避 |
-| 返回 HTML/非图片/超 32MB | “URL 返回的不是图片/响应过大” | 拒绝，写日志 |
+| 图片 URL 返回 HTML/非图片/超 32MB | “URL 返回的不是图片/响应过大” | 拒绝，写日志 |
 | 离线 | 已缓存页可读；未缓存页报网络错误 | — |
 
 所有错误最终为字符串；前端继续使用 `toastErr(command, error)`。
@@ -582,14 +618,16 @@ pub struct OnlineSource {
 
 - 仅允许 `http/https`；拒绝 `file:`、`data:`、`ftp:` 等。
 - 拒绝 URL 内嵌 username/password；代理同样拒绝内嵌凭据。
-- 不执行页面脚本，不解析 HTML，不保存 Cookie。
-- 不伪造浏览器 UA/Referer；使用 `MangaReader/0.1 online-direct`。
+- 不执行页面脚本；HTML 只做单页直铺图片提取，不跟随分页查看器、不推断主图。
+- 默认不发送 Cookie；仅当用户手动配置 `onlineHeaders` 时附加。`onlineHeaders` 可能含 Cookie/Authorization，明文存于本机 SQLite，设置页必须提示风险；不读取浏览器 Cookie，不做自动登录或全局 Cookie jar。
+- UA 固定为 `MangaReader/0.1 online-direct`；`Referer`/`Origin` 只由当前页面 URL 派生，用户显式提供的同名头优先；不伪造其他站点来源。
 - 重定向 ≤5 跳，最终 URL 复验 scheme。
-- 响应大小上限：清单 2MB、页面 32MB。
+- 响应大小上限：清单/HTML 2MB、页面 32MB。
 - 页面以魔数验证，Content-Type 仅作提示。
-- 允许私网/loopback 地址（为用户自建源预留）；清单 URL 与页面 URL 均视为用户信任输入。UI 在 URL 模态框中提示“只导入你信任的清单”。
-- `app.log` 不记录完整 query/token。
+- 允许私网/loopback 地址（为用户自建源预留）；清单/HTML URL 与页面 URL 均视为用户信任输入。UI 在 URL 模态框中提示“只导入你信任的地址”。
+- `app.log` 不记录完整 query/token；错误信息不回显 `onlineHeaders`。
 - `meta_json` 不含 Cookie、账号、代理密码。
+- 不做 JMComic 切条反混淆（`slice_aid`/MD5）；不做 EH/ExHentai 的 `/g/`/`/s/` 查看器链路。
 - 在线书硬删不触碰远程源。
 
 ## 15. 测试矩阵
@@ -599,8 +637,9 @@ pub struct OnlineSource {
 | 模块 | 用例 |
 |---|---|
 | URL/清单 | 规范化、fragment 移除、拒绝 userinfo/非 http(s)、字符串/对象页、标题回退、空/超 5000、非法页 URL、宽高只给一项、manifest hash 稳定性 |
-| `OnlineSource` | page_count/entry_names；read_raw 正确 URL；Content-Type + 魔数；HTML 拒绝；32MB 上限；429/5xx 重试；4xx 不重试；信号量并发不超过设置 |
-| `HttpTransport` | 本地 stub server：200/404/429/503、重定向上限、超大响应、超时、代理解析（http/socks5）；不访问公网 |
+| HTML 图集 | `<title>` 提取；`data-src`/`data-original`/`src` 优先级；相对路径 `join`；去重；非图片/data URI 跳过；无图片报错；只含查看器链接的页面不跟随 |
+| `OnlineSource` | page_count/entry_names；read_raw 正确 URL + referer；Content-Type + 魔数；32MB 上限；429/5xx 重试；4xx 不重试；信号量并发不超过设置 |
+| `HttpTransport` | 本地 stub server：200/404/429/503、重定向、超大响应、超时、代理解析（http/socks5）、自定义 header、Referer/Origin 自动附加与显式覆盖；不访问公网 |
 | DB | 旧库迁移；在线 upsert；软删恢复；进度保留/钳制；清单变化清 `page_ocr/trans_cache`；有活跃批量任务时拒绝；硬删级联 |
 | 命令辅助 | `source_handle_for_book` 本地/在线分支；在线 `read_partial` 返回不支持；`remove_books` 在线跳过物理删除 |
 | 回归 | 现有 36 项测试全绿；本地源与缓存行为不变 |
@@ -622,16 +661,19 @@ pub struct OnlineSource {
 
 - 真实 EH/JM/ExHentai 站点；
 - 真实公网图片站；
-- 浏览器 Cookie/登录/反爬；
+- 自动登录/反爬/JS 渲染页面；
+- 分页查看器链路与图片切条反混淆；
 - OPDS/Komga/Kavita；
 - 动漫播放。
 
 ## 16. 已知限制与后续
 
-- 清单页面 URL 过期后，需要重新导入同一清单 URL 刷新；第一版不提供单独“刷新清单”按钮。
+- 页面 URL 过期后，需要重新导入同一 URL 刷新；第一版不提供单独“刷新清单”按钮。
 - 没有原始页面字节缓存；清空 L2 后需重新下载。
 - 阅读器 L2 存的是按视口尺寸渲染后的 JPEG；选区 OCR、工作台、批量读取原图时会再次下载该页（不走 L2），因此这些操作可能产生额外网络请求。
-- 条漫要求清单提供宽高；否则该书只能单/双页。
+- 条漫要求清单提供宽高；HTML 图集没有可靠宽高，因此只能单/双页。
+- 单页 HTML 图集不支持分页查看器、JS 渲染页面或主图推断；这类页面会返回“未找到可读图片”。
+- `onlineHeaders` 明文保存，可能过期；用户需要自行更新。
 - 在线批量预翻译逐页下载，速度受源站与 `onlineConcurrency` 限制。
 - 1.1：OPDS / Komga / Kavita Provider（Basic/API Token，不使用浏览器 Cookie）。
 - 第二阶段：`source_type='anime'` 的视频路由与播放器，不在本 spec 范围。
@@ -642,7 +684,7 @@ pub struct OnlineSource {
 
 - `docs/TECHNICAL.md`：
   - 数据模型：新增 `source_type` / `meta_json`；
-  - 设置表：新增三个字段；
+  - 设置表：新增四个字段；
   - 命令契约：新增两个命令、变更命令列表；
   - 架构：`online/` 模块与同步阻塞 HTTP 说明；
   - 已知限制；
@@ -661,7 +703,8 @@ pub struct OnlineSource {
 6. 重复导入同一清单幂等；清单变化时按规则失效派生缓存并保留进度。
 7. “彻底移除”在线书不删除远程源，级联清理 DB 与缓存。
 8. `cargo test`、`tsc --noEmit`、`npm run build` 全绿；自动化测试不访问公网。
-9. 不出现 EH/JM/Cookie/HTML 嗅探代码路径或设置项。
+9. 不出现 EH/JM 站点适配、分页查看器链路、切条反混淆、自动登录；HTML 仅做单页直铺图片提取；`onlineHeaders` 仅接受手动请求头。
+10. 单页 HTML 直铺图集可导入；`data-src`/`data-original`/相对路径、自定义请求头、自动 Referer/Origin 生效；只有分页查看器链接的页面返回“未找到可读图片”。
 
 ## 附录 A：URL 规范化示例
 

@@ -25,6 +25,605 @@
 
 ---
 
+## 2026-10-19 Amendment（已批准）：手动请求头 + 单页 HTML 图集
+
+> 本节覆盖 Task 1 / 3 / 4 / 6 / 7 / 8 / 10 中冲突的细节；执行这些 Task 时先读本节。
+
+### 修订范围
+
+新增：
+
+- `Settings.online_headers`：JSON 对象或单行 Cookie，仅用于用户自建/授权网关；
+- 图片请求自动带页面来源的 `Referer` / `Origin`（用户显式同名头优先）；
+- 单页 HTML 直铺图集解析：`<img src>` / `data-src` / `data-original`，相对路径转绝对，单页内去重；
+- JSON 解析失败后自动回退 HTML；两者都失败才报错。
+
+明确不加入（与前面已确认的合规边界一致）：
+
+- EH/ExHentai/JMComic 站点适配、`/g/` 与 `/s/` 分页查看器链路、主图推断；
+- JMComic 水平切条反混淆（`slice_aid` / MD5 / `c % 10` 映射）；
+- 自动登录、账号密码、验证码、全局 Cookie jar、JS 渲染、反爬绕过。
+
+### A. 三处已修正
+
+- Task 6：`s.online_concurrency as usize`；
+- Task 7：`state.source_handle_for_book(&book_id).map_err(err)?`；
+- Task 10：在线书预取循环只从 `t.page` 到 `t.page + 2`，本地书保持 `t.page - 3` 到 `t.page + 3`。
+
+### B. Settings 增加 `online_headers`
+
+在 Task 1 的 `Settings` 字段、`Default`、`hydrate_settings`、`settings_persist_pairs` 与持久化键测试中同步加入：
+
+```rust
+/// 手动请求头：JSON 对象或单行 Cookie；仅用于自建/授权源。
+pub online_headers: String,
+```
+
+```rust
+            online_headers: String::new(),
+```
+
+```rust
+    if let Some(v) = get("online_headers") {
+        s.online_headers = v;
+    }
+```
+
+```rust
+        ("online_headers", s.online_headers.clone()),
+```
+
+```rust
+            "online_headers",
+```
+
+`set_settings` 增加：
+
+```rust
+    crate::online::validate_headers(&settings.online_headers)?;
+    let online_conn_changed = old.online_proxy != settings.online_proxy
+        || old.online_concurrency != settings.online_concurrency
+        || old.online_headers != settings.online_headers;
+```
+
+### C. Transport 请求头与 Referer/Origin
+
+在 `online/http.rs` 增加：
+
+```rust
+#[derive(Debug, Clone)]
+pub struct RequestHeaders {
+    values: Vec<(String, String)>,
+}
+
+impl RequestHeaders {
+    pub fn parse(raw: &str) -> Result<Self, OnlineError> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Ok(Self { values: Vec::new() });
+        }
+        let values: Vec<(String, String)> = if raw.starts_with('{') {
+            let map: std::collections::BTreeMap<String, String> =
+                serde_json::from_str(raw).map_err(|e| {
+                    OnlineError::HeaderInvalid(format!("JSON 请求头无效：{e}"))
+                })?;
+            map.into_iter().collect()
+        } else {
+            let cookie = raw
+                .strip_prefix("Cookie:")
+                .or_else(|| raw.strip_prefix("cookie:"))
+                .unwrap_or(raw)
+                .trim()
+                .to_string();
+            vec![("Cookie".to_string(), cookie)]
+        };
+        for (k, v) in &values {
+            if k.trim().is_empty() || v.contains('\r') || v.contains('\n') {
+                return Err(OnlineError::HeaderInvalid(
+                    "请求头包含非法字符".into(),
+                ));
+            }
+            let lower = k.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "host" | "content-length" | "connection" | "transfer-encoding"
+            ) {
+                return Err(OnlineError::HeaderInvalid(format!("不允许设置 {k}")));
+            }
+        }
+        Ok(Self { values })
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.values
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case(name))
+    }
+}
+```
+
+在 `OnlineError` 增加：
+
+```rust
+    #[error("请求头无效：{0}")]
+    HeaderInvalid(String),
+```
+
+`HttpTransport::get` 签名改为：
+
+```rust
+fn get(
+    &self,
+    url: &str,
+    max_bytes: usize,
+    referer: Option<&str>,
+) -> Result<HttpResponse, OnlineError>;
+```
+
+`UreqTransport` 增加 `headers: RequestHeaders` 字段，构造改为：
+
+```rust
+pub fn new(proxy: &str, headers: &str) -> Result<Self, OnlineError> {
+    validate_proxy(proxy).map_err(OnlineError::Proxy)?;
+    let headers = RequestHeaders::parse(headers)?;
+    let mut builder = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .redirects(5)
+        .user_agent(ONLINE_UA);
+    if !proxy.trim().is_empty() {
+        let p = ureq::Proxy::new(proxy.trim())
+            .map_err(|e| OnlineError::Proxy(e.to_string()))?;
+        builder = builder.proxy(p);
+    }
+    Ok(Self { agent: builder.build(), headers })
+}
+```
+
+`get_once` 改为：
+
+```rust
+fn get_once(
+    &self,
+    url: &str,
+    max_bytes: usize,
+    referer: Option<&str>,
+) -> Result<RawResponse, OnlineError> {
+    let mut req = self.agent.get(url);
+    for (k, v) in &self.headers.values {
+        req = req.set(k, v);
+    }
+    if let Some(page) = referer {
+        if let Ok(u) = url::Url::parse(page) {
+            if let Some(host) = u.host_str() {
+                if !self.headers.has("referer") {
+                    req = req.set("Referer", page);
+                }
+                if !self.headers.has("origin") {
+                    let origin = format!("{}://{}", u.scheme(), host);
+                    req = req.set("Origin", &origin);
+                }
+            }
+        }
+    }
+    match req.call() {
+        Ok(resp) => read_response(resp, max_bytes),
+        Err(ureq::Error::Status(_, resp)) => read_response(resp, max_bytes),
+        Err(ureq::Error::Transport(t)) => Err(OnlineError::Network(t.to_string())),
+    }
+}
+```
+
+`get` 的重试循环改为把 `referer` 透传给 `get_once`。所有 base 测试中的 `UreqTransport::new("")` 改为 `UreqTransport::new("", "")`，`t.get(&url, n)` 改为 `t.get(&url, n, None)`。新增测试：
+
+```rust
+    #[test]
+    fn parses_headers_and_rejects_forbidden() {
+        assert!(RequestHeaders::parse("Cookie: a=b").is_ok());
+        assert!(RequestHeaders::parse(r#"{"Authorization":"Bearer x"}"#).is_ok());
+        assert!(RequestHeaders::parse("Host: example.com").is_err());
+        assert!(RequestHeaders::parse("X-Test: a\r\nInjected: b").is_err());
+    }
+
+    fn spawn_header_server(expected: &'static str) -> (String, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let h = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let n = s.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let ok = req.contains(expected);
+            let resp = if ok {
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            } else {
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            };
+            s.write_all(resp.as_bytes()).unwrap();
+        });
+        (format!("http://{addr}/x"), h)
+    }
+
+    #[test]
+    fn sends_custom_headers_and_referer() {
+        let (url, h) = spawn_header_server("Referer: http://gallery.example/g/1");
+        let t = UreqTransport::new("", r#"{"X-Test":"yes"}"#).unwrap();
+        let r = t
+            .get(&url, 1024, Some("http://gallery.example/g/1"))
+            .unwrap();
+        assert_eq!(r.status, 200);
+        h.join().unwrap();
+    }
+```
+
+`online::validate_headers` 包装：
+
+```rust
+pub fn validate_headers(raw: &str) -> Result<(), String> {
+    http::RequestHeaders::parse(raw)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+```
+
+### D. HTML 图集 Provider 与统一 resolve
+
+`Cargo.toml` 增加 `regex = "1"`。新增 `src-tauri/src/online/html.rs`：
+
+```rust
+//! 单页 HTML 直铺图集：只提取当前页 <img>，不跟随分页查看器。
+
+use std::collections::HashSet;
+
+use regex::Regex;
+
+use crate::online::direct::{make_meta, OnlineBookMeta};
+use crate::online::{truncate_chars, PageRef, MAX_PAGES};
+use crate::source::BackendError;
+
+pub fn parse_gallery(
+    body: &[u8],
+    page_url: &url::Url,
+) -> Result<OnlineBookMeta, BackendError> {
+    let text = String::from_utf8_lossy(body);
+    let title_re = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").unwrap();
+    let title = title_re
+        .captures(&text)
+        .map(|c| decode_entities(&strip_tags(&c[1])))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::online::title_from_url(page_url));
+    let title = truncate_chars(&title, 200);
+
+    let img_re = Regex::new(r"(?is)<img\b[^>]*>").unwrap();
+    let data_src = Regex::new(r#"(?is)\bdata-src\s*=\s*["']([^"']+)["']"#).unwrap();
+    let data_original =
+        Regex::new(r#"(?is)\bdata-original\s*=\s*["']([^"']+)["']"#).unwrap();
+    let src = Regex::new(r#"(?is)\bsrc\s*=\s*["']([^"']+)["']"#).unwrap();
+
+    let mut pages = Vec::new();
+    let mut seen = HashSet::new();
+    for tag in img_re.find_iter(&text) {
+        let tag = tag.as_str();
+        let raw = data_src
+            .captures(tag)
+            .or_else(|| data_original.captures(tag))
+            .or_else(|| src.captures(tag))
+            .map(|c| c[1].trim().to_string());
+        let Some(raw) = raw else { continue };
+        if raw.is_empty()
+            || raw.starts_with("data:")
+            || raw.starts_with("blob:")
+            || raw.starts_with("javascript:")
+        {
+            continue;
+        }
+        let Ok(abs) = page_url.join(&raw) else { continue };
+        if !matches!(abs.scheme(), "http" | "https") {
+            continue;
+        }
+        let url = abs.to_string();
+        if !seen.insert(url.clone()) {
+            continue;
+        }
+        pages.push(PageRef { url, width: None, height: None });
+        if pages.len() > MAX_PAGES {
+            return Err(BackendError::Msg(format!(
+                "HTML 图片数超过上限 {MAX_PAGES}"
+            )));
+        }
+    }
+    if pages.is_empty() {
+        return Err(BackendError::Msg(
+            "未找到可读图片；分页查看器或依赖 JS 的页面不在支持范围".into(),
+        ));
+    }
+    make_meta(page_url, &title, pages)
+}
+
+fn strip_tags(s: &str) -> String {
+    Regex::new(r"(?is)<[^>]+>").unwrap().replace_all(s, "").to_string()
+}
+
+fn decode_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+}
+```
+
+在 `online/mod.rs` 增加 `pub mod html;`，并增加统一调度：
+
+```rust
+pub fn resolve(
+    http: &dyn http::HttpTransport,
+    raw_url: &str,
+) -> Result<direct::OnlineBookMeta, BackendError> {
+    let url = normalize_url(raw_url)?;
+    let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None)?;
+    if !(200..300).contains(&resp.status) {
+        return Err(BackendError::Network(format!(
+            "内容 HTTP {}：{}",
+            resp.status, resp.final_url
+        )));
+    }
+    match direct::parse_manifest(&resp.body, &url) {
+        Ok(meta) => Ok(meta),
+        Err(json_err) => match html::parse_gallery(&resp.body, &url) {
+            Ok(meta) => Ok(meta),
+            Err(html_err) => Err(BackendError::Msg(format!(
+                "无法解析为 JSON 或 HTML 图集：JSON={json_err}; HTML={html_err}"
+            ))),
+        },
+    }
+}
+```
+
+在 `direct.rs` 中抽出 `parse_manifest` 与 `make_meta`，并把 `DirectImageProvider::resolve` 改成“fetch + parse_manifest”：
+
+```rust
+pub fn parse_manifest(body: &[u8], url: &url::Url) -> Result<OnlineBookMeta, BackendError> {
+    let raw: RawManifest = serde_json::from_slice(body)
+        .map_err(|e| BackendError::Msg(format!("清单格式不符：{e}")))?;
+    if let Some(v) = raw.version {
+        if v != 1 {
+            return Err(BackendError::Msg(format!("不支持的清单版本：{v}")));
+        }
+    }
+    if raw.pages.is_empty() {
+        return Err(BackendError::Msg("清单 pages 不能为空".into()));
+    }
+    if raw.pages.len() > MAX_PAGES {
+        return Err(BackendError::Msg(format!(
+            "清单页数超过上限 {MAX_PAGES}"
+        )));
+    }
+    let mut pages = Vec::with_capacity(raw.pages.len());
+    for (i, entry) in raw.pages.into_iter().enumerate() {
+        let (raw_page, width, height) = match entry {
+            RawPageEntry::Url(url) => (url, None, None),
+            RawPageEntry::Obj { url, width, height } => (url, width, height),
+        };
+        let page_url = normalize_url(&raw_page)
+            .map_err(|e| BackendError::Msg(format!("第 {} 页 URL 非法：{e}", i + 1)))?;
+        let (width, height) = match (width, height) {
+            (Some(w), Some(h)) if w > 0 && h > 0 => (Some(w), Some(h)),
+            _ => (None, None),
+        };
+        pages.push(PageRef {
+            url: page_url.to_string(),
+            width,
+            height,
+        });
+    }
+    let title = raw
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| title_from_url(url));
+    make_meta(url, &title, pages)
+}
+
+pub fn make_meta(
+    canonical_url: &url::Url,
+    title: &str,
+    pages: Vec<PageRef>,
+) -> Result<OnlineBookMeta, BackendError> {
+    let title = truncate_chars(title.trim(), 200);
+    let hash = {
+        let mut h = Sha256::new();
+        h.update(
+            serde_json::to_string(&HashInput { title: &title, pages: &pages })
+                .map_err(|e| BackendError::Msg(format!("清单序列化失败：{e}")))?
+                .as_bytes(),
+        );
+        hex::encode(h.finalize())
+    };
+    let stored = StoredMeta {
+        schema: 1,
+        manifest_hash: hash,
+        fetched_at: crate::db::now_str(),
+        pages,
+    };
+    let meta_json = serde_json::to_string(&stored)
+        .map_err(|e| BackendError::Msg(format!("清单元数据序列化失败：{e}")))?;
+    Ok(OnlineBookMeta {
+        canonical_url: canonical_url.to_string(),
+        source_type: "generic_manga".into(),
+        title,
+        page_count: stored.pages.len(),
+        meta_json,
+    })
+}
+
+impl DirectImageProvider {
+    pub fn resolve(
+        &self,
+        http: &dyn HttpTransport,
+        raw_url: &str,
+    ) -> Result<OnlineBookMeta, BackendError> {
+        let url = normalize_url(raw_url)?;
+        let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None)?;
+        if !(200..300).contains(&resp.status) {
+            return Err(BackendError::Network(format!(
+                "清单 HTTP {}：{}",
+                resp.status, resp.final_url
+            )));
+        }
+        parse_manifest(&resp.body, &url)
+    }
+}
+```
+
+`DirectImageProvider::resolve` 保留为“fetch + parse_manifest”的测试/兼容入口；生产 `resolve_online_url` 改用 `online::resolve`。新增 HTML 测试：
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_title_and_images() {
+        let page = url::Url::parse("http://gallery.example/view/1").unwrap();
+        let html = br#"<html><head><title>My Gallery</title></head>
+            <body>
+              <img src="/1.png">
+              <img data-src="2.png">
+              <img data-original="https://cdn.example/3.png">
+            </body></html>"#;
+        let meta = parse_gallery(html, &page).unwrap();
+        assert_eq!(meta.title, "My Gallery");
+        assert_eq!(meta.page_count, 3);
+        let stored: crate::online::StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
+        assert_eq!(stored.pages[0].url, "http://gallery.example/1.png");
+        assert_eq!(stored.pages[1].url, "http://gallery.example/2.png");
+        assert_eq!(stored.pages[2].url, "https://cdn.example/3.png");
+    }
+
+    #[test]
+    fn viewer_only_page_is_rejected() {
+        let page = url::Url::parse("http://gallery.example/g/1/token").unwrap();
+        let html = br#"<html><body><a href="/s/abc/1-1">1</a></body></html>"#;
+        assert!(parse_gallery(html, &page).is_err());
+    }
+}
+```
+
+### E. Source / State / Commands 调用点
+
+`OnlineSource` 增加 `referer: String` 字段，`new` 增加第 4 个参数；`read_raw` 改为：
+
+```rust
+let resp = self
+    .http
+    .get(&page.url, PAGE_MAX_BYTES, Some(&self.referer))?;
+```
+
+`SourceHandle::open_online` 保持 4 个参数（canonical_url、pages、http、concurrency），内部把 canonical_url 同时作为 `OnlineSource.referer`：
+
+```rust
+pub fn open_online(
+    canonical_url: String,
+    pages: Vec<PageRef>,
+    http: Arc<dyn HttpTransport>,
+    concurrency: usize,
+) -> Result<Self, BackendError> {
+    Ok(Self {
+        path: PathBuf::from(&canonical_url),
+        kind: HandleKind::Online(OnlineSource::new(
+            pages,
+            http,
+            concurrency,
+            canonical_url,
+        )),
+    })
+}
+```
+
+`source_handle_for_book` 改为：
+
+```rust
+let transport = crate::online::http::UreqTransport::new(
+    &s.online_proxy,
+    &s.online_headers,
+)?;
+Arc::new(SourceHandle::open_online(
+    path,
+    stored.pages,
+    Arc::new(transport),
+    s.online_concurrency as usize,
+)?)
+```
+
+`resolve_online_url` / `test_online_connection` 改为：
+
+```rust
+let http = crate::online::http::UreqTransport::new(
+    &s.online_proxy,
+    &s.online_headers,
+)?;
+let meta = crate::online::resolve(&http, &url)?;
+```
+
+所有 `HttpTransport` fake 的 `get` 增加 `_referer: Option<&str>` 参数；所有 `UreqTransport::new` 与 `t.get` 调用补第二/第三参数。
+
+### F. 前端
+
+`Settings` 接口、`DEFAULT_FORM`、Settings 在线卡片增加：
+
+```ts
+onlineHeaders: string;
+```
+
+```ts
+  onlineHeaders: "",
+```
+
+```tsx
+            <label className="field" style={{ gridColumn: "1 / -1" }}>
+              <span>自定义请求头（JSON 或单行 Cookie）</span>
+              <textarea
+                className="input mono"
+                rows={3}
+                value={form.onlineHeaders}
+                onChange={(e) => set("onlineHeaders", e.currentTarget.value)}
+                placeholder='{"Authorization":"Bearer ..."} 或 session=...; token=...'
+              />
+            </label>
+```
+
+在线卡片说明改为：
+
+```tsx
+          <p className="hint">
+            支持 JSON 清单与单页 HTML 直铺图集；请求头仅用于你自建/有权访问的网关，
+            会明文保存在本机。不支持分页查看器、切条反混淆、自动登录或 JS 渲染。
+          </p>
+```
+
+Reader Task 10 的在线预取已修正为只向后 2 页；无需额外改动。
+
+### G. 测试与文档
+
+- HTTP tests：请求头解析、禁止头、Referer/Origin 自动附带；本地 stub server；不访问公网。
+- HTML tests：标题、三种属性优先级、相对路径、去重、无图/仅查看器链接报错。
+- Dispatch tests：同一 fake transport 先返回合法 JSON → 走 JSON；返回 HTML → 走 HTML；两者都失败 → 可读错误。
+- 文档：`TECHNICAL.md` 增加 HTML 图集、`onlineHeaders`、Referer/Origin 与“不支持分页查看器/切条反混淆”的限制；README 文档入口不变。
+
+### H. 明确不加入
+
+- `PageRef.is_viewer_page`、`/g/` / `/s/` 查看器链路、主图 `<img id="img">` 推导；
+- `slice_aid`、`c % 10` 映射、水平切条逆序拼接；
+- 自动登录/Cookie jar/验证码/反爬/JS 渲染；
+- EH/ExHentai/JMComic 站点适配器。
+
+---
+
 ## File Structure
 
 ```text
@@ -1569,7 +2168,7 @@ impl ImageSource for OnlineSource {
                 path,
                 stored.pages,
                 Arc::new(transport),
-                s.online_concurrency,
+                s.online_concurrency as usize,
             )?)
         } else if source_type == "anime" {
             return Err(crate::source::BackendError::Msg(
@@ -2005,7 +2604,7 @@ pub async fn get_webtoon_layout(
             })
             .collect());
     }
-    let handle = state.source_handle_for_book(&book_id)?;
+    let handle = state.source_handle_for_book(&book_id).map_err(err)?;
     let dims = blocking(move || {
         let count = handle.page_count()?;
         let mut out: Vec<(u32, u32)> = Vec::with_capacity(count);
@@ -2766,8 +3365,10 @@ git commit -m "feat: 增加书库 URL 导入入口与在线书徽标"
 在静默预取 effect 中，把循环改为：
 
 ```tsx
-      const radius = book.sourceType !== "local" ? 2 : 3;
-      for (let i = t.page - radius; i <= t.page + radius; i++) {
+      const online = book.sourceType !== "local";
+      const start = online ? t.page : t.page - 3;
+      const end = online ? Math.min(n - 1, t.page + 2) : Math.min(n - 1, t.page + 3);
+      for (let i = Math.max(0, start); i <= end; i++) {
 ```
 
 - [ ] **Step 5: 类型检查与构建**

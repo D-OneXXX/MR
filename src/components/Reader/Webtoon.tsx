@@ -12,6 +12,8 @@ export interface WebtoonHandle {
   scrollToPct: (pct: number) => void;
   scrollToPage: (page: number) => void;
   scrollByViewport: (screens: number) => void;
+  /** 最新滚动位置（卸载落快照用，避免 400ms 节流窗口丢失）。 */
+  getProgress: () => { pct: number; page: number };
 }
 
 interface Props {
@@ -21,9 +23,11 @@ interface Props {
   /** 恢复的滚动百分比（-1 = 无从条漫记录恢复，走 startPage）。 */
   restorePct: number;
   /** 滚动进度提交（组件内 400ms 节流 + 卸载时立即）。 */
-  onProgress: (pct: number, page: number) => void;
+  onProgress: (pct: number, page: number, persist?: boolean) => void;
   /** 单击画面（非拖动）切换控制条。 */
   onTap: () => void;
+  /** 滚动开始（HUD 立即隐藏用；内部 150ms 节流，不影响进度节流）。 */
+  onScrollStart?: () => void;
   /** React 19：ref 作为普通 prop 透传。 */
   ref?: React.Ref<WebtoonHandle>;
 }
@@ -57,6 +61,7 @@ const WebtoonView = memo(function WebtoonView({
   restorePct,
   onProgress,
   onTap,
+  onScrollStart,
   ref,
 }: Props) {
   const [dims, setDims] = useState<PageDim[] | null>(null);
@@ -69,6 +74,7 @@ const WebtoonView = memo(function WebtoonView({
   const restoreDone = useRef(false);
   const rafRef = useRef(0);
   const progressTimer = useRef(0);
+  const scrollNotifyRef = useRef(0);
   const lastProgress = useRef({ pct: 0, page: 0 });
   const tapRef = useRef({ x: 0, y: 0, t: 0, id: -1 });
   // 后台预切：已完成物化的页 + 代际（book/W 变化时让旧循环退出）。
@@ -206,6 +212,14 @@ const WebtoonView = memo(function WebtoonView({
   }, [onProgress]);
 
   const onScroll = useCallback(() => {
+    // 滚动开始 → 通知外层立即隐藏 HUD（150ms 节流，避免每帧回调）。
+    if (onScrollStart) {
+      const now = performance.now();
+      if (now - scrollNotifyRef.current > 150) {
+        scrollNotifyRef.current = now;
+        onScrollStart();
+      }
+    }
     if (rafRef.current) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = 0;
@@ -248,8 +262,10 @@ const WebtoonView = memo(function WebtoonView({
       pct: Math.min(1, el.scrollTop / Math.max(1, layout.total - el.clientHeight)),
       page: startPage > 0 ? Math.min(startPage, layout.pages.length - 1) : 0,
     };
-    // 首帧把窗口内的切片拉进来。
+    // 首帧把窗口内的切片拉进来，并把恢复位置同步给 Reader（快照/后端新进度判定）。
+    // 恢复本身不写后端，避免仅仅切回页签就改写进度/阅读统计。
     ensureTiles(el.scrollTop, el.clientHeight);
+    onProgress(lastProgress.current.pct, lastProgress.current.page, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
 
@@ -322,7 +338,15 @@ const WebtoonView = memo(function WebtoonView({
     const onKey = (e: KeyboardEvent) => {
       const el = scrollerRef.current;
       if (!el) return;
-      const tag = (e.target as HTMLElement | null)?.tagName ?? "";
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "[data-reader-hud], [role=dialog], [data-slot=slider], [data-tab-switcher]",
+        )
+      ) {
+        return;
+      }
+      const tag = target?.tagName ?? "";
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       const step = el.clientHeight * 0.85;
       const handled = (fn: () => void) => {
@@ -374,6 +398,7 @@ const WebtoonView = memo(function WebtoonView({
         if (!el) return;
         el.scrollBy({ top: el.clientHeight * screens, behavior: "auto" });
       },
+      getProgress: () => ({ ...lastProgress.current }),
     }),
     [layout],
   );

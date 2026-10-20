@@ -12,6 +12,8 @@ interface Props {
 
 const EXIT_MS = 310;
 const SETTLE_MS = 330; // 面板滑入落定后再飞封面
+const FOCUS_RING =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-canvas";
 
 /**
  * 浮动详情 sheet（流体 v2）：右侧滑出 + 半透明遮罩，Esc/遮罩点击关闭，
@@ -26,6 +28,7 @@ export default function DetailSheet({ book, originRect, onClose }: Props) {
   const [ghost, setGhost] = useState<{ src: string; from: DOMRect } | null>(null);
   const coverRef = useRef<HTMLImageElement | null>(null);
   const ghostRef = useRef<HTMLImageElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   /* ---- 开/关状态机：关闭时先播放退出动画再卸载 ---- */
   useEffect(() => {
@@ -120,6 +123,15 @@ export default function DetailSheet({ book, originRect, onClose }: Props) {
     };
   }, [render, onClose]);
 
+  /* ---- 打开时把初始焦点交给关闭按钮（Esc 关闭已支持） ---- */
+  useEffect(() => {
+    if (!render || closing) return;
+    const id = window.requestAnimationFrame(() => {
+      closeButtonRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [render, closing]);
+
   if (!render) return null;
 
   return (
@@ -135,7 +147,14 @@ export default function DetailSheet({ book, originRect, onClose }: Props) {
         aria-modal="true"
         aria-label={`详情：${render.title}`}
       >
-        <button className="sheet-close" onClick={onClose} title="关闭 (Esc)" aria-label="关闭">
+        <button
+          ref={closeButtonRef}
+          type="button"
+          className={`sheet-close ${FOCUS_RING}`}
+          onClick={onClose}
+          title="关闭 (Esc)"
+          aria-label="关闭"
+        >
           <X size={15} />
         </button>
         <div className="sheet-head">
@@ -158,7 +177,7 @@ export default function DetailSheet({ book, originRect, onClose }: Props) {
               </span>
             )}
             <div className="hint mono">
-              {render.currentPage} / {render.pageCount} 页
+              已读 {Math.min(render.currentPage, render.pageCount)} / {render.pageCount} 页
             </div>
           </div>
         </div>

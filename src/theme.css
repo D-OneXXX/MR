@@ -29,6 +29,7 @@
   --radius: 16px;
   --radius-card: 12px;
   --radius-pill: 8px;
+  --titlebar-h: 48px;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.45), 0 14px 36px rgba(0, 0, 0, 0.55);
   --transition: 150ms ease;
@@ -146,3 +147,45 @@ button, input, select {
   animation: petBob 1.2s ease-in-out infinite;
 }
 @keyframes petBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+
+/* 全局 reduced-motion 降级：非必要的淡入、滑入、旋转与过渡近似关闭。
+   DetailSheet 的封面飞入是 WAAPI（JS）动画，无法用 CSS 停止；这里隐藏 ghost，
+   并强制显示 sheet 内封面，视觉上等价于跳过飞行、直接显示封面。 */
+@media (prefers-reduced-motion: reduce) {
+  .fade-in,
+  .view-fade,
+  .rr-spin,
+  .reader-next-pill {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .sheet-ghost {
+    display: none !important;
+  }
+  .sheet-cover {
+    opacity: 1 !important;
+    transition: none !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* v3：legacy 控件（旧按钮/胶囊/抽屉关闭）也必须有可见焦点环 */
+.btn:focus-visible,
+.pill-tab:focus-visible,
+.episode-pill:focus-visible,
+.dialog button:focus-visible,
+.sheet-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, Copy, Link2, Loader2, X } from "lucide-react";
 import { api, type BookInfo, type HandoffStatus } from "../lib/tauri";
+import { cn } from "@/lib/utils";
 import { toast, toastErr } from "./Toast";
 
 interface Props {
@@ -10,7 +11,27 @@ interface Props {
   onImported: () => void;
   onRead: (book: BookInfo) => void;
   initialTab?: "link" | "pair";
+  initialUrl?: string;
 }
+
+const V3_BTN =
+  "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-hairline bg-white/[0.03] px-3 text-xs font-medium text-ink transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40";
+const V3_BTN_PRIMARY = cn(
+  V3_BTN,
+  "border-brand bg-brand text-white hover:bg-brand/90",
+);
+const V3_ICON_BTN =
+  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-accent hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40";
+const V3_FIELD =
+  "mono w-full min-w-0 rounded-md border border-hairline bg-canvas px-3 py-2 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-muted focus:border-brand focus-visible:ring-2 focus-visible:ring-brand";
+const V3_TAB =
+  "rounded-md px-3 py-1.5 text-xs font-medium text-ink-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40";
+const V3_TAB_ON = "bg-accent text-ink";
+const V3_HINT = "text-xs leading-relaxed text-ink-muted";
+const V3_INSET = {
+  backgroundColor:
+    "color-mix(in srgb, var(--v3-canvas) 60%, transparent)",
+} as const;
 
 function parsePastedPageUrls(raw: string): string[] {
   const text = raw.trim();
@@ -83,7 +104,7 @@ function CopyAction({
 
   return (
     <button
-      className="btn"
+      className={V3_BTN}
       type="button"
       disabled={!value}
       onClick={async () => {
@@ -226,10 +247,11 @@ export default function OnlineImportDialog({
   onImported,
   onRead,
   initialTab = "link",
+  initialUrl = "",
 }: Props) {
   const { status } = useOnlineHandoffState();
   const [tab, setTab] = useState<"link" | "pair">(initialTab);
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initialUrl);
   const [busy, setBusy] = useState<"test" | "add" | "read" | "paste" | "batch" | null>(
     null,
   );
@@ -445,43 +467,49 @@ export default function OnlineImportDialog({
 
   return (
     <div
-      className="dialog-mask"
+      className="fade-in fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm"
       onClick={() => {
         if (busy === null) close();
       }}
       role="presentation"
     >
       <div
-        className="dialog online-dialog"
+        className="glass hairline flex w-[min(620px,94vw)] flex-col gap-3 overflow-y-auto overscroll-contain rounded-xl p-5 text-ink shadow-2xl"
         role="dialog"
         aria-modal="true"
         aria-label="URL 在线直读"
         aria-busy={busy !== null}
-        style={{ maxHeight: "calc(100vh - 96px)", overflowY: "auto" }}
+        style={{
+          maxHeight: "calc(100vh - 96px)",
+          animation: "dialogIn 200ms var(--ease) both",
+        }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="field-row" style={{ alignItems: "center" }}>
-          <h4 style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
-            <Link2 size={15} /> URL 在线直读
-          </h4>
+        <div className="flex items-center gap-2">
+          <h2 className="m-0 flex items-center gap-2 text-[15px] font-semibold text-ink">
+            <Link2 size={16} className="text-brand" /> URL 在线直读
+          </h2>
           <button
-            className="btn"
+            className={cn(V3_ICON_BTN, "ml-auto")}
             type="button"
-            style={{ marginLeft: "auto" }}
             onClick={close}
             disabled={busy !== null}
             title={busy !== null ? "处理进行中，完成前无法关闭" : "关闭"}
             aria-label="关闭"
           >
-            <X size={14} />
+            <X size={15} />
           </button>
         </div>
 
-        <div className="seg online-tabs" role="tablist" aria-label="导入方式">
+        <div
+          className="grid grid-cols-2 gap-1 rounded-lg border border-hairline bg-canvas p-1"
+          role="tablist"
+          aria-label="导入方式"
+        >
           <button
             role="tab"
             aria-selected={tab === "link"}
-            className={tab === "link" ? "on" : ""}
+            className={cn(V3_TAB, tab === "link" && V3_TAB_ON)}
             onClick={() => setTab("link")}
             disabled={busy !== null}
           >
@@ -490,7 +518,7 @@ export default function OnlineImportDialog({
           <button
             role="tab"
             aria-selected={tab === "pair"}
-            className={tab === "pair" ? "on" : ""}
+            className={cn(V3_TAB, tab === "pair" && V3_TAB_ON)}
             onClick={() => setTab("pair")}
             disabled={busy !== null}
           >
@@ -499,13 +527,18 @@ export default function OnlineImportDialog({
         </div>
 
         {tab === "link" ? (
-          <div className="online-tab-panel" role="tabpanel" aria-label="链接 / 清单导入">
-            <p className="hint" style={{ margin: 0 }}>
+          <div
+            className="flex flex-col gap-3 rounded-xl border border-hairline p-3"
+            style={V3_INSET}
+            role="tabpanel"
+            aria-label="链接 / 清单导入"
+          >
+            <p className={V3_HINT} style={{ margin: 0 }}>
               粘贴 JSON 清单或单页 HTML 图集的 URL。可在设置中手动填写 Cookie /
               Authorization / 自定义请求头；不支持自动登录或需要脚本渲染的网页。
             </p>
             <input
-              className="input mono"
+              className={V3_FIELD}
               autoFocus
               value={url}
               disabled={busy !== null}
@@ -525,13 +558,15 @@ export default function OnlineImportDialog({
                 }
               }}
             />
-            {err && <p className="hint online-error">{err}</p>}
-            {probe && <p className="hint mono">{probe}</p>}
-            {busy !== null && <p className="hint">正在处理，完成前无法关闭…</p>}
+            {err && <p className="text-xs text-danger">{err}</p>}
+            {probe && <p className={cn(V3_HINT, "mono")}>{probe}</p>}
+            {busy !== null && (
+              <p className={V3_HINT}>正在处理，完成前无法关闭…</p>
+            )}
 
-            <div className="field-row" style={{ alignItems: "center" }}>
+            <div className="flex flex-wrap items-center gap-2">
               <button
-                className="btn"
+                className={V3_BTN}
                 type="button"
                 onClick={() => void openAuxBrowser()}
                 disabled={busy !== null || openingBrowser}
@@ -539,15 +574,14 @@ export default function OnlineImportDialog({
                 {openingBrowser ? <Loader2 size={14} className="online-spin" /> : null}
                 打开辅助浏览窗口
               </button>
-              <span className="hint" style={{ flex: 1, minWidth: 0 }}>
+              <span className={cn(V3_HINT, "min-w-0 flex-1")}>
                 在窗口内自行完成登录与浏览；文件下载完成后会自动导入书库
               </span>
             </div>
 
             <button
-              className="btn"
+              className={cn(V3_BTN, "self-start")}
               type="button"
-              style={{ alignSelf: "flex-start" }}
               onClick={() => {
                 setPasteOpen((open) => !open);
                 setPasteErr(null);
@@ -558,9 +592,9 @@ export default function OnlineImportDialog({
             </button>
 
             {pasteOpen && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div className="flex flex-col gap-2 rounded-lg border border-hairline p-3">
                 <input
-                  className="input mono"
+                  className={V3_FIELD}
                   value={pasteTitle}
                   onChange={(e) => setPasteTitle(e.currentTarget.value)}
                   placeholder="标题（可留空，由后端按 URL 回退命名）"
@@ -568,9 +602,8 @@ export default function OnlineImportDialog({
                   disabled={busy !== null}
                 />
                 <textarea
-                  className="input mono"
+                  className={cn(V3_FIELD, "resize-y")}
                   rows={5}
-                  style={{ fontSize: "inherit", resize: "vertical" }}
                   value={pasteText}
                   onChange={(e) => {
                     setPasteText(e.currentTarget.value);
@@ -582,13 +615,13 @@ export default function OnlineImportDialog({
                   aria-label="图片 URL 列表"
                   disabled={busy !== null}
                 />
-                <p className="hint" style={{ margin: 0 }}>
+                <p className={V3_HINT} style={{ margin: 0 }}>
                   页面 URL 使用上方输入框；仅提交你手动提供的图片地址，不读取网页内容。
                 </p>
-                {pasteErr && <p className="hint online-error">{pasteErr}</p>}
-                <div className="dialog-actions">
+                {pasteErr && <p className="text-xs text-danger">{pasteErr}</p>}
+                <div className="flex flex-wrap justify-end gap-2">
                   <button
-                    className="btn"
+                    className={V3_BTN}
                     onClick={() => {
                       setPasteOpen(false);
                       setPasteErr(null);
@@ -598,7 +631,7 @@ export default function OnlineImportDialog({
                     取消
                   </button>
                   <button
-                    className="btn primary"
+                    className={V3_BTN_PRIMARY}
                     onClick={() => void importPasted()}
                     disabled={busy !== null || !pasteText.trim()}
                   >
@@ -611,30 +644,27 @@ export default function OnlineImportDialog({
               </div>
             )}
 
-            <div className="field">
-              <span>多话合集 JSON</span>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs text-ink-muted">多话合集 JSON</span>
               <textarea
-                className="input mono"
+                className={cn(V3_FIELD, "resize-y")}
                 rows={4}
-                style={{ fontSize: "inherit", resize: "vertical" }}
                 value={batchText}
                 onChange={(e) => {
                   setBatchText(e.currentTarget.value);
                   setBatchErr(null);
                 }}
-                placeholder={
-                  '{"version":1,"seriesTitle":"...","chapters":[...]}'
-                }
+                placeholder={'{"version":1,"seriesTitle":"...","chapters":[...]}'}
                 aria-label="多话合集 JSON"
                 disabled={busy !== null}
               />
-              <span className="hint">
+              <span className={V3_HINT}>
                 粘贴包含 chapters 的合集结构；导入成功后刷新书库。
               </span>
-              {batchErr && <p className="hint online-error">{batchErr}</p>}
-              <div className="field-row" style={{ justifyContent: "flex-end" }}>
+              {batchErr && <p className="text-xs text-danger">{batchErr}</p>}
+              <div className="flex flex-wrap justify-end gap-2">
                 <button
-                  className="btn primary"
+                  className={V3_BTN_PRIMARY}
                   onClick={() => void importBatch()}
                   disabled={busy !== null || !batchText.trim()}
                 >
@@ -646,23 +676,23 @@ export default function OnlineImportDialog({
               </div>
             </div>
 
-            <div className="dialog-actions">
+            <div className="flex flex-wrap justify-end gap-2">
               <button
-                className="btn"
+                className={V3_BTN}
                 onClick={() => void run("test")}
                 disabled={busy !== null}
               >
                 {busy === "test" ? <Loader2 size={14} className="online-spin" /> : null} 测试
               </button>
               <button
-                className="btn"
+                className={V3_BTN}
                 onClick={() => void run("add")}
                 disabled={busy !== null}
               >
                 {busy === "add" ? <Loader2 size={14} className="online-spin" /> : null} 仅加入书库
               </button>
               <button
-                className="btn primary"
+                className={V3_BTN_PRIMARY}
                 onClick={() => void run("read")}
                 disabled={busy !== null}
               >
@@ -674,30 +704,34 @@ export default function OnlineImportDialog({
             </div>
           </div>
         ) : (
-          <div className="online-tab-panel" role="tabpanel" aria-label="外部浏览器配对">
-            <div className="status-pill">
-              <span className={`status-dot${status?.active ? " active" : ""}`} />
+          <div
+            className="flex flex-col gap-3 rounded-xl border border-hairline p-3"
+            style={V3_INSET}
+            role="tabpanel"
+            aria-label="外部浏览器配对"
+          >
+            <div className="flex items-center gap-2 rounded-md border border-hairline bg-canvas px-2.5 py-2">
+              <span
+                className={cn(
+                  "h-2 w-2 shrink-0 rounded-full",
+                  status?.active
+                    ? "bg-brand motion-safe:animate-pulse"
+                    : "bg-ink-muted/60",
+                )}
+              />
               {status?.active ? (
-                <span
-                  className="mono"
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
+                <span className="mono min-w-0 flex-1 truncate text-xs text-ink-muted">
                   127.0.0.1:{status.port} · 已接收 {status.receivedChapters} 话
                 </span>
               ) : (
-                <span style={{ flex: 1 }}>本地回环桥接未启动</span>
+                <span className="min-w-0 flex-1 text-xs text-ink-muted">
+                  本地回环桥接未启动
+                </span>
               )}
               {status?.active ? (
                 <button
-                  className="btn"
+                  className={cn(V3_BTN, "ml-2 h-7")}
                   type="button"
-                  style={{ marginLeft: 8 }}
                   onClick={() => void stopPairing()}
                   disabled={stoppingHandoff}
                 >
@@ -705,9 +739,8 @@ export default function OnlineImportDialog({
                 </button>
               ) : (
                 <button
-                  className="btn primary"
+                  className={cn(V3_BTN_PRIMARY, "ml-2 h-7")}
                   type="button"
-                  style={{ marginLeft: 8 }}
                   onClick={() => void startPairing()}
                   disabled={startingHandoff}
                 >
@@ -716,20 +749,20 @@ export default function OnlineImportDialog({
               )}
             </div>
 
-            <div className="field">
-              <span>Callback URL</span>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs text-ink-muted">Callback URL</span>
               <input
-                className="input mono"
+                className={V3_FIELD}
                 readOnly
                 value={status?.callbackUrl ?? ""}
                 placeholder="启动配对后生成"
                 aria-label="Callback URL"
               />
             </div>
-            <div className="field">
-              <span>Pairing Token</span>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs text-ink-muted">Pairing Token</span>
               <input
-                className="input mono"
+                className={V3_FIELD}
                 readOnly
                 value={status?.pairingToken ?? ""}
                 placeholder="启动配对后生成"
@@ -737,7 +770,7 @@ export default function OnlineImportDialog({
               />
             </div>
 
-            <div className="field-row" style={{ flexWrap: "wrap" }}>
+            <div className="flex flex-wrap gap-2">
               <CopyAction
                 label="复制接口信息"
                 toastLabel="接口信息"
@@ -750,37 +783,30 @@ export default function OnlineImportDialog({
               />
             </div>
 
-            <p className="hint" style={{ margin: 0 }}>
+            <p className={V3_HINT} style={{ margin: 0 }}>
               脚本由你在自己的浏览器中手动执行，只读取当前页面已渲染的图片地址；不读取
               Cookie、不做翻页爬取。脚本会用 localStorage 累积多话并一次推送整段合集；如需携带自己的请求头，编辑脚本里的
               MR_SESSION_HEADERS 常量（应用只在内存使用，不落盘、不记日志）。控制台可用
               MR_BRIDGE.reset() 清空收集。
             </p>
 
-            <label
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 8,
-                fontSize: 13,
-              }}
-            >
+            <label className="flex items-start gap-2 text-xs leading-relaxed text-ink">
               <input
                 type="checkbox"
                 checked={allowSessionHeaders}
                 onChange={(e) => setAllowSessionHeaders(e.currentTarget.checked)}
                 disabled={status?.active || startingHandoff || stoppingHandoff}
-                style={{ marginTop: 2 }}
+                className="mt-0.5 accent-[var(--v3-accent)]"
               />
               <span>允许接收临时请求头至内存（退出应用即焚，不写入数据库）</span>
             </label>
             {status?.active && (
-              <span className="hint">修改此开关需先停止监听，再重新启动配对。</span>
+              <span className={V3_HINT}>修改此开关需先停止监听，再重新启动配对。</span>
             )}
 
-            <div className="field-row" style={{ alignItems: "center" }}>
+            <div className="flex flex-wrap items-center gap-2">
               <button
-                className="btn"
+                className={V3_BTN}
                 type="button"
                 onClick={() => void openCurrentUrl()}
                 disabled={openingCurrentUrl}
@@ -788,7 +814,7 @@ export default function OnlineImportDialog({
                 {openingCurrentUrl ? <Loader2 size={14} className="online-spin" /> : null}
                 在系统浏览器打开当前 URL
               </button>
-              <span className="hint" style={{ flex: 1, minWidth: 0 }}>
+              <span className={cn(V3_HINT, "min-w-0 flex-1")}>
                 当前 URL 取自「链接 / 清单导入」标签页
               </span>
             </div>

@@ -6,9 +6,21 @@ export function toastErr(cmd: string, e: unknown): void {
   toast(msg);
 }
 
-/** 轻量 toast：任意处调用 toast(msg)，由 <Toaster/> 渲染 */
+type ToastListener = (message: string) => void;
+
+// 事件式改为「监听器 + 待投递队列」：页签切换/超限回退的瞬间可能没有 Toaster
+// 挂载（例如路由层已拒绝挂载 Reader），消息先入队，等下一个 Toaster 挂载后补显示。
+const listeners = new Set<ToastListener>();
+const pending: string[] = [];
+
+/** 轻量 toast：任意处调用 toast(msg)，由当前挂载的 <Toaster/> 渲染 */
 export function toast(message: string): void {
-  window.dispatchEvent(new CustomEvent<string>("app-toast", { detail: message }));
+  if (listeners.size > 0) {
+    listeners.forEach((l) => l(message));
+    return;
+  }
+  pending.push(message);
+  if (pending.length > 8) pending.shift();
 }
 
 interface ToastItem {
@@ -21,8 +33,7 @@ export function Toaster() {
 
   useEffect(() => {
     let nextId = 1;
-    const handler = (e: Event) => {
-      const msg = (e as CustomEvent<string>).detail;
+    const handler: ToastListener = (msg) => {
       const id = nextId;
       nextId += 1;
       setItems((prev) => [...prev.slice(-3), { id, msg }]);
@@ -30,8 +41,13 @@ export function Toaster() {
         setItems((prev) => prev.filter((t) => t.id !== id));
       }, 4200);
     };
-    window.addEventListener("app-toast", handler);
-    return () => window.removeEventListener("app-toast", handler);
+    listeners.add(handler);
+    if (pending.length > 0) {
+      pending.splice(0).forEach(handler);
+    }
+    return () => {
+      listeners.delete(handler);
+    };
   }, []);
 
   if (items.length === 0) return null;

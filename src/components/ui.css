@@ -81,7 +81,7 @@
   top: 0;
   left: 0;
   right: 0;
-  height: 40px;
+  height: var(--titlebar-h);
   z-index: 70;
   display: flex;
   align-items: center;
@@ -114,21 +114,21 @@
 .tb-btn:hover { background: var(--glass); color: var(--fg); }
 .tb-btn.close:hover { background: #e81123; color: #ffffff; }
 
-/* ============ 图标轨导航（64px，hover 展开文字，覆盖式不推挤内容） ============ */
-.shell-main { padding: 58px 22px 32px 86px; }
+/* ============ 图标轨导航（48px 收起 / 184px 展开，覆盖式不推挤内容） ============ */
+.shell-main { padding: 66px 22px 32px 70px; }
 .shell-inner { max-width: 1100px; margin: 0 auto; }
 
 .rail {
   position: fixed;
   left: 0;
-  top: 40px;
+  top: var(--titlebar-h);
   bottom: 0;
-  width: 64px;
+  width: 48px;
   z-index: 60;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 14px 10px;
+  padding: 14px 8px;
   background: var(--card);
   border-right: 1px solid var(--border);
   overflow: hidden;
@@ -167,8 +167,8 @@
   align-items: center;
   gap: 12px;
   height: 40px;
-  padding: 0 10px;
-  border-radius: 10px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
   font-size: 13px;
   color: var(--fg);
   text-decoration: none;
@@ -200,10 +200,13 @@
   flex-wrap: wrap;
   margin-bottom: 18px;
 }
-.lib-dataline { font-size: 13px; color: var(--muted); }
+.lib-dataline { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .lib-dataline b { color: var(--fg); font-weight: 600; }
-.lib-tools { margin-left: auto; display: flex; gap: 8px; flex: 1; justify-content: flex-end; }
+.lib-tools { margin-left: auto; display: flex; gap: 8px; flex: 1; justify-content: flex-end; flex-wrap: wrap; }
 .lib-tools .input { max-width: 260px; }
+/* 900px 最小窗口：按钮整体换行，不压成竖排文字。 */
+.lib-tools .btn,
+.lib-tools .seg { flex: none; white-space: nowrap; }
 
 .grid-books {
   display: grid;
@@ -306,8 +309,8 @@
 
 .sheet-panel {
   position: fixed;
-  /* 自绘标题栏高 40px；sheet 位于 .view-fade 层叠上下文内，需让出顶部。 */
-  top: 40px;
+  /* 自绘标题栏高度；sheet 位于 .view-fade 层叠上下文内，需让出顶部。 */
+  top: var(--titlebar-h);
   right: 0;
   bottom: 0;
   z-index: 81;
@@ -818,6 +821,7 @@
   margin-top: 8px;
 }
 .episode-pill {
+  min-height: 32px;
   display: flex;
   flex-direction: column;
   gap: 3px;

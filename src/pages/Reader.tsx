@@ -3,22 +3,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
-  ChevronLeft,
-  ChevronRight,
   Copy,
   Languages,
-  List,
   Loader2,
-  Minus,
   RefreshCw,
-  RotateCcw,
-  Settings,
-  Square,
   X,
-  ZoomIn,
-  ZoomOut,
 } from "lucide-react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   api,
   isTransEnabled,
@@ -32,6 +22,7 @@ import {
 import PixelPet from "../components/PixelPet";
 import ErrorState from "../components/ErrorState";
 import { Toaster, toast, toastErr } from "../components/Toast";
+import { cn } from "../lib/utils";
 import {
   isSoloCover,
   spreadFor,
@@ -41,6 +32,13 @@ import {
 } from "../components/Reader/spread";
 import { READER_SHORTCUTS } from "../components/Reader/shortcuts";
 import WebtoonView, { type WebtoonHandle } from "../components/Reader/Webtoon";
+import ReaderHudTop from "../components/Reader/ReaderHudTop";
+import ReaderDock from "../components/Reader/ReaderDock";
+import ProgressScrubber, {
+  type ScrubPreview,
+} from "../components/Reader/ProgressScrubber";
+import TabSwitcher from "../components/Reader/TabSwitcher";
+import { useWorkspace } from "../features/workspace/WorkspaceContext";
 import {
   isUsable,
   normPoint,
@@ -52,7 +50,7 @@ import "../components/Reader.css";
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
 const MAX_EDGE = 1920;
-const HIDE_MS = 3000;
+const HIDE_MS = 1500;
 const SAVE_DEBOUNCE_MS = 500;
 
 const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
@@ -68,6 +66,15 @@ function loadPrefs(): { mode: PageMode; dir: Direction } {
   }
 }
 
+/** 后端 updated_at 为本地时间字符串；失败时回退 0，让快照优先。 */
+function progressUpdatedAt(value: string | undefined): number {
+  if (!value) return 0;
+  const parsed = Date.parse(
+    value.includes("T") ? value : value.replace(" ", "T"),
+  );
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 /**
  * 真阅读器（暗色沉浸面）：全屏近黑画布，单/双页 + 日式 RTL，
  * Ctrl+滚轮/双指缩放 + 拖拽 + 双击重置，玻璃控制条 + 目录弹层，
@@ -78,6 +85,10 @@ export default function Reader() {
   const { id = "" } = useParams();
   const bookId = decodeURIComponent(id);
   const nav = useNavigate();
+  const ws = useWorkspace();
+  // 本次挂载的会话快照（页签切回时恢复页码/版式/方向/条漫位置）；只在首次渲染取一次。
+  const initialSnapRef = useRef(ws.getSnapshot(bookId));
+  const [tabsMenuOpen, setTabsMenuOpen] = useState(false);
 
   const [book, setBook] = useState<BookInfo | null>(null);
   const [bookState, setBookState] = useState<"loading" | "ready" | "missing">(
@@ -92,8 +103,12 @@ export default function Reader() {
   const [bookMode, setBookMode] = useState<PageMode | null>(null);
   const [wtSuggest, setWtSuggest] = useState(false);
   const [wtProgress, setWtProgress] = useState({ pct: 0, page: 0 });
+  // 本次 Reader 生命周期内冻结的条漫恢复位置（-1 = 用进入页码）。
+  const [restorePct, setRestorePct] = useState(-1);
   // 条漫进度的 ref 镜像：setMode 切走时需要读最新页码而无依赖抖动。
   const wtProgressRef = useRef({ pct: 0, page: 0 });
+  // 是否已拿到可信的条漫位置（快照/后端/Webtoon 首帧上报）；false 时不写占位快照。
+  const wtKnownRef = useRef(false);
   const wtHandle = useRef<WebtoonHandle | null>(null);
   const wtSuggestedRef = useRef(false);
   const [zoom, setZoom] = useState(1);
@@ -107,13 +122,24 @@ export default function Reader() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sizeTick, setSizeTick] = useState(0);
   const [nextBusy, setNextBusy] = useState(false);
+  // 「更多」Popover 与进度拖拽预览（预览只读已缓存图片，不发请求）。
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [scrub, setScrub] = useState<ScrubPreview | null>(null);
+  const [tocShown, setTocShown] = useState(200);
 
   /* ---------- 阶段三:选区翻译 ---------- */
   // 实验性开关（镜像 + 后端刷新 + 订阅）：关闭时入口隐藏、快捷键失效。
   const [transOn, setTransOn] = useState(isTransEnabled());
   const [wtOn, setWtOn] = useState(isWebtoonEnabled());
   useEffect(() => {
-    api.getSettings().catch(() => {});
+    // 首次读取会刷新 localStorage 镜像；镜像就绪后回灌，避免首启动时开关已开但按钮仍禁用。
+    api.getSettings().then(
+      () => {
+        setTransOn(isTransEnabled());
+        setWtOn(isWebtoonEnabled());
+      },
+      () => {},
+    );
     return onExperimentalChange(() => {
       setTransOn(isTransEnabled());
       setWtOn(isWebtoonEnabled());
@@ -143,10 +169,10 @@ export default function Reader() {
     pid: number;
   } | null>(null);
   const regionRef = useRef(false);
-  const regionPanelRef = useRef(false);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef(0);
+  const hudHoverRef = useRef(false);
   const overlayRef = useRef(false);
   const requestedRef = useRef<Set<string>>(new Set());
   // 每页当前缓存图片对应的请求尺寸 key（`${idx}@${w}x${h}`），用于
@@ -222,12 +248,14 @@ export default function Reader() {
       const knownNext =
         nextBook && nextProbe.id === current.id ? nextBook : null;
       if (knownNext) {
+        ws.replaceTab(current.id, knownNext.id);
         nav(`/reader/${encodeURIComponent(knownNext.id)}`, { replace: true });
         return;
       }
       if (current.nextUrl) {
         try {
           const resolved = await api.resolveOnlineUrl(current.nextUrl);
+          ws.replaceTab(current.id, resolved.id);
           nav(`/reader/${encodeURIComponent(resolved.id)}`, { replace: true });
         } catch (e) {
           toastErr("resolve_online_url", e);
@@ -238,6 +266,7 @@ export default function Reader() {
       try {
         const probed = await api.getNextBook(current.id);
         if (probed) {
+          ws.replaceTab(current.id, probed.id);
           nav(`/reader/${encodeURIComponent(probed.id)}`, { replace: true });
         } else {
           toast("没有找到下一话");
@@ -248,7 +277,7 @@ export default function Reader() {
     } finally {
       setNextBusy(false);
     }
-  }, [nav, nextBusy, nextBook, nextProbe.id]);
+  }, [nav, nextBusy, nextBook, nextProbe.id, ws]);
 
   /* ---------- open book: get_book -> restore currentPage ---------- */
   useEffect(() => {
@@ -264,6 +293,9 @@ export default function Reader() {
     setPan({ x: 0, y: 0 });
     setWtSuggest(false);
     wtSuggestedRef.current = false;
+    setRestorePct(-1);
+    wtProgressRef.current = { pct: 0, page: 0 };
+    wtKnownRef.current = false;
     setWtProgress({ pct: 0, page: 0 });
     try {
       const saved = localStorage.getItem(`mr-wt-${bookId}`);
@@ -283,7 +315,52 @@ export default function Reader() {
             return;
           }
           setBook(b);
-          setPage(Math.max(0, Math.min(b.pageCount - 1, b.currentPage)));
+          ws.reportBook(b.id, b.title);
+          // 页码以「内存快照」与「后端 updated_at（set_progress 会刷新）」的较新者为准；
+          // 版式/方向仍取快照，因为后端不存这两项。
+          const snap = initialSnapRef.current;
+          const snapNewer =
+            snap !== null && snap.at >= progressUpdatedAt(b.updatedAt);
+          const basePage = snapNewer ? snap.page : b.currentPage;
+          const safePage = Math.max(0, Math.min(b.pageCount - 1, basePage));
+          // 页目录跳转：?page=N（1-based）优先于阅读进度，只生效一次。
+          const hashQuery = window.location.hash.includes("?")
+            ? new URLSearchParams(window.location.hash.split("?")[1])
+            : null;
+          const requestedPage = hashQuery ? Number(hashQuery.get("page")) : NaN;
+          const jumpRequested =
+            Number.isInteger(requestedPage) &&
+            requestedPage >= 1 &&
+            requestedPage <= b.pageCount;
+          const initialPage = jumpRequested ? requestedPage - 1 : safePage;
+          if (jumpRequested) {
+            window.history.replaceState(null, "", `#/reader/${encodeURIComponent(b.id)}`);
+          }
+          const basePct = snapNewer
+            ? snap.mode === "webtoon"
+              ? snap.scrollPct
+              : -1
+            : b.scrollPct;
+          setPage(initialPage);
+          setRestorePct(
+            basePct >= 0 ? Math.min(1, Math.max(0, basePct)) : -1,
+          );
+          if (snap) {
+            if (
+              snap.mode === "webtoon" ||
+              snap.mode === "single" ||
+              snap.mode === "double"
+            ) {
+              setBookMode(snap.mode);
+            }
+            setPrefs((p) => (p.dir === snap.dir ? p : { ...p, dir: snap.dir }));
+          }
+          if (basePct >= 0) {
+            const pct = Math.min(1, Math.max(0, basePct));
+            setWtProgress({ pct, page: initialPage });
+            wtProgressRef.current = { pct, page: initialPage };
+            wtKnownRef.current = true;
+          }
           setBookState("ready");
         },
         (e) => {
@@ -297,7 +374,34 @@ export default function Reader() {
       });
     return () => {
       alive = false;
-      api.clearPages().catch(() => {});
+      // 页签切换/关闭时立即落盘分页进度，避免 500ms 防抖被卸载取消而丢页。
+      // 快照在 Reader 卸载时同步写一次，条漫使用 Webtoon 的最新 ref；
+      // 尚未拿到可信条漫位置时不写占位 {0,0}。
+      const t = trackRef.current;
+      if (!t.book) return;
+      const tabOpen = ws.isTabOpen(t.book.id);
+      const latestWt =
+        t.mode === "webtoon" ? wtHandle.current?.getProgress?.() : null;
+      const livePct =
+        t.mode === "webtoon"
+          ? latestWt?.pct ?? wtProgressRef.current.pct
+          : -1;
+      const livePage =
+        t.mode === "webtoon"
+          ? latestWt?.page ?? wtProgressRef.current.page
+          : t.page;
+      // 页签关闭/替换后不要再复活 Workspace 已主动丢弃的快照。
+      if (tabOpen && (t.mode !== "webtoon" || wtKnownRef.current)) {
+        ws.reportSnapshot(t.book.id, {
+          page: livePage,
+          scrollPct: livePct,
+          mode: t.mode,
+          dir: t.dir,
+        });
+      }
+      if (t.mode !== "webtoon") {
+        void api.setProgress(t.book.id, t.page).catch(() => {});
+      }
     };
   }, [bookId]);
 
@@ -490,6 +594,19 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookState, book, page, n, mode]);
 
+  /* ---------- 页签快照（只写工作区 ref，不触发重渲染） ---------- */
+  useEffect(() => {
+    if (!book) return;
+    // 首次进入条漫且还没有可信位置时，不写 {0,0} 占位；等 Webtoon 首帧上报。
+    if (mode === "webtoon" && !wtKnownRef.current) return;
+    ws.reportSnapshot(book.id, {
+      page: mode === "webtoon" ? wtProgress.page : page,
+      scrollPct: mode === "webtoon" ? wtProgress.pct : -1,
+      mode,
+      dir: prefs.dir,
+    });
+  }, [book, page, mode, prefs.dir, wtProgress.page, wtProgress.pct, ws]);
+
   /* ---------- prefs persist ---------- */
   useEffect(() => {
     try {
@@ -529,42 +646,61 @@ export default function Reader() {
     setUiVisible(true);
     window.clearTimeout(hideTimer.current);
     hideTimer.current = window.setTimeout(() => {
-      if (!uiLockRef.current) setUiVisible(false);
+      if (uiLockRef.current) return;
+      // 指针停在 HUD 上或键盘焦点在 HUD 内时不隐藏（focus-within 语义）。
+      if (hudHoverRef.current) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest("[data-reader-hud]")) return;
+      setUiVisible(false);
     }, HIDE_MS);
   }, []);
 
+  // 条漫开始滚动时隐藏 HUD；锁定态、HUD hover、HUD 焦点内均不隐藏。
+  const handleWebtoonScrollStart = useCallback(() => {
+    if (uiLockRef.current || hudHoverRef.current) return;
+    const active = document.activeElement as HTMLElement | null;
+    if (active?.closest("[data-reader-hud]")) return;
+    window.clearTimeout(hideTimer.current);
+    setUiVisible(false);
+  }, []);
+
   useEffect(() => {
-    const panel = regionPanelRef.current;
-    overlayRef.current = tocOpen || setOpen || panel || shortcutsOpen;
-    uiLockRef.current = tocOpen || setOpen || panel || shortcutsOpen;
-    if (tocOpen || setOpen || panel || shortcutsOpen) {
+    const panel = ocrBusy || ocrRes !== null || transBusy || transRes !== null;
+    const overlay =
+      tocOpen || setOpen || panel || shortcutsOpen || moreOpen || tabsMenuOpen;
+    overlayRef.current = overlay;
+    uiLockRef.current = overlay || regionMode;
+    if (uiLockRef.current) {
       setUiVisible(true);
       window.clearTimeout(hideTimer.current);
     } else {
       poke();
     }
-  }, [tocOpen, setOpen, shortcutsOpen, poke]);
-
-  // 阶段三:选区结果面板开合同步进弹层锁。
-  useEffect(() => {
-    const panel = ocrBusy || ocrRes !== null || transBusy || transRes !== null;
-    if (regionPanelRef.current !== panel) {
-      regionPanelRef.current = panel;
-      overlayRef.current = tocOpen || setOpen || panel;
-      uiLockRef.current = tocOpen || setOpen || panel;
-      if (panel) {
-        setUiVisible(true);
-        window.clearTimeout(hideTimer.current);
-      }
-    }
-  }, [ocrBusy, ocrRes, transBusy, transRes, tocOpen, setOpen, poke]);
+  }, [
+    tocOpen,
+    setOpen,
+    shortcutsOpen,
+    moreOpen,
+    tabsMenuOpen,
+    regionMode,
+    ocrBusy,
+    ocrRes,
+    transBusy,
+    transRes,
+    poke,
+  ]);
 
   useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      hudHoverRef.current = !!t?.closest?.("[data-reader-hud]");
+      poke();
+    };
     poke();
-    window.addEventListener("mousemove", poke);
+    window.addEventListener("pointermove", onMove);
     window.addEventListener("keydown", poke);
     return () => {
-      window.removeEventListener("mousemove", poke);
+      window.removeEventListener("pointermove", onMove);
       window.removeEventListener("keydown", poke);
       window.clearTimeout(hideTimer.current);
     };
@@ -638,14 +774,24 @@ export default function Reader() {
   }, [setMode, wtOn, book]);
 
   /* ---------- 条漫进度提交（WebtoonView 内已节流） ---------- */
-  const commitWt = useCallback((pct: number, page: number) => {
-    wtProgressRef.current = { pct, page };
-    setWtProgress({ pct, page });
-    // 同步本地 book：切模式/重进条漫时能立刻拿到最新位置。
-    setBook((b) => (b ? { ...b, currentPage: page, scrollPct: pct } : b));
-    const bb = trackRef.current.book;
-    if (bb) api.setProgress(bb.id, page, pct).catch((e) => toastErr("set_progress", e));
-  }, []);
+  const commitWt = useCallback(
+    (pct: number, page: number, persist = true) => {
+      wtKnownRef.current = true;
+      wtProgressRef.current = { pct, page };
+      setWtProgress({ pct, page });
+      // 同步本地 book：切模式/重进条漫时能立刻拿到最新位置。
+      setBook((b) => (b ? { ...b, currentPage: page, scrollPct: pct } : b));
+      if (persist) {
+        const bb = trackRef.current.book;
+        if (bb) {
+          api
+            .setProgress(bb.id, page, pct)
+            .catch((e) => toastErr("set_progress", e));
+        }
+      }
+    },
+    [],
+  );
 
   const tapToggle = useCallback(() => {
     setUiVisible((v) => {
@@ -672,11 +818,11 @@ export default function Reader() {
     setOcrBusy(false);
     setTransBusy(false);
     regionRef.current = false;
-    regionPanelRef.current = false;
     poke();
   }, [poke]);
 
   const toggleRegion = useCallback(() => {
+    setMoreOpen(false);
     if (regionRef.current) {
       exitRegion();
     } else {
@@ -744,6 +890,16 @@ export default function Reader() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
+      // Ctrl+W 在输入框内也必须拦截，避免 WebView2 直接关窗。
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        (e.key === "w" || e.key === "W")
+      ) {
+        e.preventDefault();
+        ws.closeActiveTab();
+        return;
+      }
       const tag = el?.tagName ?? "";
       if (
         tag === "INPUT" ||
@@ -752,6 +908,14 @@ export default function Reader() {
         (el?.isContentEditable ?? false)
       ) {
         return;
+      }
+      // 工作区页签：Ctrl+1 书库、Ctrl+2… 阅读页签。
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        if (/^[1-9]$/.test(e.key)) {
+          e.preventDefault();
+          ws.activateIndex(Number(e.key));
+          return;
+        }
       }
       const t = trackRef.current;
       // 注意：底部 <button> 聚焦时按空格会原生触发 click（=下一页），
@@ -792,13 +956,16 @@ export default function Reader() {
           }
           break;
         case "Escape":
-          // 选区开着先退选区,弹层开着先关弹层,否则返回书库。
-          if (regionRef.current) {
+          // 页签菜单开着先关菜单;选区开着先退选区,弹层开着先关弹层,否则返回书库。
+          if (tabsMenuOpen) {
+            setTabsMenuOpen(false);
+          } else if (regionRef.current) {
             exitRegion();
           } else if (overlayRef.current) {
             setTocOpen(false);
             setSetOpen(false);
             setShortcutsOpen(false);
+            setMoreOpen(false);
           } else {
             nav("/");
           }
@@ -807,6 +974,7 @@ export default function Reader() {
           // P1:快捷键速查表(设置页同源数据)。
           e.preventDefault();
           setShortcutsOpen((v) => !v);
+          setMoreOpen(false);
           setTocOpen(false);
           setSetOpen(false);
           break;
@@ -832,6 +1000,8 @@ export default function Reader() {
     transOn,
     showNextChapter,
     goNextChapter,
+    ws,
+    tabsMenuOpen,
   ]);
 
   /* ---------- zoom / pan / pinch (non-passive wheel) ---------- */
@@ -997,6 +1167,8 @@ export default function Reader() {
   const openToc = () => {
     setShortcutsOpen(false);
     setSetOpen(false);
+    setMoreOpen(false);
+    setTocShown(200);
     setTocOpen((o) => !o);
     if ((!entries || entriesError) && !entriesLoading) {
       setEntriesLoading(true);
@@ -1015,16 +1187,36 @@ export default function Reader() {
     }
   };
 
-  const onProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (n <= 0) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-    if (trackRef.current.mode === "webtoon") {
-      wtHandle.current?.scrollToPct(ratio);
-      return;
-    }
-    jumpTo(Math.min(n - 1, Math.floor(ratio * n)));
-  };
+  /* ---------- progress scrubber（拖拽预览不发请求；松手才跳页） ---------- */
+  const pagedMax = Math.max(0, n - 1);
+  const sliderMax = mode === "webtoon" ? 100 : pagedMax;
+  const sliderValue =
+    mode === "webtoon" ? Math.round(wtProgress.pct * 100) : Math.min(page, pagedMax);
+
+  const onScrub = useCallback(
+    (v: number) => {
+      if (mode === "webtoon") {
+        setScrub({ label: `${Math.round(v)}%`, thumb: null });
+        return;
+      }
+      const idx = Math.max(0, Math.min(n - 1, Math.round(v)));
+      // 只用已缓存图片；没有就只显示页码，绝不在这里发 get_page。
+      setScrub({ label: `第 ${idx + 1} 页`, thumb: imgs[idx] ?? null });
+    },
+    [mode, n, imgs],
+  );
+
+  const onCommitScrub = useCallback(
+    (v: number) => {
+      setScrub(null);
+      if (mode === "webtoon") {
+        wtHandle.current?.scrollToPct(v / 100);
+        return;
+      }
+      jumpTo(Math.round(v));
+    },
+    [mode, jumpTo],
+  );
 
   const retryIdx = (idx: number) => {
     const b = trackRef.current.book;
@@ -1040,15 +1232,25 @@ export default function Reader() {
     fetchIdx(idx);
   };
 
+  const toggleSettings = useCallback(() => {
+    setSetOpen((o) => !o);
+    setTocOpen(false);
+    setShortcutsOpen(false);
+    setMoreOpen(false);
+  }, []);  const toggleShortcuts = useCallback(() => {
+    setShortcutsOpen((v) => !v);
+    setTocOpen(false);
+    setSetOpen(false);
+    setMoreOpen(false);
+  }, []);
+
   const dirRtl = prefs.dir === "rtl";
-  const NextIcon = dirRtl ? ChevronLeft : ChevronRight;
-  const PrevIcon = dirRtl ? ChevronRight : ChevronLeft;
   const spreadSet = new Set(spread);
   // spreadFor 已是视觉左→右顺序，DOM 顺序即视觉顺序，不再翻转。
   const ordered = spread;
 
   return (
-    <div className={`reader-root${uiVisible ? "" : " hidden"}`}>
+    <div className={`reader-root${uiVisible ? "" : " chrome-hidden"}`}>
       {/* canvas */}
       <div
         ref={canvasRef}
@@ -1086,15 +1288,16 @@ export default function Reader() {
             ref={wtHandle}
             book={book}
             startPage={page}
-            restorePct={book.scrollPct}
+            restorePct={restorePct}
             onProgress={commitWt}
             onTap={tapToggle}
+            onScrollStart={handleWebtoonScrollStart}
           />
         ) : (
           <div
             className={`reader-pages${mode === "double" ? " reader-double" : ""}${solo ? " solo" : ""}`}
             style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
             }}
           >
             {ordered.map((idx) => (
@@ -1139,202 +1342,190 @@ export default function Reader() {
         )}
       </div>
 
-      {/* top bar（decorations:false → 兼任拖拽标题栏：空白处可拖动/双击最大化） */}
-      <div className="reader-top glass-bar" data-tauri-drag-region>
-        <button className="rbtn" onClick={() => nav("/")} title="返回书库 (Esc)">
-          <ArrowLeft size={16} />
-        </button>
-        <span className="reader-title">
-          {book?.title ?? (bookState === "loading" ? "正在打开…" : "未知书籍")}
-        </span>
-        <span className="reader-zoomtag mono">{Math.round(zoom * 100)}%</span>
-        <button
-          className="rbtn"
-          onClick={() => zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1 / 1.25)}
-          disabled={zoom <= MIN_ZOOM + 1e-6}
-          title="缩小"
-        >
-          <ZoomOut size={15} />
-        </button>
-        <button
-          className="rbtn"
-          onClick={() => zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.25)}
-          disabled={zoom >= MAX_ZOOM - 1e-6}
-          title="放大"
-        >
-          <ZoomIn size={15} />
-        </button>
-        <button className="rbtn" onClick={resetView} title="重置视图（双击画布）">
-          <RotateCcw size={14} />
-        </button>
-        <span className="tb-sep" aria-hidden />
-        <button
-          className="rbtn"
-          title="最小化"
-          aria-label="最小化"
-          onClick={() => getCurrentWindow().minimize().catch(() => {})}
-        >
-          <Minus size={14} />
-        </button>
-        <button
-          className="rbtn"
-          title="最大化/还原"
-          aria-label="最大化或还原"
-          onClick={() => getCurrentWindow().toggleMaximize().catch(() => {})}
-        >
-          <Square size={11} />
-        </button>
-        <button
-          className="rbtn"
-          title="关闭"
-          aria-label="关闭"
-          onClick={() => getCurrentWindow().close().catch(() => {})}
-        >
-          <X size={14} />
-        </button>
-      </div>
+      {/* 顶部拖拽带：HUD 隐藏后仍能拖动窗口 / 从顶部边缘唤出 */}
+      <div
+        data-tauri-drag-region
+        aria-hidden
+        className="absolute inset-x-0 top-0 z-20 h-2"
+      />
 
-      {/* bottom bar */}
-      <div className="reader-bar glass-bar">
-        {transOn && (
-          <button
-            className={`rbtn${regionMode ? " on" : ""}`}
-            onClick={toggleRegion}
-            disabled={mode === "webtoon"}
-            title={mode === "webtoon" ? "条漫模式暂不支持选区翻译" : "选区翻译 (o)"}
-          >
-            <Languages size={16} />
-          </button>
-        )}
-        <button
-          className={`rbtn${setOpen ? " on" : ""}`}
-          onClick={() => {
-            setSetOpen((o) => !o);
+      <ReaderHudTop
+        title={book?.title ?? (bookState === "loading" ? "正在打开…" : "未知书籍")}
+        zoom={zoom}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
+        hidden={!uiVisible}
+        tabsSlot={
+          ws.tabsEnabled ? (
+            <TabSwitcher open={tabsMenuOpen} onOpenChange={setTabsMenuOpen} />
+          ) : undefined
+        }
+        onBack={() => nav("/")}
+        onZoom={(factor) =>
+          zoomAt(window.innerWidth / 2, window.innerHeight / 2, factor)
+        }
+        onReset={resetView}
+      />
+
+      <ReaderDock
+        hidden={!uiVisible}
+        dir={prefs.dir}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={() => go(-1)}
+        onNext={() => go(1)}
+        mode={mode}
+        webtoonAllowed={webtoonAllowed}
+        webtoonReason={
+          wtOn ? "本书不支持条漫模式" : "条漫模式未开启（设置 → 实验性功能）"
+        }
+        onMode={setMode}
+        tocOpen={tocOpen}
+        onToc={openToc}
+        moreOpen={moreOpen}
+        onMoreOpenChange={(open) => {
+          setMoreOpen(open);
+          if (open) {
             setTocOpen(false);
+            setSetOpen(false);
             setShortcutsOpen(false);
-          }}
-          title="阅读设置"
-        >
-          <Settings size={16} />
-        </button>
-        <button
-          className={`rbtn${tocOpen ? " on" : ""}`}
-          onClick={openToc}
-          title="目录"
-        >
-          <List size={16} />
-        </button>
-        {mode === "webtoon" ? (
-          <span className="r-pages mono">
-            <span className="r-cur">{Math.round(wtProgress.pct * 100)}%</span>
-            <span className="r-sep"> · </span>
-            <span className="r-tot">
-              {wtProgress.page + 1}/{n} 页
-            </span>
-          </span>
-        ) : (
-          <span className="r-pages mono">
-            <span className="r-cur">{n > 0 ? page + 1 : "–"}</span>
-            <span className="r-sep">/</span>
-            <span className="r-tot">{n > 0 ? n : "–"}</span>
-          </span>
-        )}
-        <div
-          className="r-progress"
-          role="slider"
-          aria-label="阅读进度"
-          aria-valuemin={1}
-          aria-valuemax={Math.max(1, n)}
-          aria-valuenow={
-            mode === "webtoon"
-              ? Math.max(1, Math.round(wtProgress.pct * n) + 1)
-              : Math.min(Math.max(1, page + 1), Math.max(1, n))
           }
-          tabIndex={0}
-          onClick={onProgressClick}
-          onKeyDown={(e) => {
-            // 全局已有 ←/→ 翻页；slider 内只处理 Home/End，避免双重 go()。
-            if (e.key === "Home") {
-              e.preventDefault();
-              e.stopPropagation();
-              jumpTo(0);
-            } else if (e.key === "End") {
-              e.preventDefault();
-              e.stopPropagation();
-              if (n > 0) jumpTo(n - 1);
-            }
-          }}
-        >
-          <div
-            className="r-fill"
-            style={{
-              width:
-                mode === "webtoon"
-                  ? `${wtProgress.pct * 100}%`
-                  : `${n > 0 ? ((page + 1) / n) * 100 : 0}%`,
-            }}
+          poke();
+        }}
+        settingsOpen={setOpen}
+        onSettings={toggleSettings}
+        shortcutsOpen={shortcutsOpen}
+        onShortcuts={toggleShortcuts}
+        transOn={transOn}
+        regionMode={regionMode}
+        onRegion={toggleRegion}
+        regionDisabledReason={
+          mode === "webtoon" ? "条漫模式暂不支持选区翻译" : null
+        }
+        slider={
+          <ProgressScrubber
+            value={sliderValue}
+            max={sliderMax}
+            min={0}
+            step={1}
+            disabled={n === 0}
+            ariaLabel="阅读进度"
+            preview={scrub}
+            onScrub={onScrub}
+            onCommit={onCommitScrub}
+            className="mx-1"
           />
-        </div>
-        <button className="rbtn" onClick={() => go(-1)} disabled={!canPrev} title="上一页">
-          <PrevIcon size={17} />
-        </button>
-        <button className="rbtn" onClick={() => go(1)} disabled={!canNext} title="下一页">
-          <NextIcon size={17} />
-        </button>
-        <button
-          className="rbtn mono"
-          style={{ fontSize: 11, padding: "6px 9px" }}
-          onClick={toggleMode}
-          title="版式切换：单页 → 双页 → 条漫 (f)"
-        >
-          {mode === "single" ? "单页" : mode === "double" ? "双页" : "条漫"}
-        </button>
-      </div>
+        }
+        pageLabel={
+          mode === "webtoon" ? (
+            <>
+              <span className="text-ink">
+                {Math.round(wtProgress.pct * 100)}%
+              </span>
+              <span className="px-1 text-ink-muted/70">·</span>
+              {Math.min(n, wtProgress.page + 1)}/{n}
+            </>
+          ) : (
+            <>
+              <span className="text-[13px] font-semibold text-ink">
+                {n > 0 ? page + 1 : "–"}
+              </span>
+              <span className="px-0.5">/</span>
+              {n > 0 ? n : "–"}
+            </>
+          )
+        }
+      />
 
-      {/* toc popover */}
+      {/* 页目录面板：窗口化渲染（先 200 项，可继续加载） */}
       {tocOpen && (
-        <div className="reader-toc fade-in">
-          <h4>
-            目录 <span className="mono">{entries ? entries.length : "…"}</span>
-            <button className="rbtn" onClick={() => setTocOpen(false)} title="关闭">
+        <div
+          data-reader-hud
+          className="glass hairline absolute right-3 top-16 bottom-24 z-40 flex w-[min(340px,86vw)] flex-col overflow-hidden rounded-xl text-ink shadow-2xl"
+        >
+          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-3">
+            <span className="text-[12px] font-medium">页目录</span>
+            <span className="mono text-[11px] text-ink-muted">
+              {entries ? entries.length : "…"}
+            </span>
+            <button
+              type="button"
+              className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-accent hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+              onClick={() => setTocOpen(false)}
+              aria-label="关闭页目录"
+              title="关闭"
+            >
               <X size={14} />
             </button>
-          </h4>
-          {entriesError ? (
-            <ErrorState message="目录加载失败" onRetry={openToc} />
-          ) : entriesLoading || !entries ? (
-            <PixelPet mode="loading" message="正在加载目录" />
-          ) : entries.length === 0 ? (
-            <PixelPet mode="empty" message="暂无目录" />
-          ) : (
-            entries.map((en) => (
-              <button
-                key={en.index}
-                className={`toc-item${spreadSet.has(en.index) ? " hit" : ""}`}
-                onClick={() => jumpTo(en.index)}
-                title={`跳到第 ${en.index + 1} 页`}
-              >
-                <span className="idx mono">{en.index + 1}</span>
-                <span className="nm">{en.name}</span>
-              </button>
-            ))
-          )}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+            {entriesError ? (
+              <ErrorState message="目录加载失败" onRetry={openToc} />
+            ) : entriesLoading || !entries ? (
+              <PixelPet mode="loading" message="正在加载目录" />
+            ) : entries.length === 0 ? (
+              <PixelPet mode="empty" message="暂无目录" />
+            ) : (
+              <>
+                {entries.slice(0, tocShown).map((en) => (
+                  <button
+                    key={en.index}
+                    type="button"
+                    className={cn(
+                      "flex w-full items-baseline gap-2 rounded-md border border-transparent px-2 py-2 text-left text-[12px] transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+                      spreadSet.has(en.index) && "border-brand/60 bg-accent",
+                    )}
+                    onClick={() => jumpTo(en.index)}
+                    title={`跳到第 ${en.index + 1} 页`}
+                  >
+                    <span className="mono w-9 shrink-0 text-right text-[11px] text-brand">
+                      {en.index + 1}
+                    </span>
+                    <span className="truncate text-ink-muted">{en.name}</span>
+                  </button>
+                ))}
+                {entries.length > tocShown && (
+                  <button
+                    type="button"
+                    className="mx-auto mt-1 flex min-h-8 w-fit items-center justify-center rounded-md border border-hairline px-3 text-[11px] text-ink-muted transition-colors hover:bg-accent hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                    onClick={() => setTocShown((v) => v + 200)}
+                  >
+                    加载更多（剩余 {entries.length - tocShown} 页）
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 
-      {/* settings popover */}
+      {/* 阅读设置面板（方向/版式/缩放；快捷键提示留在底部） */}
       {setOpen && (
-        <div className="reader-set fade-in">
-          <div className="set-row">
-            <span>版式</span>
-            <div className="seg-dark" role="group" aria-label="版式">
+        <div
+          data-reader-hud
+          className="glass hairline absolute bottom-20 left-1/2 z-40 flex w-[min(380px,92vw)] -translate-x-1/2 flex-col gap-3 rounded-xl p-3 text-ink shadow-2xl"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[12px] text-ink-muted">版式</span>
+            <div
+              className="flex items-center gap-0.5 rounded-lg border border-hairline p-0.5"
+              role="group"
+              aria-label="版式"
+            >
               {(wtOn && book?.webtoonReady !== false
                 ? (["single", "double", "webtoon"] as const)
                 : (["single", "double"] as const)
               ).map((m) => (
                 <button
                   key={m}
-                  className={mode === m ? "on" : ""}
+                  type="button"
+                  aria-pressed={mode === m}
+                  className={cn(
+                    "h-8 rounded-md px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+                    mode === m
+                      ? "bg-brand text-white"
+                      : "text-ink-muted hover:bg-accent hover:text-ink",
+                  )}
                   onClick={() => setMode(m)}
                 >
                   {m === "single" ? "单页" : m === "double" ? "双页" : "条漫"}
@@ -1342,29 +1533,49 @@ export default function Reader() {
               ))}
             </div>
           </div>
-          <div className="set-row">
-            <span>翻页方向</span>
-            <div className="seg-dark" role="group" aria-label="翻页方向">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[12px] text-ink-muted">翻页方向</span>
+            <div
+              className="flex items-center gap-0.5 rounded-lg border border-hairline p-0.5"
+              role="group"
+              aria-label="翻页方向"
+            >
               <button
-                className={dirRtl ? "on" : ""}
+                type="button"
+                aria-pressed={dirRtl}
+                className={cn(
+                  "h-8 rounded-md px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+                  dirRtl
+                    ? "bg-brand text-white"
+                    : "text-ink-muted hover:bg-accent hover:text-ink",
+                )}
                 onClick={() => setPrefs((p) => ({ ...p, dir: "rtl" }))}
               >
                 日式右开
               </button>
               <button
-                className={!dirRtl ? "on" : ""}
+                type="button"
+                aria-pressed={!dirRtl}
+                className={cn(
+                  "h-8 rounded-md px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+                  !dirRtl
+                    ? "bg-brand text-white"
+                    : "text-ink-muted hover:bg-accent hover:text-ink",
+                )}
                 onClick={() => setPrefs((p) => ({ ...p, dir: "ltr" }))}
               >
                 西式左开
               </button>
             </div>
           </div>
-          <div className="set-row">
-            <span>
-              缩放 <span className="mono">{Math.round(zoom * 100)}%</span>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[12px] text-ink-muted">
+              缩放{" "}
+              <span className="mono text-ink">{Math.round(zoom * 100)}%</span>
             </span>
             <input
               type="range"
+              className="w-[150px] accent-brand"
               min={MIN_ZOOM}
               max={MAX_ZOOM}
               step={0.1}
@@ -1373,23 +1584,28 @@ export default function Reader() {
               aria-label="缩放"
             />
           </div>
-          <div className="set-hint">
+          <p className="text-[11px] leading-relaxed text-ink-muted">
             ←/→ 翻页（右开时 ← 为下一页）· Space 下一页 · Shift+Space 上一页
             <br />
-            f 单双页切换 · Ctrl+滚轮/双指缩放 · 拖拽平移 · 双击重置 · Esc 返回
-          </div>
+            f 切换版式 · Ctrl+滚轮/双指缩放 · 拖拽平移 · 双击重置 · Esc 返回
+          </p>
         </div>
       )}
 
-      {/* 快捷键速查表(P1,? 呼出) */}
+      {/* 快捷键速查表（? 呼出） */}
       {shortcutsOpen && (
-        <div className="reader-set fade-in">
-          <h4 style={{ marginTop: 0 }}>快捷键速查</h4>
-          <div className="sc-list">
+        <div
+          data-reader-hud
+          className="glass hairline absolute bottom-20 left-1/2 z-40 w-[min(380px,92vw)] -translate-x-1/2 rounded-xl p-3 text-ink shadow-2xl"
+        >
+          <h4 className="mb-2 text-[12px] font-semibold">快捷键速查</h4>
+          <div className="flex flex-col gap-1">
             {READER_SHORTCUTS.map((s) => (
-              <div className="sc-row" key={s.keys}>
-                <span className="mono sc-keys">{s.keys}</span>
-                <span className="sc-action">{s.action}</span>
+              <div key={s.keys} className="flex items-baseline gap-3 text-[12px]">
+                <span className="mono min-w-[128px] shrink-0 font-semibold text-ink">
+                  {s.keys}
+                </span>
+                <span className="text-ink-muted">{s.action}</span>
               </div>
             ))}
           </div>
@@ -1398,6 +1614,7 @@ export default function Reader() {
 
       {showNextChapter && (
         <button
+          data-reader-hud
           className="reader-next-pill"
           type="button"
           onClick={() => void goNextChapter()}
@@ -1422,7 +1639,7 @@ export default function Reader() {
 
       {/* 阶段三:选区结果面板 */}
       {regionMode && (ocrBusy || ocrRes || transBusy || transRes) && (
-        <div className="reader-region fade-in">
+        <div data-reader-hud className="reader-region fade-in">
           <div className="rr-head">
             <span>
               选区 OCR
@@ -1466,7 +1683,7 @@ export default function Reader() {
 
       {/* 条漫自动建议：检测到长条画面且本书未记忆过选择（受实验开关与本书可用性门控） */}
       {wtOn && book?.webtoonReady !== false && wtSuggest && mode !== "webtoon" && (
-        <div className="wt-suggest glass-bar fade-in">
+        <div data-reader-hud className="wt-suggest glass-bar fade-in">
           <span>检测到长条画面，是否切换条漫模式？</span>
           <button
             className="rbtn mono"

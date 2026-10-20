@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BookOpen, CalendarRange, Check, RefreshCw } from "lucide-react";
+import { BookOpen, CalendarRange, Check, RefreshCw, Search } from "lucide-react";
 import { api, type BookInfo, type HeatDay } from "../lib/tauri";
 import { toastErr } from "./Toast";
 
@@ -20,6 +20,9 @@ const RANGE_DAYS: Record<Exclude<RangeKey, "custom">, number> = {
   month: 30,
   all: 365,
 };
+
+/** 章节选集首屏窗口：合集上限 100 话，避免一次渲染全部按钮。 */
+const SERIES_WINDOW = 40;
 
 function todayStr(offset = 0): string {
   const d = new Date();
@@ -48,6 +51,8 @@ export default function BookDetail({ book }: { book: BookInfo }) {
   const [seriesLoading, setSeriesLoading] = useState(false);
   const [seriesError, setSeriesError] = useState<string | null>(null);
   const [seriesTick, setSeriesTick] = useState(0);
+  const [seriesQuery, setSeriesQuery] = useState("");
+  const [seriesVisible, setSeriesVisible] = useState(SERIES_WINDOW);
 
   const days = range === "custom" ? 365 : RANGE_DAYS[range];
 
@@ -111,6 +116,32 @@ export default function BookDetail({ book }: { book: BookInfo }) {
     };
   }, [book.seriesId, book.id, seriesTick]);
 
+  // 切换书籍/合集时重置章节搜索与首屏窗口。
+  useEffect(() => {
+    setSeriesQuery("");
+    setSeriesVisible(SERIES_WINDOW);
+  }, [book.seriesId, book.id]);
+
+  const seriesRows = useMemo(
+    () =>
+      (seriesBooks ?? []).map((chapter, index) => ({
+        chapter,
+        no: chapter.chapterIndex ?? index + 1,
+      })),
+    [seriesBooks],
+  );
+
+  const filteredSeries = useMemo(() => {
+    const q = seriesQuery.trim().toLowerCase();
+    if (!q) return seriesRows;
+    return seriesRows.filter(
+      ({ chapter, no }) =>
+        chapter.title.toLowerCase().includes(q) || String(no).includes(q),
+    );
+  }, [seriesRows, seriesQuery]);
+
+  const shownSeries = filteredSeries.slice(0, seriesVisible);
+
   // 自定义区间在客户端过滤；预设区间直接用后端窗口。
   const ranged = useMemo<HeatDay[]>(() => {
     const rows = log ?? [];
@@ -128,7 +159,8 @@ export default function BookDetail({ book }: { book: BookInfo }) {
     return { total, activeDays, top };
   }, [ranged]);
 
-  const read = Math.min(book.currentPage + 1, book.pageCount);
+  // 统一口径：已读页数 = currentPage（0 = 未读），百分比 = currentPage / pageCount。
+  const read = Math.min(book.currentPage, book.pageCount);
   const remain = Math.max(0, book.pageCount - read);
   const pct =
     book.pageCount > 0 ? Math.min(100, Math.round((read / book.pageCount) * 100)) : 0;
@@ -195,7 +227,7 @@ export default function BookDetail({ book }: { book: BookInfo }) {
           <span className="hero-unit">页</span>
         </div>
         <div className="hero-sub">
-          共 {book.pageCount} 页 · 剩余 {remain} 页 · {rangeLabel}读 {inRange.total} 页
+          已读 {read} / 共 {book.pageCount} 页 · 剩余 {remain} 页 · {rangeLabel}读 {inRange.total} 页
           {inRange.activeDays > 0 ? ` · ${inRange.activeDays} 天有记录` : ""}
         </div>
         <div className="progress-track big">
@@ -226,33 +258,86 @@ export default function BookDetail({ book }: { book: BookInfo }) {
           ) : !seriesBooks || seriesBooks.length === 0 ? (
             <p className="hint">暂无章节数据。</p>
           ) : (
-            <div className="episode-grid">
-              {seriesBooks.map((chapter, index) => {
-                const no = chapter.chapterIndex ?? index + 1;
-                const done =
-                  chapter.pageCount > 0 &&
-                  chapter.currentPage >= chapter.pageCount - 1;
-                const active = chapter.id === book.id;
-                return (
+            <>
+              <div style={{ position: "relative", marginTop: 8 }}>
+                <Search
+                  size={13}
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    left: 10,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: "var(--muted)",
+                    pointerEvents: "none",
+                  }}
+                />
+                <input
+                  className="input mono"
+                  style={{ width: "100%", paddingLeft: 30 }}
+                  value={seriesQuery}
+                  onChange={(e) => {
+                    setSeriesQuery(e.currentTarget.value);
+                    setSeriesVisible(SERIES_WINDOW);
+                  }}
+                  placeholder="搜索章节号或标题…"
+                  aria-label="搜索章节"
+                />
+              </div>
+              {shownSeries.length === 0 ? (
+                <p className="hint">没有匹配的章节。</p>
+              ) : (
+                <div className="episode-grid">
+                  {shownSeries.map(({ chapter, no }) => {
+                    // 完结标记看“是否到达最后一页”（索引 pageCount-1）；
+                    // 进度数字仍严格使用 currentPage / pageCount 口径，两者不混用。
+                    const done =
+                      chapter.pageCount > 0 &&
+                      chapter.currentPage >= chapter.pageCount - 1;
+                    const active = chapter.id === book.id;
+                    return (
+                      <button
+                        key={chapter.id}
+                        type="button"
+                        className={`episode-pill${active ? " active" : ""}${done ? " done" : ""}`}
+                        onClick={() => nav(`/reader/${encodeURIComponent(chapter.id)}`)}
+                        title={chapter.title}
+                      >
+                        <span className="episode-title">
+                          <span className="mono">{String(no).padStart(2, "0")}</span> ·{" "}
+                          {chapter.title}
+                        </span>
+                        <span className="episode-meta">
+                          <span className="mono">{chapter.pageCount} 页</span>
+                          {done && <Check size={12} aria-label="已读完" />}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginTop: 8,
+                }}
+              >
+                <p className="hint mono" style={{ margin: 0 }}>
+                  显示 {shownSeries.length} / {filteredSeries.length} 话
+                </p>
+                {filteredSeries.length > seriesVisible && (
                   <button
-                    key={chapter.id}
-                    type="button"
-                    className={`episode-pill${active ? " active" : ""}${done ? " done" : ""}`}
-                    onClick={() => nav(`/reader/${encodeURIComponent(chapter.id)}`)}
-                    title={chapter.title}
+                    className="btn"
+                    style={{ marginLeft: "auto" }}
+                    onClick={() => setSeriesVisible(filteredSeries.length)}
                   >
-                    <span className="episode-title">
-                      <span className="mono">{String(no).padStart(2, "0")}</span> ·{" "}
-                      {chapter.title}
-                    </span>
-                    <span className="episode-meta">
-                      <span className="mono">{chapter.pageCount} 页</span>
-                      {done && <Check size={12} aria-label="已读完" />}
-                    </span>
+                    显示全部（剩余 {filteredSeries.length - seriesVisible} 话）
                   </button>
-                );
-              })}
-            </div>
+                )}
+              </div>
+            </>
           )}
         </>
       )}

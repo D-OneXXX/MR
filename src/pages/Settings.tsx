@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, type MemoryStats, type Settings, type TransStats } from "../lib/tauri";
+import { writeOnlineLastTest } from "@/lib/onlineLastTest";
 import { READER_SHORTCUTS } from "../components/Reader/shortcuts";
 import ErrorState from "../components/ErrorState";
 import { toast, toastErr, Toaster } from "../components/Toast";
@@ -197,17 +198,20 @@ export default function SettingsPage() {
     setForm((f) => ({ ...f, [k]: v }));
 
   const testOnline = async () => {
-    if (!onlineTestUrl.trim()) {
+    const target = onlineTestUrl.trim();
+    if (!target) {
       toast("请填写清单或图集 URL");
       return;
     }
     setTestingOnline(true);
     setOnlineProbe(null);
     try {
-      const p = await api.testOnlineConnection(onlineTestUrl.trim());
+      const p = await api.testOnlineConnection(target);
+      writeOnlineLastTest({ ok: p.ok, url: target });
       setOnlineProbe(`${p.title} · ${p.pageCount} 页 · ${p.elapsedMs} ms`);
       if (!p.ok) toast(p.message || "清单没有可读页面");
     } catch (e) {
+      writeOnlineLastTest({ ok: false, url: target });
       toastErr("test_online_connection", e);
     } finally {
       setTestingOnline(false);
@@ -265,6 +269,7 @@ export default function SettingsPage() {
       } catch {
         /* 忽略 */
       }
+      window.dispatchEvent(new Event("mr-settings-updated"));
       toast("设置已保存");
     } catch (e) {
       toastErr("set_settings", e);

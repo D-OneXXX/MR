@@ -4,6 +4,7 @@ import { HashRouter } from "react-router-dom";
 import App from "./App";
 import "./theme.css";
 import "./components/ui.css";
+import "./v3.css";
 
 // v2「流体」设计语言：深色沉浸为默认。一次性迁移老用户的亮色设置，
 // 之后用户仍可自由切换（选择照常持久化）。

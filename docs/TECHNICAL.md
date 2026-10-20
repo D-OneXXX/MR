@@ -1,8 +1,8 @@
 # MangaReader 技术文档
 
-> 适用代码基线：`2a8a248`（2026-10-19）  
-> UI 版本：`v0.2.0`（`src/App.tsx`）；npm/Cargo/Tauri 清单版本：`0.1.0`  
-> 文档定位：面向接手开发、架构评审与排障的工程说明，不替代用户手册。  
+> 适用代码基线：`2a8a248`（2026-10-19）
+> UI 版本：`v0.6.0`（`src/components/shell/AppShell.tsx`）；npm/Cargo/Tauri 清单版本：`0.6.0`
+> 文档定位：面向接手开发、架构评审与排障的工程说明，不替代用户手册。
 > 相关文档：[README](../README.md)、[Sidecar 接口契约](sidecar-api.md)、[真机冒烟清单](smoke-test.md)、[2026-10-19 冒烟报告](smoke-test-report-2026-10-19.md)、[在线直读设计](../superpowers/specs/2026-10-19-online-direct-reader-design.md)。
 
 ## 目录
@@ -195,7 +195,7 @@ manga-reader-tauri/
 │   ├── App.tsx                   # 壳：图标轨 + 路由 + 实验开关守卫
 │   ├── lib/tauri.ts              # 冻结的 invoke 契约 + 设置镜像
 │   ├── pages/
-│   │   ├── Library.tsx           # 封面流、导入、移除/删除、详情 sheet
+│   │   ├── Library.tsx           # 封面流、导入、移除/删除、宽屏 Inspector / 窄屏详情 Sheet
 │   │   ├── Reader.tsx            # 单/双页阅读器 + 选区翻译 + 条漫入口
 │   │   ├── Workbench.tsx         # 两步翻译工作台 + 批量队列 + 术语表
 │   │   ├── DataView.tsx          # 数据看板
@@ -711,7 +711,8 @@ stateDiagram-v2
 
 - `main.tsx`：HashRouter、深色默认、一次性 `mr-theme-v2` 迁移；
 - `App.tsx`：
-  - 阅读器路由 `/reader/:id` 走**无壳全屏**；
+  - 根节点挂 `WorkspaceProvider`（页签与轻量快照，见 7.7）；
+  - 阅读器路由 `/reader/:id` 走**无壳全屏**，`Reader` 以 `key=bookId` 挂载（切页签强制卸载旧实例）；
   - 其余路由走 `TitleBar + 左侧图标轨 + 主内容`；
   - 实验性翻译关闭时，`/workbench`、`/glossary` 显示“实验性功能未开启”守卫页；
   - 所有路由包 `.view-fade`（260ms 淡入）。
@@ -720,7 +721,7 @@ stateDiagram-v2
 
 | 路由 | 页面 | 说明 |
 |---|---|---|
-| `/` | `Library` | 封面流、导入、URL 直读、移除/删除、详情 sheet |
+| `/` | `Library` | 封面流、导入、URL 直读、移除/删除、宽屏常驻 Inspector / 窄屏详情 Sheet |
 | `/reader/:id` | `Reader` | 全屏沉浸阅读器 |
 | `/data` | `DataView` | 统计看板 |
 | `/workbench` | `Workbench` | 翻译工作台（需实验开关） |
@@ -733,8 +734,8 @@ stateDiagram-v2
 
 | 页面 | 关键行为 |
 |---|---|
-| Library | 搜索防抖 250ms；文件/文件夹导入；全窗口拖放；单击封面打开 `DetailSheet`；双击进阅读器；多选移除/删除；批量任务横条 3s 轮询；实验开关开启时显示「URL 直读」按钮与 `OnlineImportDialog`（测试/仅加入书库/解析并阅读）；在线书显示 URL 徽标、「彻底移除…」与不删远程源的确认文案 |
-| Reader | 单/双页/条漫；缩放 0.5–4；拖拽平移；双击重置；目录；阅读设置；快捷键；选区 OCR/翻译；3s 控制条自动隐藏；进度 500ms 防抖保存；`webtoonReady=false` 时禁用条漫按钮与自动建议；在线书 idle 预取只从当前页 +2 |
+| Library | 搜索防抖 250ms；文件/文件夹导入；全窗口拖放；≥1100px 为「画布 + 右侧 Inspector」（单击选中、双击阅读，窄屏单击打开 Sheet，跨断点不自动弹）；来源筛选（全部/本地/在线）；Inspector 复用阅读统计并含窗口化页目录（先 60 项 + 加载更多）；多选移除/删除；批量任务横条 3s 轮询；实验开关开启时显示「URL 直读」按钮与 `OnlineImportDialog`（测试/仅加入书库/解析并阅读）；在线书显示 URL 徽标、「彻底移除…」与不删远程源的确认文案 |
+| Reader | 单/双页/条漫；缩放 0.5–4；拖拽平移；双击重置；页目录；阅读设置；快捷键；选区 OCR/翻译；顶部 HUD + 底部 Dock 空闲 1500ms 自动隐藏（悬停/焦点/弹层锁定，条漫滚动立即隐藏）；进度 500ms 防抖保存并在页签切换时 flush；多页签（最多 5 个）；`webtoonReady=false` 时禁用条漫按钮与自动建议；在线书 idle 预取只从当前页 +2 |
 | Workbench | 四个 provider 下拉；sidecar 健康；载入页面；检测+OCR；删框；翻译+擦除+嵌字；批量队列；术语表；2s 任务轮询；在线书按 bookId 下载原图 |
 | DataView | 四格统计、Top3、26 周热力图、近 14 天堆叠趋势；无图表库 |
 | Glossary | 按书维护术语；重复原文覆盖；删除二次确认 |
@@ -768,8 +769,8 @@ stateDiagram-v2
 - 单指拖拽：zoom>1 时平移；
 - 双击：重置 zoom=1、pan=0；
 - 单击画布空白：切换控制条显隐；
-- 控制条 3s 自动隐藏；目录/设置/快捷键/选区面板打开时锁定；
-- 快捷键：←/→、Space、Shift+Space、f、o、Ctrl+滚轮、拖拽、双击、Home/End、Esc、?。
+- HUD 空闲 1500ms 自动隐藏；指针悬停、焦点在 HUD 内、目录/设置/快捷键/选区/页签菜单打开时锁定；条漫开始滚动立即隐藏；顶部/底部边缘、指针移动、按键、触控点击唤醒；隐藏时 `inert` 不可聚焦；
+- 快捷键：←/→、Space、Shift+Space、f、o、Ctrl+1…9（页签）、Ctrl+W（关闭页签）、Ctrl+滚轮、拖拽、双击、Home/End、Esc、?。
 
 #### 选区翻译
 
@@ -786,7 +787,8 @@ stateDiagram-v2
 
 - 分页：页码变化 500ms 后 `set_progress(bookId, page)`；
 - 条漫：`WebtoonView` 内 400ms 节流，提交 `(pct, page)`；
-- 卸载阅读器时 `clear_pages` 清空 L1 页缓存；
+- 切换/关闭页签时 Reader 卸载立即 flush 分页进度；条漫由 Webtoon 卸载钩子提交；
+- `clear_pages` 只在关闭最后一个阅读页签时调用（不再每次退出阅读器清 L1）；
 - 后端只累计前进页数，回翻不计入阅读统计。
 
 ### 7.4 条漫视图（`Webtoon.tsx`）
@@ -816,20 +818,37 @@ stateDiagram-v2
 | `mr-reader-mode` | 全局版式偏好 |
 | `mr-reader-dir` | 翻页方向 |
 | `mr-wt-<bookId>` | 按书记忆的版式选择 |
+| `mr-inspector-width` | Inspector 宽度（280–420） |
+| `mr-inspector-collapsed` | Inspector 折叠状态 |
+| `mr-online-last-test` | 最近一次在线连通性测试（仅 host/时间/成败） |
+| `mr-tabs` | `"0"` = 回退单页签模式（默认启用页签） |
 
 `setSettings` 成功后更新镜像并广播 `mr-settings-changed`；组件订阅后同步状态。
 
-### 7.6 设计系统（流体 v2）
+### 7.6 设计系统（v3 暗色玻璃座舱）
 
-`theme.css` 定义 token：
+技术栈：Tailwind v4（Vite 插件）+ shadcn/Base UI；`src/v3.css` 定义语义 token，经 `@theme inline` 映射为工具类；`theme.css` 的旧 token 保留为兼容桥。
 
-- 背景 `#0B0B0D`、卡片 `#141417`、电光蓝 `#4D7CFE`；
-- 玻璃 `rgba(255,255,255,0.06)` + `blur(12px)`；
-- 圆角：卡片 16px、封面 12px；
-- 过渡 `150ms`，视图 `260ms cubic-bezier(0.22,1,0.36,1)`；
-- 数字/页码/统计使用等宽字体（Geist Mono 回退）；
-- 热力图绿色阶；趋势堆叠仅用蓝系深浅 + 灰（令牌 `--trend-*`）；
-- 深色为默认，亮色为次级；主题点选即生效，保存后持久化。
+- 语义色：`shell / canvas / reader / surface / surface-solid / hairline / ink / ink-muted / brand / warning / danger / success`；
+- 阅读画布恒为 `#09090b`（不透明，亮色主题同样）；
+- 玻璃只用于 HUD/Inspector/抽屉/弹层，`blur(var(--v3-blur))`：暗色 12px、亮色 0（实色）；
+- 统一描边 `1px solid hairline` + 顶部内高光；
+- 封面卡：3:4、12px 圆角、hairline 内描边（`ring-1 ring-inset` token）、底边 2px 进度；
+- 数字/页码/统计继续使用等宽字体（`.mono`）；
+- 视图过渡 `.view-fade` 260ms；HUD 显隐 150ms transform/opacity；`prefers-reduced-motion` 已覆盖 HUD/弹层/详情动画；
+- 深色为默认，亮色为次级；主题点选即生效并持久化。
+
+设计记录：[`docs/superpowers/specs/2026-10-20-v3-cockpit-design.md`](superpowers/specs/2026-10-20-v3-cockpit-design.md)。
+
+### 7.7 阅读工作区（页签）
+
+- 固定「书库」页签 + 最多 5 个漫画页签，同一本书只允许一个页签；
+- `App.tsx` 用 `WorkspaceProvider` 管理页签与快照；`Reader key={bookId}` 保证切页签时卸载旧实例；
+- 快照只存页码、`scrollPct`、版式、方向（内存态，不落盘）；
+- 切换/关闭前 flush 分页进度；条漫由 Webtoon 卸载时提交；
+- `clear_pages` 在关闭最后一个阅读页签时调用；
+- 快捷键 `Ctrl+1` 书库、`Ctrl+2…6` 切页签、`Ctrl+W` 关闭当前；中键关闭；
+- 下一话替换当前页签；`localStorage["mr-tabs"]="0"` 可回退单页签模式。
 
 ---
 
@@ -940,7 +959,7 @@ node scripts\verify-region.mjs
 npm run build
 ```
 
-当前基线：`cargo test` **111 项全部通过**（109 个库单元测试 + 2 个集成测试），类型检查与两个前端脚本通过。
+当前基线：`cargo test` **171 项全部通过**（169 个库单元测试 + 1 个 e2e + 1 个内存预算测试），`tsc` 与两个前端脚本通过。
 
 覆盖重点：
 
@@ -1036,7 +1055,6 @@ npm run build
 | P2 | 载入页面无预览 | 图片仅在检测完成后渲染 | `page` 就绪即显示，框图层叠加 |
 | P3 | 工作台默认选书会变 | 书库刷新/排序变化后可能切到另一本 | 首次选默认，后续保留当前选择 |
 | P3 | 在线清单刷新后的在途缓存竞态 | 在途预取/后台渲染无法撤回，旧页可能在新清单失效后又写回 L1/L2 | 重新进入阅读会按新源重建；后续引入 generation key |
-| P3 | 版本号不一致 | UI `v0.2.0`；npm/Cargo/Tauri `0.1.0` | 统一版本来源 |
 | 信息 | 在线直读边界 | 不支持 EH/ExHentai/JMComic、分页查看器（`/g/`、`/s/`）、主图推断、切条反混淆、自动登录/Cookie jar、JS 渲染 | 超出本阶段范围需另立项 |
 | 信息 | OPDS/Komga/Kavita 未实现 | 规划到 1.1 | 当前仅支持 JSON 清单与单页 HTML 直铺图集 |
 | 信息 | 测试期间数据库被外部写入 | 495 页书恢复、进度 +9、阅读日志 +10，非本轮自动化 | 冒烟使用独立数据目录/profile |

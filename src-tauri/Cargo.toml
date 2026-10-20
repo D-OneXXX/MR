@@ -1,6 +1,6 @@
 [package]
 name = "manga-reader-tauri"
-version = "0.1.0"
+version = "0.6.0"
 description = "Local-first manga reader (Tauri 2 + React)"
 authors = ["manga-reader"]
 edition = "2021"

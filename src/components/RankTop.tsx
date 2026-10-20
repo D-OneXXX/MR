@@ -8,7 +8,7 @@ interface Props {
 /** 系列 Top3（按累计阅读页数）：序号圆徽章 + 名称 + 右对齐加粗百分比。 */
 export default function RankTop({ books, onSelect }: Props) {
   const ranked = books
-    .map((b) => ({ book: b, read: Math.min(b.currentPage + 1, b.pageCount) }))
+    .map((b) => ({ book: b, read: Math.min(b.currentPage, b.pageCount) }))
     .filter((r) => r.read > 0)
     .sort((a, b) => b.read - a.read)
     .slice(0, 3);

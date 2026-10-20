@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BookOpen, CalendarRange, RefreshCw } from "lucide-react";
+import { BookOpen, CalendarRange, Check, RefreshCw } from "lucide-react";
 import { api, type BookInfo, type HeatDay } from "../lib/tauri";
 import { toastErr } from "./Toast";
 
@@ -44,6 +44,10 @@ export default function BookDetail({ book }: { book: BookInfo }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [seriesBooks, setSeriesBooks] = useState<BookInfo[] | null>(null);
+  const [seriesLoading, setSeriesLoading] = useState(false);
+  const [seriesError, setSeriesError] = useState<string | null>(null);
+  const [seriesTick, setSeriesTick] = useState(0);
 
   const days = range === "custom" ? 365 : RANGE_DAYS[range];
 
@@ -72,6 +76,41 @@ export default function BookDetail({ book }: { book: BookInfo }) {
     };
   }, [book, days, tick]);
 
+  useEffect(() => {
+    if (!book.seriesId) {
+      setSeriesBooks(null);
+      setSeriesError(null);
+      setSeriesLoading(false);
+      return;
+    }
+    let alive = true;
+    setSeriesBooks(null);
+    setSeriesLoading(true);
+    setSeriesError(null);
+    api.getSeriesBooks(book.seriesId).then(
+      (list) => {
+        if (!alive) return;
+        setSeriesBooks(
+          [...list].sort(
+            (a, b) =>
+              (a.chapterIndex ?? 0) - (b.chapterIndex ?? 0) ||
+              a.title.localeCompare(b.title, "zh"),
+          ),
+        );
+        setSeriesLoading(false);
+      },
+      (e) => {
+        if (!alive) return;
+        setSeriesBooks([]);
+        setSeriesError(String(e));
+        setSeriesLoading(false);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [book.seriesId, book.id, seriesTick]);
+
   // 自定义区间在客户端过滤；预设区间直接用后端窗口。
   const ranged = useMemo<HeatDay[]>(() => {
     const rows = log ?? [];
@@ -95,6 +134,12 @@ export default function BookDetail({ book }: { book: BookInfo }) {
     book.pageCount > 0 ? Math.min(100, Math.round((read / book.pageCount) * 100)) : 0;
   const rangeLabel =
     range === "custom" ? `${from || "…"} ~ ${to || "…"}` : RANGE_TABS.find((t) => t.key === range)?.label ?? "";
+  const currentSeriesIndex =
+    seriesBooks?.findIndex((item) => item.id === book.id) ?? -1;
+  const chapterNo =
+    (currentSeriesIndex >= 0 ? seriesBooks?.[currentSeriesIndex]?.chapterIndex : null) ??
+    book.chapterIndex ??
+    (currentSeriesIndex >= 0 ? currentSeriesIndex + 1 : null);
 
   return (
     <div>
@@ -160,6 +205,57 @@ export default function BookDetail({ book }: { book: BookInfo }) {
           <span className="mono">{pct}%</span>
         </div>
       </div>
+
+      {book.seriesId && (
+        <>
+          <h4 style={{ margin: "18px 0 8px", fontSize: 13 }}>
+            章节选集（共{" "}
+            <span className="mono">{seriesBooks ? seriesBooks.length : "…"}</span> 话）
+          </h4>
+          {seriesLoading ? (
+            <p className="hint">正在加载章节列表…</p>
+          ) : seriesError ? (
+            <div className="field-row" style={{ alignItems: "center" }}>
+              <p className="hint" style={{ flex: 1, margin: 0, color: "var(--accent)" }}>
+                章节列表加载失败：{seriesError}
+              </p>
+              <button className="btn" onClick={() => setSeriesTick((v) => v + 1)}>
+                重试
+              </button>
+            </div>
+          ) : !seriesBooks || seriesBooks.length === 0 ? (
+            <p className="hint">暂无章节数据。</p>
+          ) : (
+            <div className="episode-grid">
+              {seriesBooks.map((chapter, index) => {
+                const no = chapter.chapterIndex ?? index + 1;
+                const done =
+                  chapter.pageCount > 0 &&
+                  chapter.currentPage >= chapter.pageCount - 1;
+                const active = chapter.id === book.id;
+                return (
+                  <button
+                    key={chapter.id}
+                    type="button"
+                    className={`episode-pill${active ? " active" : ""}${done ? " done" : ""}`}
+                    onClick={() => nav(`/reader/${encodeURIComponent(chapter.id)}`)}
+                    title={chapter.title}
+                  >
+                    <span className="episode-title">
+                      <span className="mono">{String(no).padStart(2, "0")}</span> ·{" "}
+                      {chapter.title}
+                    </span>
+                    <span className="episode-meta">
+                      <span className="mono">{chapter.pageCount} 页</span>
+                      {done && <Check size={12} aria-label="已读完" />}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
 
       <h4 style={{ margin: "18px 0 8px", fontSize: 13 }}>
         <CalendarRange size={13} style={{ verticalAlign: -2, marginRight: 6 }} />
@@ -228,6 +324,11 @@ export default function BookDetail({ book }: { book: BookInfo }) {
           onClick={() => nav(`/reader/${encodeURIComponent(book.id)}`)}
         >
           <BookOpen size={14} /> {book.currentPage > 0 ? "继续阅读" : "开始阅读"}
+          {book.seriesId && chapterNo != null && (
+            <>
+              {" "}第 <span className="mono">{chapterNo}</span> 话
+            </>
+          )}
         </button>
       </div>
     </div>

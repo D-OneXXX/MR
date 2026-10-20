@@ -16,6 +16,10 @@ export interface BookInfo {
   webtoonReady: boolean;
   /** 同一系列的标识；用于下一话解析。 */
   seriesId?: string | null;
+  /** 系列标题。 */
+  seriesTitle?: string | null;
+  /** 章节序号。 */
+  chapterIndex?: number | null;
   /** 下一话来源 URL；无则 null/缺省。 */
   nextUrl?: string | null;
 }
@@ -274,12 +278,14 @@ export interface BrowserDownloadEvent {
   bookId: string | null;
 }
 
-/** 外部浏览器协同回传信息（与后端 HandoffSession 一致）。 */
-export interface BrowserHandoff {
+/** 外部浏览器配对桥接状态（与后端 HandoffStatus 一致）。 */
+export interface HandoffStatus {
+  active: boolean;
   port: number;
-  token: string;
+  pairingToken: string;
   callbackUrl: string;
-  bookmarklet: string;
+  receivedChapters: number;
+  allowSessionHeaders: boolean;
   script: string;
 }
 
@@ -404,15 +410,19 @@ export const api = {
   // 手动图片 URL 列表入库。
   importResolvedPages: (url: string, title: string, pageUrls: string[]) =>
     invoke<BookInfo>("import_resolved_pages", { url, title, pageUrls }),
-  // 外部系统浏览器协同导入：长驻配对，结果经 online-handoff-imported 回传。
-  startBrowserHandoff: (url: string) =>
-    invoke<BrowserHandoff>("start_browser_handoff", { targetUrl: url }),
+  // 外部系统浏览器配对桥接：长驻监听，结果经 online-handoff-imported 回传。
+  startBrowserHandoff: (allowSessionHeaders: boolean) =>
+    invoke<HandoffStatus>("start_browser_handoff", { allowSessionHeaders }),
   stopBrowserHandoff: () => invoke<void>("stop_browser_handoff"),
-  // 下一话 / 多本批量导入。
+  getBrowserHandoffStatus: () =>
+    invoke<HandoffStatus>("get_browser_handoff_status"),
+  // 多话合集 / 系列 / 下一话。
+  resolveOnlineBatch: (payloadJson: string) =>
+    invoke<BookInfo[]>("resolve_online_batch", { payloadJson }),
+  getSeriesBooks: (seriesId: string) =>
+    invoke<BookInfo[]>("get_series_books", { seriesId }),
   getNextBook: (bookId: string) =>
     invoke<BookInfo | null>("get_next_book", { bookId }),
-  importOnlineBatch: (payloadJson: string) =>
-    invoke<BookInfo[]>("import_online_batch", { payloadJson }),
   // 会话级在线请求头（仅内存，不落库）。
   getSessionOnlineHeaders: () =>
     invoke<string | null>("get_session_online_headers"),

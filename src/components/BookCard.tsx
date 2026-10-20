@@ -12,6 +12,8 @@ interface Props {
   checked?: boolean;
   onToggleCheck?: (bookId: string) => void;
   onContextMenu?: (e: React.MouseEvent, bookId: string) => void;
+  /** 聚合卡片的同系列总话数。 */
+  seriesCount?: number;
 }
 
 /** 封面卡片（流体 v2）：封面是主角；hover 浮起 4px + 底部标题浮现；12px 圆角。 */
@@ -23,8 +25,10 @@ export default function BookCard({
   checked,
   onToggleCheck,
   onContextMenu,
+  seriesCount,
 }: Props) {
   const [cover, setCover] = useState<string | null>(null);
+  const isSeries = !!book.seriesId && (seriesCount ?? 1) > 1;
 
   useEffect(() => {
     let alive = true;
@@ -58,7 +62,7 @@ export default function BookCard({
 
   return (
     <div
-      className={`book-card${selectMode ? " selmode" : ""}${checked ? " sel" : ""}`}
+      className={`book-card${selectMode ? " selmode" : ""}${checked ? " sel" : ""}${isSeries ? " book-card-series" : ""}`}
       role="button"
       tabIndex={0}
       title={`${book.title}（单击查看详情，双击进入阅读；多选模式下单击勾选）`}
@@ -98,6 +102,9 @@ export default function BookCard({
         <div className="book-cover-fallback">
           <BookOpen size={28} strokeWidth={1.5} />
         </div>
+      )}
+      {isSeries && (
+        <span className="book-series-badge mono">合集 · {seriesCount} 话</span>
       )}
       {book.sourceType !== "local" && (
         <span className="book-source-badge mono">URL</span>

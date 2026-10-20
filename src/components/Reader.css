@@ -242,16 +242,6 @@
 .rbtn:disabled { opacity: 0.28; cursor: default; }
 .rbtn:disabled:hover { border-color: transparent; background: transparent; }
 .rbtn.on { border-color: #7dd3fc; color: #7dd3fc; }
-.rbtn-next {
-  padding: 6px 10px;
-  border-color: rgba(125, 211, 252, 0.55);
-  background: rgba(125, 211, 252, 0.14);
-  color: #7dd3fc;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.rbtn-next:hover { border-color: #7dd3fc; background: rgba(125, 211, 252, 0.24); }
 
 /* TOC + settings popovers */
 .reader-toc {

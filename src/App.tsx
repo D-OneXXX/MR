@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
   BarChart3,
@@ -28,6 +29,8 @@ import Status from "./pages/Status";
 import DataView from "./pages/DataView";
 import Browser from "./pages/Browser";
 import TitleBar from "./components/TitleBar";
+import { LIBRARY_REFRESH_EVENT } from "./components/OnlineImportDialog";
+import { toast } from "./components/Toast";
 
 const VERSION = "v0.2.0";
 
@@ -62,6 +65,9 @@ function Shell() {
   const [theme, setTheme] = useState<"light" | "dark">(
     document.documentElement.dataset.theme === "light" ? "light" : "dark",
   );
+  const [libraryBadge, setLibraryBadge] = useState(0);
+  const pathRef = useRef(loc.pathname);
+  pathRef.current = loc.pathname;
 
   useEffect(() => {
     api
@@ -91,6 +97,41 @@ function Shell() {
     return () => {
       alive = false;
     };
+  }, [loc.pathname]);
+
+  // 全局接收配对回传：Toast 始终提示；不在书库页时在图标轨显示未读角标。
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen<BookInfo[]>("online-handoff-imported", (event) => {
+      if (disposed) return;
+      const books = Array.isArray(event.payload) ? event.payload : [];
+      if (books.length === 0) return;
+      const title = books[0]?.title ?? "未命名";
+      toast(
+        books.length > 1
+          ? `已接收《${title}》等 ${books.length} 话`
+          : `已接收《${title}》`,
+      );
+      if (pathRef.current !== "/") {
+        setLibraryBadge((count) => count + books.length);
+      } else {
+        window.dispatchEvent(new Event(LIBRARY_REFRESH_EVENT));
+      }
+    })
+      .then((off) => {
+        if (disposed) off();
+        else unlisten = off;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (loc.pathname === "/") setLibraryBadge(0);
   }, [loc.pathname]);
 
   const toggleTheme = async () => {
@@ -136,8 +177,20 @@ function Shell() {
       <aside className="rail">
         <div className="rail-group">
           <div className="rail-group-label">常规</div>
-          <NavLink to="/" end className={railOn}>
-            <LibraryIcon size={17} />
+          <NavLink
+            to="/"
+            end
+            className={railOn}
+            onClick={() => setLibraryBadge(0)}
+          >
+            <span className="rail-icon-wrap">
+              <LibraryIcon size={17} />
+              {libraryBadge > 0 && (
+                <span className="rail-badge mono">
+                  {libraryBadge > 99 ? "99+" : libraryBadge}
+                </span>
+              )}
+            </span>
             <span className="rail-label">书库</span>
           </NavLink>
           <button

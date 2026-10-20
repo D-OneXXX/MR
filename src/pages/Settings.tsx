@@ -111,6 +111,31 @@ export default function SettingsPage() {
 
   useEffect(load, []);
 
+  // 内存凭据可能在页面停留期间被改写（协同回传脚本带 MR_SESSION_HEADERS 时会写入后端内存），
+  // 因此重新采样一次，保证「当前使用会话临时请求头」提示与「立即清空内存凭据」按钮的可用态是实时的。
+  const refreshSessionState = () => {
+    api
+      .getSessionOnlineHeaders()
+      .then((session) => {
+        const active = typeof session === "string" && session.trim().length > 0;
+        setSessionActive(active);
+        setSessionHeaders(active);
+      })
+      .catch(() => {});
+  };
+  useEffect(() => {
+    const onFocus = () => refreshSessionState();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshSessionState();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
   // 重新生成缩略图：清空封面缓存，重进书库自动重建。
   const onRegenThumbs = async () => {
     setRegenThumbs(true);
@@ -204,6 +229,17 @@ export default function SettingsPage() {
       toastErr("detect_system_proxy", e);
     } finally {
       setDetectingProxy(false);
+    }
+  };
+
+  const onClearMemoryHeaders = async () => {
+    try {
+      await api.clearSessionOnlineHeaders();
+      set("onlineHeaders", "");
+      setSessionActive(false);
+      toast("已清空内存凭据");
+    } catch (e) {
+      toastErr("clear_session_online_headers", e);
     }
   };
 
@@ -668,17 +704,43 @@ export default function SettingsPage() {
                   当前使用会话临时请求头（未保存，退出应用即清除）
                 </span>
               )}
-              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13 }}>
-                <input
-                  type="checkbox"
-                  checked={sessionHeaders}
-                  onChange={(e) => setSessionHeaders(e.currentTarget.checked)}
-                  disabled={saving}
-                  style={{ marginTop: 2 }}
-                />
-                <span>仅保存在内存中（退出应用即清除，不写入本地数据库）</span>
-              </label>
-              <span className="hint">勾选或取消后点击「保存设置」生效。</span>
+              <div className="field">
+                <span>存储模式</span>
+                <div className="seg" role="group" aria-label="请求头存储模式">
+                  <button
+                    className={sessionHeaders ? "on" : ""}
+                    onClick={() => setSessionHeaders(true)}
+                    disabled={saving}
+                  >
+                    仅驻留内存（退出即焚）
+                  </button>
+                  <button
+                    className={!sessionHeaders ? "on" : ""}
+                    onClick={() => setSessionHeaders(false)}
+                    disabled={saving}
+                  >
+                    持久化到本地库
+                  </button>
+                </div>
+                <span className="hint">
+                  仅驻留内存：不写入本地数据库，退出应用即清除。
+                </span>
+                <span className="hint">切换后点击「保存设置」生效。</span>
+                <div className="field-row" style={{ alignItems: "center" }}>
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => void onClearMemoryHeaders()}
+                    disabled={!sessionActive || saving}
+                    title="立即清除后端内存中的临时请求头"
+                  >
+                    <Trash2 size={14} /> 立即清空内存凭据
+                  </button>
+                  <span className="hint" style={{ alignSelf: "center" }}>
+                    仅清除内存副本；清空后如需继续使用请重新填写并保存。
+                  </span>
+                </div>
+              </div>
               <span className="hint">
                 协同导入时脚本里的 MR_SESSION_HEADERS 也只进内存，退出即焚、不落盘。
               </span>

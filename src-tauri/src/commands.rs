@@ -63,6 +63,8 @@ fn to_book_info(r: db::BookRow) -> BookInfo {
         source_type: r.source_type,
         webtoon_ready,
         series_id: stored.as_ref().and_then(|m| m.series_id.clone()),
+        series_title: stored.as_ref().and_then(|m| m.series_title.clone()),
+        chapter_index: stored.as_ref().and_then(|m| m.chapter_index),
         next_url: stored.and_then(|m| m.next_url),
     }
 }
@@ -216,6 +218,33 @@ fn get_next_book_impl(
         }
     };
     Ok(next.map(to_book_info))
+}
+
+fn get_series_books_impl(
+    conn: &rusqlite::Connection,
+    series_id: &str,
+) -> Result<Vec<BookInfo>, BackendError> {
+    if series_id.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut rows = Vec::new();
+    for book in db::list_books(conn, None)? {
+        let Ok(meta) = serde_json::from_str::<crate::online::StoredMeta>(&book.meta_json) else {
+            continue;
+        };
+        if meta.series_id.as_deref() == Some(series_id) {
+            rows.push((meta.chapter_index, book));
+        }
+    }
+    rows.sort_by(|(a_index, a), (b_index, b)| {
+        a_index
+            .unwrap_or(u32::MAX)
+            .cmp(&b_index.unwrap_or(u32::MAX))
+            .then_with(|| natural_cmp(&a.title, &b.title))
+            .then_with(|| a.updated_at.cmp(&b.updated_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    Ok(rows.into_iter().map(|(_, row)| to_book_info(row)).collect())
 }
 
 /// 从文件/目录名推导书名（去扩展名）。
@@ -586,6 +615,16 @@ pub async fn get_next_book(
     state
         .db
         .with(|conn| get_next_book_impl(conn, &book_id).map_err(err))
+}
+
+#[tauri::command]
+pub async fn get_series_books(
+    state: State<'_, Arc<AppState>>,
+    series_id: String,
+) -> Result<Vec<BookInfo>, String> {
+    state
+        .db
+        .with(|conn| get_series_books_impl(conn, &series_id).map_err(err))
 }
 
 #[tauri::command]
@@ -1403,6 +1442,8 @@ pub(crate) fn ingest_resolved_batch(
                 }
                 let mut info = to_book_info(row);
                 info.series_id = meta.series_id.clone();
+                info.series_title = meta.series_title.clone();
+                info.chapter_index = meta.chapter_index;
                 info.next_url = meta.next_url.clone();
                 books.push(info);
             }
@@ -1488,7 +1529,7 @@ pub async fn import_resolved_pages(
 }
 
 #[tauri::command]
-pub async fn import_online_batch(
+pub async fn resolve_online_batch(
     state: State<'_, Arc<AppState>>,
     payload_json: String,
 ) -> Result<Vec<BookInfo>, String> {
@@ -1915,6 +1956,8 @@ mod tests {
             fetched_at: "2026-10-19 00:00:00".to_string(),
             pages,
             series_id: None,
+            series_title: None,
+            chapter_index: None,
             next_url: None,
         };
         crate::online::direct::OnlineBookMeta {
@@ -1924,6 +1967,8 @@ mod tests {
             page_count: stored.pages.len(),
             meta_json: serde_json::to_string(&stored).expect("序列化 StoredMeta"),
             series_id: None,
+            series_title: None,
+            chapter_index: None,
             next_url: None,
         }
     }
@@ -2113,8 +2158,11 @@ mod tests {
             &url::Url::parse(canonical).unwrap(),
             title,
             pages(1),
-            series_id.map(str::to_string),
-            next_url.map(str::to_string),
+            crate::online::direct::MetaLinks {
+                series_id: series_id.map(str::to_string),
+                next_url: next_url.map(str::to_string),
+                ..crate::online::direct::MetaLinks::default()
+            },
         )
         .unwrap()
     }
@@ -2211,10 +2259,75 @@ mod tests {
             .unwrap();
     }
 
+    fn insert_series_book(
+        st: &AppState,
+        canonical: &str,
+        title: &str,
+        series_id: &str,
+        series_title: &str,
+        chapter_index: Option<u32>,
+    ) -> String {
+        let meta = crate::online::direct::make_meta_with_links(
+            &url::Url::parse(canonical).unwrap(),
+            title,
+            pages(1),
+            crate::online::direct::MetaLinks {
+                series_id: Some(series_id.to_string()),
+                series_title: Some(series_title.to_string()),
+                chapter_index,
+                next_url: None,
+            },
+        )
+        .unwrap();
+        let id = db::book_id_for_path(canonical);
+        st.db
+            .with(|conn| {
+                db::upsert_online_book(
+                    conn,
+                    &id,
+                    canonical,
+                    title,
+                    meta.page_count as u32,
+                    "generic_manga",
+                    &meta.meta_json,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn series_books_sort_by_chapter_index_and_filter_series() {
+        let st = online_state();
+        let c2 = insert_series_book(&st, "http://e/s2", "第2话", "S", "Series", Some(2));
+        let c1 = insert_series_book(&st, "http://e/s1", "第1话", "S", "Series", Some(1));
+        let c3 = insert_series_book(&st, "http://e/s3", "第3话", "S", "Series", Some(3));
+        let extra = insert_series_book(&st, "http://e/sx", "番外", "S", "Series", None);
+        let other = insert_series_book(&st, "http://e/o1", "第1话", "Other", "Other", Some(1));
+
+        st.db
+            .with(|conn| {
+                let books = get_series_books_impl(conn, "S").unwrap();
+                let ids: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+                assert_eq!(
+                    ids,
+                    vec![c1.as_str(), c2.as_str(), c3.as_str(), extra.as_str()]
+                );
+                assert_eq!(books[0].series_title.as_deref(), Some("Series"));
+                assert_eq!(books[0].chapter_index, Some(1));
+                assert!(books.iter().all(|b| b.id != other));
+                assert!(get_series_books_impl(conn, "").unwrap().is_empty());
+                assert!(get_series_books_impl(conn, "missing").unwrap().is_empty());
+                Ok(())
+            })
+            .unwrap();
+    }
+
     #[test]
     fn batch_ingest_imports_all_and_persists_links() {
         let st = online_state();
-        let payload = r#"{"seriesTitle":"S","chapters":[
+        let payload = r#"{"seriesId":"S","seriesTitle":"Series","chapters":[
             {"title":"第1话","url":"http://e/1","pages":["http://x/1.jpg"]},
             {"title":"第2话","url":"http://e/2","pages":["http://x/2.jpg"]}
         ]}"#;
@@ -2222,6 +2335,9 @@ mod tests {
         let books = ingest_resolved_batch(&st, metas).unwrap();
         assert_eq!(books.len(), 2);
         assert_eq!(books[0].series_id.as_deref(), Some("S"));
+        assert_eq!(books[0].series_title.as_deref(), Some("Series"));
+        assert_eq!(books[0].chapter_index, Some(1));
+        assert_eq!(books[1].chapter_index, Some(2));
         assert_eq!(books[0].next_url.as_deref(), Some("http://e/2"));
         assert_eq!(books[1].next_url, None);
         let second = st

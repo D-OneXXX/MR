@@ -8,11 +8,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 use crate::commands;
 use crate::source::BackendError;
+use crate::state::HandoffRuntime;
 use crate::AppState;
 
 const HANDOFF_PATH: &str = "/handoff";
@@ -22,12 +22,26 @@ const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HandoffSession {
+pub struct HandoffStatus {
+    pub active: bool,
     pub port: u16,
-    pub token: String,
+    pub pairing_token: String,
     pub callback_url: String,
-    pub bookmarklet: String,
+    pub received_chapters: u32,
+    pub allow_session_headers: bool,
     pub script: String,
+}
+
+fn inactive_handoff_status() -> HandoffStatus {
+    HandoffStatus {
+        active: false,
+        port: 0,
+        pairing_token: String::new(),
+        callback_url: String::new(),
+        received_chapters: 0,
+        allow_session_headers: false,
+        script: String::new(),
+    }
 }
 
 #[derive(Debug)]
@@ -157,13 +171,6 @@ fn build_script(callback_url: &str) -> String {
 "#;
     let callback = serde_json::to_string(callback_url).unwrap_or_else(|_| "\"\"".into());
     TEMPLATE.replace("__CALLBACK__", &callback)
-}
-
-fn build_bookmarklet(script: &str) -> String {
-    format!(
-        "javascript:{}",
-        percent_encoding::utf8_percent_encode(script, percent_encoding::NON_ALPHANUMERIC)
-    )
 }
 
 fn token_matches(supplied: Option<&str>, expected: &str) -> bool {
@@ -355,17 +362,20 @@ fn parse_target(target: &str) -> Option<Url> {
 pub(crate) fn process_handoff_value(
     state: &Arc<AppState>,
     value: &serde_json::Value,
+    allow_session_headers: bool,
 ) -> Result<Vec<crate::BookInfo>, HandoffError> {
     if !state.settings.lock().experimental_online {
         return Err(HandoffError::BadRequest("在线直读未开启".into()));
     }
-    if let Some(headers) = value.get("sessionHeaders") {
-        let raw = headers
-            .as_str()
-            .ok_or_else(|| HandoffError::BadRequest("sessionHeaders 必须为字符串".into()))?;
-        if !raw.trim().is_empty() {
-            commands::apply_session_online_headers(state, Some(raw.to_string()))
-                .map_err(HandoffError::BadRequest)?;
+    if allow_session_headers {
+        if let Some(headers) = value.get("sessionHeaders") {
+            let raw = headers
+                .as_str()
+                .ok_or_else(|| HandoffError::BadRequest("sessionHeaders 必须为字符串".into()))?;
+            if !raw.trim().is_empty() {
+                commands::apply_session_online_headers(state, Some(raw.to_string()))
+                    .map_err(HandoffError::BadRequest)?;
+            }
         }
     }
     let body =
@@ -491,16 +501,12 @@ fn focus_main(app: &AppHandle) {
 #[tauri::command]
 pub fn start_browser_handoff(
     app: AppHandle,
-    target_url: Option<String>,
-) -> Result<HandoffSession, String> {
+    allow_session_headers: bool,
+) -> Result<HandoffStatus, String> {
     let state = app.state::<Arc<AppState>>().inner().clone();
     if !state.settings.lock().experimental_online {
         return Err("在线直读未开启".into());
     }
-    let target = match target_url {
-        Some(raw) => Some(crate::online::normalize_url(&raw).map_err(|e| e.to_string())?),
-        None => None,
-    };
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .map_err(|e| format!("启动本地回调失败：{e}"))?;
     let port = listener
@@ -510,9 +516,17 @@ pub fn start_browser_handoff(
     let token = generate_handoff_token();
     let callback_url = format!("http://127.0.0.1:{port}{HANDOFF_PATH}?token={token}");
     let script = build_script(&callback_url);
-    let bookmarklet = build_bookmarklet(&script);
-    let cancel = state.begin_handoff_cancel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    state.begin_handoff(HandoffRuntime {
+        port,
+        token: token.clone(),
+        callback_url: callback_url.clone(),
+        allow_session_headers,
+        script: script.clone(),
+        cancel: cancel.clone(),
+    });
     let thread_cancel = cancel.clone();
+    let received_flag = cancel.clone();
     let thread_state = state.clone();
     let import_state = state.clone();
     let enabled_state = state.clone();
@@ -526,7 +540,8 @@ pub fn start_browser_handoff(
             thread_cancel.clone(),
             move || enabled_state.settings.lock().experimental_online,
             move |value| {
-                let books = process_handoff_value(&import_state, &value)?;
+                let books = process_handoff_value(&import_state, &value, allow_session_headers)?;
+                import_state.add_handoff_received(&received_flag, books.len() as u32);
                 let _ = emit_app.emit("online-handoff-imported", &books);
                 focus_main(&emit_app);
                 Ok(books)
@@ -538,39 +553,43 @@ pub fn start_browser_handoff(
         thread_state.finish_handoff(&thread_cancel);
     });
 
-    if let Some(url) = target {
-        if let Err(error) = app.opener().open_url(url.to_string(), None::<&str>) {
-            cancel.store(true, Ordering::SeqCst);
-            state.finish_handoff(&cancel);
-            return Err(format!("打开系统浏览器失败：{error}"));
-        }
-    }
-    Ok(HandoffSession {
+    Ok(HandoffStatus {
+        active: true,
         port,
-        token,
+        pairing_token: token,
         callback_url,
-        bookmarklet,
+        received_chapters: 0,
+        allow_session_headers,
         script,
     })
 }
 
-fn stop_handoff(app: &AppHandle, state: &AppState) {
-    state.cancel_handoff();
-    let _ = app.emit("online-handoff-stopped", ());
+fn current_handoff_status(state: &AppState) -> HandoffStatus {
+    match state.handoff_status() {
+        Some(status) => HandoffStatus {
+            active: true,
+            port: status.port,
+            pairing_token: status.pairing_token,
+            callback_url: status.callback_url,
+            received_chapters: status.received_chapters,
+            allow_session_headers: status.allow_session_headers,
+            script: status.script,
+        },
+        None => inactive_handoff_status(),
+    }
+}
+
+#[tauri::command]
+pub fn get_browser_handoff_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<HandoffStatus, String> {
+    Ok(current_handoff_status(&state))
 }
 
 #[tauri::command]
 pub fn stop_browser_handoff(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    stop_handoff(&app, state.inner());
-    Ok(())
-}
-
-#[tauri::command]
-pub fn cancel_browser_handoff(
-    app: AppHandle,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    stop_handoff(&app, state.inner());
+    state.cancel_handoff();
+    let _ = app.emit("online-handoff-stopped", ());
     Ok(())
 }
 
@@ -639,8 +658,9 @@ mod tests {
 
     fn processor(
         st: Arc<AppState>,
+        allow_session_headers: bool,
     ) -> impl FnMut(Value) -> Result<Vec<crate::BookInfo>, HandoffError> {
-        move |value| process_handoff_value(&st, &value)
+        move |value| process_handoff_value(&st, &value, allow_session_headers)
     }
 
     #[test]
@@ -675,9 +695,6 @@ mod tests {
             assert!(script.contains(needle), "缺少 {needle}");
         }
         assert!(!script.contains("document.cookie"));
-        let bookmarklet = build_bookmarklet(&script);
-        assert!(bookmarklet.starts_with("javascript:"), "{bookmarklet}");
-        assert!(bookmarklet.contains('%'), "{bookmarklet}");
     }
 
     #[test]
@@ -708,8 +725,12 @@ mod tests {
     fn same_session_accepts_multiple_posts() {
         let st = test_state();
         let cancel = Arc::new(AtomicBool::new(false));
-        let (port, handle) =
-            spawn_server(test_token(), cancel.clone(), || true, processor(st.clone()));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), false),
+        );
 
         let first = r#"{"url":"http://e/1","title":"One","pages":["http://x/1.jpg"]}"#;
         let second = r#"{"url":"http://e/2","title":"Two","pages":["http://x/2.jpg"]}"#;
@@ -740,8 +761,12 @@ mod tests {
     fn invalid_pages_are_rejected_without_import() {
         let st = test_state();
         let cancel = Arc::new(AtomicBool::new(false));
-        let (port, handle) =
-            spawn_server(test_token(), cancel.clone(), || true, processor(st.clone()));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), false),
+        );
 
         let bad_url = r#"{"url":"http://example.com/g","title":"T","pages":["file:///x"]}"#;
         let response = post_json(port, &test_token(), bad_url);
@@ -821,8 +846,12 @@ mod tests {
             })
             .unwrap();
         let cancel = Arc::new(AtomicBool::new(false));
-        let (port, handle) =
-            spawn_server(test_token(), cancel.clone(), || true, processor(st.clone()));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), true),
+        );
 
         let valid = r#"{"sessionHeaders":"Cookie: bridge","url":"http://e/h1","title":"H","pages":["http://x/1.jpg"]}"#;
         let response = post_json(port, &test_token(), valid);
@@ -866,8 +895,12 @@ mod tests {
     fn batch_payload_imports_chapters_with_links() {
         let st = test_state();
         let cancel = Arc::new(AtomicBool::new(false));
-        let (port, handle) =
-            spawn_server(test_token(), cancel.clone(), || true, processor(st.clone()));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), false),
+        );
         let body = r#"{"seriesId":"S","chapters":[
             {"title":"第1话","url":"http://e/1","pages":["http://x/1.jpg"]},
             {"title":"第2话","url":"http://e/2","pages":["http://x/2.jpg"]}
@@ -888,6 +921,106 @@ mod tests {
 
         cancel.store(true, Ordering::SeqCst);
         assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
+    }
+
+    #[test]
+    fn session_headers_are_ignored_when_disallowed() {
+        let st = test_state();
+        *st.session_online_headers.lock() = Some("Cookie: existing".into());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), false),
+        );
+
+        let body = r#"{"sessionHeaders":"Cookie: disallowed","url":"http://e/ignored","title":"I","pages":["http://x/1.jpg"]}"#;
+        let response = post_json(port, &test_token(), body);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(!response.contains("Cookie: disallowed"), "{response}");
+        assert_eq!(
+            st.session_online_headers.lock().as_deref(),
+            Some("Cookie: existing")
+        );
+        let id = crate::db::book_id_for_path("http://e/ignored");
+        assert!(st
+            .db
+            .with(|conn| crate::db::get_book(conn, &id).map_err(|e| e.to_string()))
+            .unwrap()
+            .is_some());
+
+        cancel.store(true, Ordering::SeqCst);
+        assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
+    }
+
+    #[test]
+    fn handoff_status_is_inactive_before_start_and_after_stop() {
+        let st = test_state();
+        let idle = current_handoff_status(&st);
+        assert!(!idle.active);
+        assert_eq!(idle.port, 0);
+        assert!(idle.pairing_token.is_empty());
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        st.begin_handoff(HandoffRuntime {
+            port: 4321,
+            token: "pair-token".into(),
+            callback_url: "http://127.0.0.1:4321/handoff?token=pair-token".into(),
+            allow_session_headers: true,
+            script: "script".into(),
+            cancel,
+        });
+        let active = current_handoff_status(&st);
+        assert!(active.active);
+        assert_eq!(active.port, 4321);
+        assert_eq!(active.pairing_token, "pair-token");
+        assert!(active.allow_session_headers);
+        assert_eq!(active.script, "script");
+
+        st.cancel_handoff();
+        assert!(!current_handoff_status(&st).active);
+    }
+
+    #[test]
+    fn status_counts_received_chapters_for_current_session() {
+        let st = test_state();
+        let cancel = Arc::new(AtomicBool::new(false));
+        st.begin_handoff(HandoffRuntime {
+            port: 1,
+            token: "token".into(),
+            callback_url: "http://127.0.0.1:1/handoff?token=token".into(),
+            allow_session_headers: false,
+            script: "script".into(),
+            cancel: cancel.clone(),
+        });
+        let status = st.handoff_status().expect("活动会话");
+        assert_eq!(status.received_chapters, 0);
+
+        let import_state = st.clone();
+        let received_flag = cancel.clone();
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            move |value| {
+                let books = process_handoff_value(&import_state, &value, false)?;
+                import_state.add_handoff_received(&received_flag, books.len() as u32);
+                Ok(books)
+            },
+        );
+        let body = r#"{"chapters":[
+            {"title":"1","url":"http://e/c1","pages":["http://x/1.jpg"]},
+            {"title":"2","url":"http://e/c2","pages":["http://x/2.jpg"]}
+        ]}"#;
+        let response = post_json(port, &test_token(), body);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert_eq!(st.handoff_status().unwrap().received_chapters, 2);
+
+        st.cancel_handoff();
+        assert!(st.handoff_status().is_none());
+        assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
+        assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
     }
 
     #[test]

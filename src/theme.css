@@ -28,6 +28,7 @@
     Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
   --radius: 16px;
   --radius-card: 12px;
+  --radius-pill: 8px;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.45), 0 14px 36px rgba(0, 0, 0, 0.55);
   --transition: 150ms ease;

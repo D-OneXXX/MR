@@ -34,7 +34,11 @@ import { toast, toastErr, Toaster } from "../components/Toast";
  */
 export default function LibraryPage() {
   const nav = useNavigate();
-  const { session: handoffSession } = useOnlineHandoffState();
+  const { status: handoffStatus } = useOnlineHandoffState();
+  const [groupSeries, setGroupSeries] = useState(true);
+  const [seriesCountMap, setSeriesCountMap] = useState<Map<string, number>>(
+    () => new Map(),
+  );
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [books, setBooks] = useState<BookInfo[]>([]);
   const [query, setQuery] = useState("");
@@ -102,10 +106,17 @@ export default function LibraryPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [d, list] = await Promise.all([
+      const [d, list, all] = await Promise.all([
         api.getDashboard(),
         api.listBooks(q.length > 0 ? q : undefined),
+        q.length > 0 ? api.listBooks().catch(() => null) : Promise.resolve(null),
       ]);
+      const counts = new Map<string, number>();
+      for (const book of all ?? list) {
+        const sid = book.seriesId?.trim();
+        if (sid) counts.set(sid, (counts.get(sid) ?? 0) + 1);
+      }
+      setSeriesCountMap(counts);
       setDash(d);
       setBooks(list);
     } catch (e) {
@@ -131,6 +142,34 @@ export default function LibraryPage() {
     () => books.find((b) => b.id === selectedId) ?? null,
     [books, selectedId],
   );
+
+  const displayBooks = useMemo(() => {
+    if (!groupSeries) {
+      return books.map((book) => {
+        const sid = book.seriesId?.trim();
+        return { book, seriesCount: sid ? seriesCountMap.get(sid) ?? 1 : 1 };
+      });
+    }
+    const groups = new Map<string, { book: BookInfo; filteredCount: number }>();
+    for (const book of books) {
+      const sid = book.seriesId?.trim();
+      const key = sid ? `series:${sid}` : `book:${book.id}`;
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, { book, filteredCount: 1 });
+      } else {
+        existing.filteredCount += 1;
+        if (book.updatedAt > existing.book.updatedAt) existing.book = book;
+      }
+    }
+    return [...groups.entries()].map(([key, group]) => {
+      const sid = key.startsWith("series:") ? key.slice("series:".length) : "";
+      return {
+        book: group.book,
+        seriesCount: sid ? seriesCountMap.get(sid) ?? group.filteredCount : 1,
+      };
+    });
+  }, [books, groupSeries, seriesCountMap]);
 
   // 多选删除入口的文案：在线、本地、混合三种集合分别提示。
   const checkedBooks = useMemo(
@@ -358,18 +397,34 @@ export default function LibraryPage() {
               aria-label="搜索书名"
             />
           </div>
+          <div className="seg lib-view-toggle" role="group" aria-label="书库视图">
+            <button
+              className={groupSeries ? "on" : ""}
+              onClick={() => setGroupSeries(true)}
+              title="同一合集只显示代表卡"
+            >
+              按合集聚合
+            </button>
+            <button
+              className={!groupSeries ? "on" : ""}
+              onClick={() => setGroupSeries(false)}
+              title="逐个章节平铺显示"
+            >
+              全部平铺
+            </button>
+          </div>
           {onlineOn && (
             <button
               className="btn"
               onClick={() => setOnlineOpen(true)}
               title={
-                handoffSession
+                handoffStatus?.active
                   ? "配对会话进行中，点击打开查看或停止"
                   : "从 JSON 清单或单页 HTML 图集导入"
               }
             >
               <Link2 size={14} />{" "}
-              {handoffSession ? "配对中（打开查看/停止）" : "URL 直读"}
+              {handoffStatus?.active ? "配对中（打开查看/停止）" : "URL 直读"}
             </button>
           )}
           <button
@@ -478,10 +533,11 @@ export default function LibraryPage() {
         />
       ) : (
         <div className="grid-books">
-          {books.map((b) => (
+          {displayBooks.map(({ book: b, seriesCount }) => (
             <BookCard
               key={b.id}
               book={b}
+              seriesCount={seriesCount}
               selectMode={selectMode}
               checked={checkedIds.has(b.id)}
               onToggleCheck={toggleCheck}
@@ -583,6 +639,7 @@ export default function LibraryPage() {
 
       {onlineOn && onlineOpen && (
         <OnlineImportDialog
+          initialTab={handoffStatus?.active ? "pair" : "link"}
           onClose={() => setOnlineOpen(false)}
           onImported={() => void reload(debounced)}
           onRead={(b) => nav(`/reader/${encodeURIComponent(b.id)}`)}

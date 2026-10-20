@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -60,6 +60,24 @@ fn default_render_root() -> std::path::PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
+pub(crate) struct HandoffRuntime {
+    pub port: u16,
+    pub token: String,
+    pub callback_url: String,
+    pub allow_session_headers: bool,
+    pub script: String,
+    pub cancel: Arc<AtomicBool>,
+}
+
+pub(crate) struct HandoffStatusSnapshot {
+    pub port: u16,
+    pub pairing_token: String,
+    pub callback_url: String,
+    pub received_chapters: u32,
+    pub allow_session_headers: bool,
+    pub script: String,
+}
+
 pub struct AppState {
     pub settings: Mutex<Settings>,
     /// 进程内会话临时请求头；优先于 Settings.online_headers，绝不持久化/记日志。
@@ -82,7 +100,8 @@ pub struct AppState {
     /// 磁盘渲染缓存（成品 JPEG，二次访问 ~1ms）。
     pub render: RenderCache,
     db_path: Mutex<std::path::PathBuf>,
-    handoff_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    handoff_runtime: Mutex<Option<HandoffRuntime>>,
+    handoff_received: AtomicU32,
     pub _version: u64,
 }
 
@@ -101,35 +120,61 @@ impl AppState {
             webtoon_layouts: Mutex::new(HashMap::new()),
             render: RenderCache::new(default_render_root()),
             db_path: Mutex::new(std::path::PathBuf::new()),
-            handoff_cancel: Mutex::new(None),
+            handoff_runtime: Mutex::new(None),
+            handoff_received: AtomicU32::new(0),
             _version: 3,
         }
     }
 
-    /// 开始新的 handoff 会话；旧会话会被取消。
-    pub(crate) fn begin_handoff_cancel(&self) -> Arc<AtomicBool> {
-        let flag = Arc::new(AtomicBool::new(false));
-        let mut slot = self.handoff_cancel.lock();
-        if let Some(previous) = slot.replace(flag.clone()) {
-            previous.store(true, Ordering::SeqCst);
+    /// 开始新的 handoff 会话；旧会话会被取消，计数归零。
+    pub(crate) fn begin_handoff(&self, runtime: HandoffRuntime) -> Arc<AtomicBool> {
+        let cancel = runtime.cancel.clone();
+        let mut slot = self.handoff_runtime.lock();
+        if let Some(previous) = slot.replace(runtime) {
+            previous.cancel.store(true, Ordering::SeqCst);
         }
-        flag
+        self.handoff_received.store(0, Ordering::SeqCst);
+        cancel
     }
 
     /// 仅当当前会话仍是该 flag 时清理，避免新会话被旧线程误清。
     pub(crate) fn finish_handoff(&self, flag: &Arc<AtomicBool>) {
-        let mut slot = self.handoff_cancel.lock();
+        let mut slot = self.handoff_runtime.lock();
         if slot
             .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, flag))
+            .is_some_and(|current| Arc::ptr_eq(&current.cancel, flag))
         {
             *slot = None;
         }
     }
 
     pub(crate) fn cancel_handoff(&self) {
-        if let Some(flag) = self.handoff_cancel.lock().take() {
-            flag.store(true, Ordering::SeqCst);
+        if let Some(runtime) = self.handoff_runtime.lock().take() {
+            runtime.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
+    pub(crate) fn handoff_status(&self) -> Option<HandoffStatusSnapshot> {
+        let slot = self.handoff_runtime.lock();
+        let runtime = slot.as_ref()?;
+        Some(HandoffStatusSnapshot {
+            port: runtime.port,
+            pairing_token: runtime.token.clone(),
+            callback_url: runtime.callback_url.clone(),
+            received_chapters: self.handoff_received.load(Ordering::SeqCst),
+            allow_session_headers: runtime.allow_session_headers,
+            script: runtime.script.clone(),
+        })
+    }
+
+    /// 只累加当前会话的导入话数；旧会话在新会话启动后的回传不会污染计数。
+    pub(crate) fn add_handoff_received(&self, flag: &Arc<AtomicBool>, count: u32) {
+        let slot = self.handoff_runtime.lock();
+        if slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(&current.cancel, flag))
+        {
+            self.handoff_received.fetch_add(count, Ordering::SeqCst);
         }
     }
 
@@ -257,7 +302,7 @@ mod tests {
     //! 在线分支只构造 `UreqTransport`（read 前无 I/O），不发起任何网络请求。
 
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
     use rusqlite::Connection;
@@ -397,6 +442,8 @@ mod tests {
                 },
             ],
             series_id: None,
+            series_title: None,
+            chapter_index: None,
             next_url: None,
         };
         let meta_json = serde_json::to_string(&meta).expect("序列化 StoredMeta");
@@ -472,15 +519,45 @@ mod tests {
         );
     }
 
+    fn handoff_runtime(cancel: Arc<AtomicBool>) -> super::HandoffRuntime {
+        super::HandoffRuntime {
+            port: 12345,
+            token: "token".into(),
+            callback_url: "http://127.0.0.1:12345/handoff?token=token".into(),
+            allow_session_headers: true,
+            script: "script".into(),
+            cancel,
+        }
+    }
+
+    #[test]
+    fn handoff_status_tracks_runtime_and_received_count() {
+        let state = AppState::new();
+        assert!(state.handoff_status().is_none());
+
+        let flag = state.begin_handoff(handoff_runtime(Arc::new(AtomicBool::new(false))));
+        let status = state.handoff_status().expect("应处于活动状态");
+        assert_eq!(status.port, 12345);
+        assert_eq!(status.pairing_token, "token");
+        assert!(status.allow_session_headers);
+        assert_eq!(status.received_chapters, 0);
+
+        state.add_handoff_received(&flag, 2);
+        assert_eq!(state.handoff_status().unwrap().received_chapters, 2);
+        state.cancel_handoff();
+        assert!(state.handoff_status().is_none());
+        assert!(flag.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn handoff_cancel_flag_is_replaceable_and_finished() {
         let state = AppState::new();
-        let flag = state.begin_handoff_cancel();
+        let flag = state.begin_handoff(handoff_runtime(Arc::new(AtomicBool::new(false))));
         assert!(!flag.load(Ordering::SeqCst));
         state.cancel_handoff();
         assert!(flag.load(Ordering::SeqCst));
 
-        let flag = state.begin_handoff_cancel();
+        let flag = state.begin_handoff(handoff_runtime(Arc::new(AtomicBool::new(false))));
         state.finish_handoff(&flag);
         state.cancel_handoff();
         assert!(

@@ -42,6 +42,12 @@ pub struct StoredMeta {
     /// 同一系列的稳定标识；旧 meta_json 缺省为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_id: Option<String>,
+    /// 系列显示名；合集清单的 seriesTitle。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_title: Option<String>,
+    /// 合集内的 1-based 章节序号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapter_index: Option<u32>,
     /// 下一话的规范化 URL；旧 meta_json 缺省为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_url: Option<String>,

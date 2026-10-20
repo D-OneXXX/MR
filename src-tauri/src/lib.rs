@@ -45,6 +45,10 @@ pub struct BookInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub series_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub series_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_url: Option<String>,
 }
 
@@ -429,6 +433,7 @@ pub fn run() {
             commands::list_books,
             commands::get_book,
             commands::get_next_book,
+            commands::get_series_books,
             commands::list_entries,
             commands::get_page,
             commands::get_thumbnail,
@@ -464,13 +469,13 @@ pub fn run() {
             commands::resolve_online_url,
             commands::test_online_connection,
             commands::import_resolved_pages,
-            commands::import_online_batch,
+            commands::resolve_online_batch,
             commands::set_session_online_headers,
             commands::clear_session_online_headers,
             commands::get_session_online_headers,
             online::handoff::start_browser_handoff,
             online::handoff::stop_browser_handoff,
-            online::handoff::cancel_browser_handoff,
+            online::handoff::get_browser_handoff_status,
             system_proxy::detect_system_proxy,
             browser::open_browser_window,
             browser::navigate_browser,

@@ -22,7 +22,18 @@ pub struct OnlineBookMeta {
     pub page_count: usize,
     pub meta_json: String,
     pub series_id: Option<String>,
+    pub series_title: Option<String>,
+    pub chapter_index: Option<u32>,
     pub next_url: Option<String>,
+}
+
+/// 链路字段的可选集合；manifestHash 不包含这些字段。
+#[derive(Debug, Clone, Default)]
+pub struct MetaLinks {
+    pub series_id: Option<String>,
+    pub series_title: Option<String>,
+    pub next_url: Option<String>,
+    pub chapter_index: Option<u32>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -33,6 +44,8 @@ struct RawManifest {
     title: Option<String>,
     #[serde(default, rename = "seriesId")]
     series_id: Option<String>,
+    #[serde(default, rename = "seriesTitle")]
+    series_title: Option<String>,
     #[serde(default, rename = "nextUrl")]
     next_url: Option<String>,
     pages: Vec<RawPageEntry>,
@@ -48,6 +61,8 @@ struct RawSingleManifest {
     title: Option<String>,
     #[serde(default, rename = "seriesId")]
     series_id: Option<String>,
+    #[serde(default, rename = "seriesTitle")]
+    series_title: Option<String>,
     #[serde(default, rename = "nextUrl")]
     next_url: Option<String>,
     #[serde(default)]
@@ -175,8 +190,19 @@ pub fn parse_manifest(body: &[u8], url: &url::Url) -> Result<OnlineBookMeta, Bac
         .map(|s| s.to_string())
         .unwrap_or_else(|| title_from_url(url));
     let series_id = non_empty(raw.series_id.as_deref());
+    let series_title = non_empty(raw.series_title.as_deref());
     let next_url = normalized_optional_url(raw.next_url.as_deref())?;
-    make_meta_with_links(url, &title, pages, series_id, next_url)
+    make_meta_with_links(
+        url,
+        &title,
+        pages,
+        MetaLinks {
+            series_id,
+            series_title,
+            next_url,
+            chapter_index: None,
+        },
+    )
 }
 
 /// 将最终标题与页面列表封装为 [`OnlineBookMeta`]（计算 manifestHash）。
@@ -185,16 +211,15 @@ pub fn make_meta(
     title: &str,
     pages: Vec<PageRef>,
 ) -> Result<OnlineBookMeta, BackendError> {
-    make_meta_with_links(canonical_url, title, pages, None, None)
+    make_meta_with_links(canonical_url, title, pages, MetaLinks::default())
 }
 
-/// 带系列/下一话链路的封装；manifestHash 仍只由 title + pages 计算。
+/// 带系列/章节/下一话链路的封装；manifestHash 仍只由 title + pages 计算。
 pub fn make_meta_with_links(
     canonical_url: &url::Url,
     title: &str,
     pages: Vec<PageRef>,
-    series_id: Option<String>,
-    next_url: Option<String>,
+    links: MetaLinks,
 ) -> Result<OnlineBookMeta, BackendError> {
     let title = truncate_chars(title.trim(), 200);
     let hash = {
@@ -214,8 +239,10 @@ pub fn make_meta_with_links(
         manifest_hash: hash,
         fetched_at: crate::db::now_str(),
         pages,
-        series_id: series_id.clone(),
-        next_url: next_url.clone(),
+        series_id: links.series_id.clone(),
+        series_title: links.series_title.clone(),
+        chapter_index: links.chapter_index,
+        next_url: links.next_url.clone(),
     };
     let meta_json = serde_json::to_string(&stored)
         .map_err(|e| BackendError::Msg(format!("清单元数据序列化失败：{e}")))?;
@@ -225,8 +252,10 @@ pub fn make_meta_with_links(
         title,
         page_count: stored.pages.len(),
         meta_json,
-        series_id,
-        next_url,
+        series_id: links.series_id,
+        series_title: links.series_title,
+        chapter_index: links.chapter_index,
+        next_url: links.next_url,
     })
 }
 
@@ -257,6 +286,26 @@ fn title_or_url(title: Option<&str>, url: &url::Url) -> String {
     non_empty(title).unwrap_or_else(|| title_from_url(url))
 }
 
+fn series_hash(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+fn parent_path(url: &url::Url) -> String {
+    let segments: Vec<&str> = url
+        .path_segments()
+        .map(|segments| segments.collect())
+        .unwrap_or_default();
+    if segments.is_empty() {
+        return "/".into();
+    }
+    let parent = &segments[..segments.len().saturating_sub(1)];
+    if parent.is_empty() {
+        "/".into()
+    } else {
+        format!("/{}/", parent.join("/"))
+    }
+}
+
 /// 解析单本或合集批量清单；合集章节通过 next_url 自动串联。
 pub fn parse_batch_payload(body: &[u8]) -> Result<Vec<OnlineBookMeta>, BackendError> {
     let value: serde_json::Value = serde_json::from_slice(body)
@@ -271,8 +320,6 @@ pub fn parse_batch_payload(body: &[u8]) -> Result<Vec<OnlineBookMeta>, BackendEr
         if raw.chapters.len() > 100 {
             return Err(BackendError::Msg("合集章节数超过上限 100".into()));
         }
-        let series_id =
-            non_empty(raw.series_id.as_deref()).or_else(|| non_empty(raw.series_title.as_deref()));
         let top_next = normalized_optional_url(raw.next_url.as_deref())?;
 
         let mut urls = Vec::with_capacity(raw.chapters.len());
@@ -283,6 +330,12 @@ pub fn parse_batch_payload(body: &[u8]) -> Result<Vec<OnlineBookMeta>, BackendEr
                 .map_err(|e| BackendError::Msg(format!("第 {} 章 URL 非法：{e}", index + 1)))?;
             urls.push(url);
         }
+
+        let explicit_series_id = non_empty(raw.series_id.as_deref());
+        let series_title = non_empty(raw.series_title.as_deref());
+        let series_id = explicit_series_id
+            .or_else(|| series_title.as_deref().map(series_hash))
+            .unwrap_or_else(|| series_hash(&parent_path(&urls[0])));
 
         let mut metas = Vec::with_capacity(raw.chapters.len());
         for (index, chapter) in raw.chapters.iter().enumerate() {
@@ -297,8 +350,12 @@ pub fn parse_batch_payload(body: &[u8]) -> Result<Vec<OnlineBookMeta>, BackendEr
                 url,
                 &title,
                 pages,
-                series_id.clone(),
-                next_url,
+                MetaLinks {
+                    series_id: Some(series_id.clone()),
+                    series_title: series_title.clone(),
+                    next_url,
+                    chapter_index: Some((index + 1) as u32),
+                },
             )?);
         }
         Ok(metas)
@@ -312,9 +369,18 @@ pub fn parse_batch_payload(body: &[u8]) -> Result<Vec<OnlineBookMeta>, BackendEr
         let pages = normalize_page_urls(&raw.pages)?;
         let title = title_or_url(raw.title.as_deref(), &url);
         let series_id = non_empty(raw.series_id.as_deref());
+        let series_title = non_empty(raw.series_title.as_deref());
         let next_url = normalized_optional_url(raw.next_url.as_deref())?;
         Ok(vec![make_meta_with_links(
-            &url, &title, pages, series_id, next_url,
+            &url,
+            &title,
+            pages,
+            MetaLinks {
+                series_id,
+                series_title,
+                next_url,
+                chapter_index: None,
+            },
         )?])
     }
 }
@@ -473,8 +539,11 @@ mod tests {
             &url,
             "T",
             pages,
-            Some("series-a".into()),
-            Some("http://example.com/next".into()),
+            MetaLinks {
+                series_id: Some("series-a".into()),
+                next_url: Some("http://example.com/next".into()),
+                ..MetaLinks::default()
+            },
         )
         .unwrap();
         let a: StoredMeta = serde_json::from_str(&plain.meta_json).unwrap();
@@ -555,15 +624,71 @@ mod tests {
         assert_eq!(batch.len(), 2);
         let first: StoredMeta = serde_json::from_str(&batch[0].meta_json).unwrap();
         let second: StoredMeta = serde_json::from_str(&batch[1].meta_json).unwrap();
-        assert_eq!(first.series_id.as_deref(), Some("Series"));
-        assert_eq!(second.series_id.as_deref(), Some("Series"));
-        assert_eq!(batch[0].series_id.as_deref(), Some("Series"));
+        let expected_series = test_hash("Series");
+        assert_eq!(first.series_id.as_deref(), Some(expected_series.as_str()));
+        assert_eq!(second.series_id.as_deref(), Some(expected_series.as_str()));
+        assert_eq!(
+            batch[0].series_id.as_deref(),
+            Some(expected_series.as_str())
+        );
+        assert_eq!(batch[0].series_title.as_deref(), Some("Series"));
+        assert_eq!(batch[0].chapter_index, Some(1));
+        assert_eq!(batch[1].chapter_index, Some(2));
         assert_eq!(batch[0].canonical_url, "http://e/1");
         assert_eq!(batch[0].title, "第1话");
         assert_eq!(batch[1].title, "2");
         assert_eq!(batch[0].next_url.as_deref(), Some("http://e/2"));
         assert_eq!(first.next_url.as_deref(), Some("http://e/2"));
         assert_eq!(second.next_url.as_deref(), Some("http://e/3"));
+    }
+
+    fn test_hash(value: &str) -> String {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(value.as_bytes()))
+    }
+
+    #[test]
+    fn batch_series_id_is_stable_and_prefers_explicit_id() {
+        let body = r#"{"seriesTitle":" Series ","chapters":[
+            {"title":"1","url":"http://e/ch/1","pages":["http://x/1.jpg"]}
+        ]}"#;
+        let first = parse_batch_payload(body.as_bytes()).unwrap();
+        let second = parse_batch_payload(body.as_bytes()).unwrap();
+        assert_eq!(first[0].series_id, second[0].series_id);
+        assert_eq!(
+            first[0].series_id.as_deref(),
+            Some(test_hash("Series").as_str())
+        );
+
+        let other = r#"{"seriesTitle":"Other","chapters":[
+            {"title":"1","url":"http://e/ch/1","pages":["http://x/1.jpg"]}
+        ]}"#;
+        assert_ne!(
+            first[0].series_id,
+            parse_batch_payload(other.as_bytes()).unwrap()[0].series_id
+        );
+
+        let explicit = r#"{"seriesId":" explicit ","seriesTitle":"Series","chapters":[
+            {"title":"1","url":"http://e/ch/1","pages":["http://x/1.jpg"]}
+        ]}"#;
+        let meta = parse_batch_payload(explicit.as_bytes()).unwrap();
+        assert_eq!(meta[0].series_id.as_deref(), Some("explicit"));
+        assert_eq!(meta[0].series_title.as_deref(), Some("Series"));
+    }
+
+    #[test]
+    fn batch_series_id_falls_back_to_first_chapter_parent_path() {
+        let body = r#"{"chapters":[
+            {"title":"1","url":"HTTP://E/ch/1#f","pages":["http://x/1.jpg"]},
+            {"title":"2","url":"http://e/ch/2","pages":["http://x/2.jpg"]}
+        ]}"#;
+        let metas = parse_batch_payload(body.as_bytes()).unwrap();
+        assert_eq!(
+            metas[0].series_id.as_deref(),
+            Some(test_hash("/ch/").as_str())
+        );
+        assert_eq!(metas[0].series_id, metas[1].series_id);
+        assert!(metas[0].series_title.is_none());
     }
 
     #[test]

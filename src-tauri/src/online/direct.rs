@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::online::http::HttpTransport;
 use crate::online::{
-    normalize_url, redact_url_for_log, title_from_url, truncate_chars, PageRef, StoredMeta,
-    MANIFEST_MAX_BYTES, MAX_PAGES,
+    normalize_page_urls, normalize_url, redact_url_for_log, title_from_url, truncate_chars,
+    PageRef, StoredMeta, MANIFEST_MAX_BYTES, MAX_PAGES,
 };
 use crate::source::BackendError;
 
@@ -21,6 +21,8 @@ pub struct OnlineBookMeta {
     pub title: String,
     pub page_count: usize,
     pub meta_json: String,
+    pub series_id: Option<String>,
+    pub next_url: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -29,7 +31,51 @@ struct RawManifest {
     version: Option<u32>,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default, rename = "seriesId")]
+    series_id: Option<String>,
+    #[serde(default, rename = "nextUrl")]
+    next_url: Option<String>,
     pages: Vec<RawPageEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawSingleManifest {
+    #[serde(default)]
+    version: Option<u32>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default, rename = "seriesId")]
+    series_id: Option<String>,
+    #[serde(default, rename = "nextUrl")]
+    next_url: Option<String>,
+    #[serde(default)]
+    pages: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawChapter {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    pages: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawBatchManifest {
+    #[serde(default)]
+    version: Option<u32>,
+    #[serde(default, rename = "seriesId")]
+    series_id: Option<String>,
+    #[serde(default, rename = "seriesTitle")]
+    series_title: Option<String>,
+    #[serde(default, rename = "nextUrl")]
+    next_url: Option<String>,
+    #[serde(default)]
+    chapters: Vec<RawChapter>,
 }
 
 /// 清单页条目：纯 URL 字符串或带尺寸提示的对象。
@@ -72,7 +118,7 @@ impl DirectImageProvider {
         if !self.can_handle(&url) {
             return Err(BackendError::Msg("仅支持 http/https 清单 URL".into()));
         }
-        let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None)?;
+        let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None, Some(url.as_str()))?;
         if !(200..300).contains(&resp.status) {
             return Err(BackendError::Network(format!(
                 "清单 HTTP {}：{}",
@@ -128,7 +174,9 @@ pub fn parse_manifest(body: &[u8], url: &url::Url) -> Result<OnlineBookMeta, Bac
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| title_from_url(url));
-    make_meta(url, &title, pages)
+    let series_id = non_empty(raw.series_id.as_deref());
+    let next_url = normalized_optional_url(raw.next_url.as_deref())?;
+    make_meta_with_links(url, &title, pages, series_id, next_url)
 }
 
 /// 将最终标题与页面列表封装为 [`OnlineBookMeta`]（计算 manifestHash）。
@@ -136,6 +184,17 @@ pub fn make_meta(
     canonical_url: &url::Url,
     title: &str,
     pages: Vec<PageRef>,
+) -> Result<OnlineBookMeta, BackendError> {
+    make_meta_with_links(canonical_url, title, pages, None, None)
+}
+
+/// 带系列/下一话链路的封装；manifestHash 仍只由 title + pages 计算。
+pub fn make_meta_with_links(
+    canonical_url: &url::Url,
+    title: &str,
+    pages: Vec<PageRef>,
+    series_id: Option<String>,
+    next_url: Option<String>,
 ) -> Result<OnlineBookMeta, BackendError> {
     let title = truncate_chars(title.trim(), 200);
     let hash = {
@@ -155,6 +214,8 @@ pub fn make_meta(
         manifest_hash: hash,
         fetched_at: crate::db::now_str(),
         pages,
+        series_id: series_id.clone(),
+        next_url: next_url.clone(),
     };
     let meta_json = serde_json::to_string(&stored)
         .map_err(|e| BackendError::Msg(format!("清单元数据序列化失败：{e}")))?;
@@ -164,7 +225,98 @@ pub fn make_meta(
         title,
         page_count: stored.pages.len(),
         meta_json,
+        series_id,
+        next_url,
     })
+}
+
+fn non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn normalized_optional_url(raw: Option<&str>) -> Result<Option<String>, BackendError> {
+    match non_empty(raw) {
+        Some(raw) => Ok(Some(normalize_url(&raw)?.to_string())),
+        None => Ok(None),
+    }
+}
+
+fn check_version(version: Option<u32>) -> Result<(), BackendError> {
+    if let Some(version) = version {
+        if version != 1 {
+            return Err(BackendError::Msg(format!("不支持的清单版本：{version}")));
+        }
+    }
+    Ok(())
+}
+
+fn title_or_url(title: Option<&str>, url: &url::Url) -> String {
+    non_empty(title).unwrap_or_else(|| title_from_url(url))
+}
+
+/// 解析单本或合集批量清单；合集章节通过 next_url 自动串联。
+pub fn parse_batch_payload(body: &[u8]) -> Result<Vec<OnlineBookMeta>, BackendError> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|e| BackendError::Msg(format!("清单格式不符：{e}")))?;
+    if value.get("chapters").is_some() {
+        let raw: RawBatchManifest = serde_json::from_value(value)
+            .map_err(|e| BackendError::Msg(format!("清单格式不符：{e}")))?;
+        check_version(raw.version)?;
+        if raw.chapters.is_empty() {
+            return Err(BackendError::Msg("合集清单 chapters 不能为空".into()));
+        }
+        if raw.chapters.len() > 100 {
+            return Err(BackendError::Msg("合集章节数超过上限 100".into()));
+        }
+        let series_id =
+            non_empty(raw.series_id.as_deref()).or_else(|| non_empty(raw.series_title.as_deref()));
+        let top_next = normalized_optional_url(raw.next_url.as_deref())?;
+
+        let mut urls = Vec::with_capacity(raw.chapters.len());
+        for (index, chapter) in raw.chapters.iter().enumerate() {
+            let raw_url = non_empty(chapter.url.as_deref())
+                .ok_or_else(|| BackendError::Msg(format!("第 {} 章缺少 url 字段", index + 1)))?;
+            let url = normalize_url(&raw_url)
+                .map_err(|e| BackendError::Msg(format!("第 {} 章 URL 非法：{e}", index + 1)))?;
+            urls.push(url);
+        }
+
+        let mut metas = Vec::with_capacity(raw.chapters.len());
+        for (index, chapter) in raw.chapters.iter().enumerate() {
+            let url = &urls[index];
+            let title = title_or_url(chapter.title.as_deref(), url);
+            let pages = normalize_page_urls(&chapter.pages)?;
+            let next_url = urls
+                .get(index + 1)
+                .map(|next| next.to_string())
+                .or_else(|| top_next.clone());
+            metas.push(make_meta_with_links(
+                url,
+                &title,
+                pages,
+                series_id.clone(),
+                next_url,
+            )?);
+        }
+        Ok(metas)
+    } else {
+        let raw: RawSingleManifest = serde_json::from_value(value)
+            .map_err(|e| BackendError::Msg(format!("清单格式不符：{e}")))?;
+        check_version(raw.version)?;
+        let raw_url = non_empty(raw.url.as_deref())
+            .ok_or_else(|| BackendError::Msg("单本清单缺少 url 字段".into()))?;
+        let url = normalize_url(&raw_url)?;
+        let pages = normalize_page_urls(&raw.pages)?;
+        let title = title_or_url(raw.title.as_deref(), &url);
+        let series_id = non_empty(raw.series_id.as_deref());
+        let next_url = normalized_optional_url(raw.next_url.as_deref())?;
+        Ok(vec![make_meta_with_links(
+            &url, &title, pages, series_id, next_url,
+        )?])
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +327,7 @@ mod tests {
 
     struct FakeTransport {
         body: Vec<u8>,
+        scopes: std::sync::Mutex<Vec<Option<String>>>,
     }
 
     impl HttpTransport for FakeTransport {
@@ -183,7 +336,12 @@ mod tests {
             _url: &str,
             _max: usize,
             _referer: Option<&str>,
+            header_scope: Option<&str>,
         ) -> Result<HttpResponse, OnlineError> {
+            self.scopes
+                .lock()
+                .unwrap()
+                .push(header_scope.map(str::to_string));
             Ok(HttpResponse {
                 status: 200,
                 final_url: "http://example.com/manifest.json".into(),
@@ -197,9 +355,27 @@ mod tests {
         DirectImageProvider.resolve(
             &FakeTransport {
                 body: body.as_bytes().to_vec(),
+                scopes: std::sync::Mutex::new(Vec::new()),
             },
             "http://example.com/manifest.json",
         )
+    }
+
+    #[test]
+    fn resolve_passes_normalized_manifest_scope() {
+        let http = FakeTransport {
+            body: br#"{"pages":["http://x/1.jpg"]}"#.to_vec(),
+            scopes: std::sync::Mutex::new(Vec::new()),
+        };
+        DirectImageProvider
+            .resolve(&http, "http://example.com/manifest.json?token=secret#frag")
+            .unwrap();
+        assert_eq!(
+            *http.scopes.lock().unwrap(),
+            vec![Some(
+                "http://example.com/manifest.json?token=secret".to_string()
+            )]
+        );
     }
 
     #[test]
@@ -282,5 +458,160 @@ mod tests {
         let sa: StoredMeta = serde_json::from_str(&a.meta_json).unwrap();
         let sb: StoredMeta = serde_json::from_str(&b.meta_json).unwrap();
         assert_eq!(sa.manifest_hash, sb.manifest_hash);
+    }
+
+    #[test]
+    fn links_do_not_change_manifest_hash() {
+        let url = url::Url::parse("http://example.com/gallery").unwrap();
+        let pages = vec![PageRef {
+            url: "http://x/1.jpg".into(),
+            width: None,
+            height: None,
+        }];
+        let plain = make_meta(&url, "T", pages.clone()).unwrap();
+        let linked = make_meta_with_links(
+            &url,
+            "T",
+            pages,
+            Some("series-a".into()),
+            Some("http://example.com/next".into()),
+        )
+        .unwrap();
+        let a: StoredMeta = serde_json::from_str(&plain.meta_json).unwrap();
+        let b: StoredMeta = serde_json::from_str(&linked.meta_json).unwrap();
+        assert_eq!(a.manifest_hash, b.manifest_hash);
+        assert_eq!(b.series_id.as_deref(), Some("series-a"));
+        assert_eq!(b.next_url.as_deref(), Some("http://example.com/next"));
+    }
+
+    #[test]
+    fn stored_meta_old_json_remains_compatible() {
+        let old: StoredMeta =
+            serde_json::from_str(r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[]}"#)
+                .unwrap();
+        assert!(old.series_id.is_none());
+        assert!(old.next_url.is_none());
+        let json = serde_json::to_string(&old).unwrap();
+        assert!(!json.contains("seriesId"), "{json}");
+        assert!(!json.contains("nextUrl"), "{json}");
+    }
+
+    #[test]
+    fn parse_manifest_reads_normalized_links() {
+        let url = url::Url::parse("http://example.com/manifest").unwrap();
+        let meta = parse_manifest(
+            br#"{"pages":["http://x/1.jpg"],"seriesId":"  s  ","nextUrl":"HTTP://X/next#frag"}"#,
+            &url,
+        )
+        .unwrap();
+        let stored: StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
+        assert_eq!(stored.series_id.as_deref(), Some("s"));
+        assert_eq!(stored.next_url.as_deref(), Some("http://x/next"));
+    }
+
+    #[test]
+    fn parse_manifest_blank_links_are_none_and_bad_next_url_errors() {
+        let url = url::Url::parse("http://example.com/manifest").unwrap();
+        let meta = parse_manifest(
+            br#"{"pages":["http://x/1.jpg"],"seriesId":"  ","nextUrl":" "}"#,
+            &url,
+        )
+        .unwrap();
+        let stored: StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
+        assert!(stored.series_id.is_none());
+        assert!(stored.next_url.is_none());
+        assert!(parse_manifest(
+            br#"{"pages":["http://x/1.jpg"],"nextUrl":"file:///x"}"#,
+            &url
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn parses_single_batch_manifest_and_chapter_chain() {
+        let single = parse_batch_payload(
+            br#"{"url":"HTTP://Example.COM/c1#f","title":"","seriesId":" S ",
+                 "nextUrl":"http://example.com/c2","pages":["http://x/1.jpg","http://x/1.jpg#frag","http://x/2.jpg"]}"#,
+        )
+        .unwrap();
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].canonical_url, "http://example.com/c1");
+        assert_eq!(single[0].title, "c1");
+        assert_eq!(single[0].page_count, 2);
+        assert_eq!(single[0].series_id.as_deref(), Some("S"));
+        assert_eq!(single[0].next_url.as_deref(), Some("http://example.com/c2"));
+        let stored: StoredMeta = serde_json::from_str(&single[0].meta_json).unwrap();
+        assert_eq!(stored.series_id.as_deref(), Some("S"));
+        assert_eq!(stored.next_url.as_deref(), Some("http://example.com/c2"));
+
+        let batch = parse_batch_payload(
+            r#"{"version":1,"seriesTitle":" Series ","chapters":[
+                    {"title":"第1话","url":"HTTP://E/1#f","pages":["http://x/1.jpg"]},
+                    {"title":"","url":"http://e/2","pages":["http://x/2.jpg"]}
+                 ],"nextUrl":"HTTP://E/3#x"}"#
+                .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(batch.len(), 2);
+        let first: StoredMeta = serde_json::from_str(&batch[0].meta_json).unwrap();
+        let second: StoredMeta = serde_json::from_str(&batch[1].meta_json).unwrap();
+        assert_eq!(first.series_id.as_deref(), Some("Series"));
+        assert_eq!(second.series_id.as_deref(), Some("Series"));
+        assert_eq!(batch[0].series_id.as_deref(), Some("Series"));
+        assert_eq!(batch[0].canonical_url, "http://e/1");
+        assert_eq!(batch[0].title, "第1话");
+        assert_eq!(batch[1].title, "2");
+        assert_eq!(batch[0].next_url.as_deref(), Some("http://e/2"));
+        assert_eq!(first.next_url.as_deref(), Some("http://e/2"));
+        assert_eq!(second.next_url.as_deref(), Some("http://e/3"));
+    }
+
+    #[test]
+    fn batch_manifest_rejects_bad_shapes() {
+        assert_eq!(
+            parse_batch_payload(br#"{"chapters":[]}"#)
+                .unwrap_err()
+                .to_string(),
+            "合集清单 chapters 不能为空"
+        );
+        assert_eq!(
+            parse_batch_payload(br#"{"pages":["http://x/1.jpg"]}"#)
+                .unwrap_err()
+                .to_string(),
+            "单本清单缺少 url 字段"
+        );
+        assert_eq!(
+            parse_batch_payload(br#"{"chapters":[{"title":"T","pages":["http://x/1.jpg"]}]}"#)
+                .unwrap_err()
+                .to_string(),
+            "第 1 章缺少 url 字段"
+        );
+        assert_eq!(
+            parse_batch_payload(br#"{"version":2,"url":"http://e/1","pages":["http://x/1.jpg"]}"#)
+                .unwrap_err()
+                .to_string(),
+            "不支持的清单版本：2"
+        );
+        assert!(parse_batch_payload(
+            br#"{"url":"http://e/1","nextUrl":"file:///x","pages":["http://x/1.jpg"]}"#
+        )
+        .is_err());
+
+        let chapters: Vec<serde_json::Value> = (0..=100)
+            .map(|i| {
+                serde_json::json!({
+                    "title": format!("第{i}话"),
+                    "url": format!("http://e/{i}"),
+                    "pages": ["http://x/1.jpg"],
+                })
+            })
+            .collect();
+        let body = serde_json::json!({"chapters": chapters}).to_string();
+        assert_eq!(
+            parse_batch_payload(body.as_bytes())
+                .unwrap_err()
+                .to_string(),
+            "合集章节数超过上限 100"
+        );
     }
 }

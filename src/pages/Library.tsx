@@ -19,7 +19,10 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import ErrorState from "../components/ErrorState";
 import PixelPet from "../components/PixelPet";
 import DetailSheet from "../components/DetailSheet";
-import OnlineImportDialog from "../components/OnlineImportDialog";
+import OnlineImportDialog, {
+  LIBRARY_REFRESH_EVENT,
+  useOnlineHandoffState,
+} from "../components/OnlineImportDialog";
 import { toast, toastErr, Toaster } from "../components/Toast";
 
 /**
@@ -31,6 +34,7 @@ import { toast, toastErr, Toaster } from "../components/Toast";
  */
 export default function LibraryPage() {
   const nav = useNavigate();
+  const { session: handoffSession } = useOnlineHandoffState();
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [books, setBooks] = useState<BookInfo[]>([]);
   const [query, setQuery] = useState("");
@@ -114,6 +118,13 @@ export default function LibraryPage() {
 
   useEffect(() => {
     void reload(debounced);
+  }, [debounced, reload]);
+
+  // 协同配对回传导入完成（弹窗关闭时也会触发）。
+  useEffect(() => {
+    const refresh = () => void reload(debounced);
+    window.addEventListener(LIBRARY_REFRESH_EVENT, refresh);
+    return () => window.removeEventListener(LIBRARY_REFRESH_EVENT, refresh);
   }, [debounced, reload]);
 
   const selected = useMemo(
@@ -351,9 +362,14 @@ export default function LibraryPage() {
             <button
               className="btn"
               onClick={() => setOnlineOpen(true)}
-              title="从 JSON 清单或单页 HTML 图集导入"
+              title={
+                handoffSession
+                  ? "配对会话进行中，点击打开查看或停止"
+                  : "从 JSON 清单或单页 HTML 图集导入"
+              }
             >
-              <Link2 size={14} /> URL 直读
+              <Link2 size={14} />{" "}
+              {handoffSession ? "配对中（打开查看/停止）" : "URL 直读"}
             </button>
           )}
           <button

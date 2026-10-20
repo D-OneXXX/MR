@@ -5,6 +5,7 @@ import {
   BarChart3,
   BookMarked,
   FlaskConical,
+  Globe,
   Languages,
   Library as LibraryIcon,
   Moon,
@@ -25,6 +26,7 @@ import Workbench from "./pages/Workbench";
 import Glossary from "./pages/Glossary";
 import Status from "./pages/Status";
 import DataView from "./pages/DataView";
+import Browser from "./pages/Browser";
 import TitleBar from "./components/TitleBar";
 
 const VERSION = "v0.2.0";
@@ -161,6 +163,10 @@ function Shell() {
             <BarChart3 size={17} />
             <span className="rail-label">数据</span>
           </NavLink>
+          <NavLink to="/browser" className={railOn}>
+            <Globe size={17} />
+            <span className="rail-label">浏览器</span>
+          </NavLink>
           {transOn && (
             <NavLink to="/glossary" className={railOn}>
               <BookMarked size={17} />
@@ -191,6 +197,14 @@ function Shell() {
           <Routes location={loc}>
             <Route path="/" element={<Library />} />
             <Route path="/data" element={<DataView />} />
+            <Route
+              path="/browser"
+              element={
+                <div className="shell-inner">
+                  <Browser />
+                </div>
+              }
+            />
           <Route
             path="/workbench"
             element={

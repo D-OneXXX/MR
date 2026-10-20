@@ -291,7 +291,12 @@ impl ImageSource for OnlineSource {
         let _guard = self.permits.acquire();
         let resp = self
             .http
-            .get(&page.url, PAGE_MAX_BYTES, Some(&self.referer))
+            .get(
+                &page.url,
+                PAGE_MAX_BYTES,
+                Some(&self.referer),
+                Some(&self.referer),
+            )
             .map_err(|e| {
                 // 传输层失败（连接/超时/过大等）也带脱敏后的页 URL 留痕，便于定位。
                 let msg = format!(
@@ -511,11 +516,11 @@ mod tests {
 
     use super::ImageSource;
 
-    /// 固定响应的假传输：记录每次请求的 (url, referer, max_bytes)，便于断言参数透传。
+    /// 固定响应的假传输：记录每次请求的 (url, referer, max_bytes, header_scope)。
     struct FakeHttp {
         status: u16,
         body: Vec<u8>,
-        requests: Mutex<Vec<(String, Option<String>, usize)>>,
+        requests: Mutex<Vec<(String, Option<String>, usize, Option<String>)>>,
     }
 
     impl FakeHttp {
@@ -538,11 +543,13 @@ mod tests {
             url: &str,
             max_bytes: usize,
             referer: Option<&str>,
+            header_scope: Option<&str>,
         ) -> Result<HttpResponse, OnlineError> {
             self.requests.lock().unwrap().push((
                 url.to_string(),
                 referer.map(str::to_string),
                 max_bytes,
+                header_scope.map(str::to_string),
             ));
             Ok(HttpResponse {
                 status: self.status,
@@ -587,13 +594,14 @@ mod tests {
         assert_eq!(raw.ext, "png");
         assert!(raw.bytes.starts_with(b"\x89PNG"));
         assert!(src.read_raw(2).is_err());
-        // 单页请求携带页 URL、整本规范化 URL 作为 Referer，以及单页字节上限。
+        // 单页请求携带页 URL、整本规范化 URL 作为 Referer/header scope，以及单页字节上限。
         assert_eq!(
             *http.requests.lock().unwrap(),
             vec![(
                 "http://x/001.png".to_string(),
                 Some("http://x/gallery/1".to_string()),
                 crate::online::PAGE_MAX_BYTES,
+                Some("http://x/gallery/1".to_string()),
             )]
         );
     }

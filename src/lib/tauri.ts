@@ -14,6 +14,10 @@ export interface BookInfo {
   sourceType: string;
   /** 条漫是否可用：本地 true；在线取决于清单尺寸。 */
   webtoonReady: boolean;
+  /** 同一系列的标识；用于下一话解析。 */
+  seriesId?: string | null;
+  /** 下一话来源 URL；无则 null/缺省。 */
+  nextUrl?: string | null;
 }
 
 export interface PageEntry {
@@ -253,6 +257,32 @@ export interface OnlineProbe {
   message: string;
 }
 
+/** 内嵌浏览器下载项（后端扫描应用下载目录）。 */
+export interface BrowserDownload {
+  path: string;
+  name: string;
+  size: number;
+  modified: string;
+  imported: boolean;
+}
+
+/** `browser-download` 事件载荷。 */
+export interface BrowserDownloadEvent {
+  path: string;
+  name: string;
+  imported: boolean;
+  bookId: string | null;
+}
+
+/** 外部浏览器协同回传信息（与后端 HandoffSession 一致）。 */
+export interface BrowserHandoff {
+  port: number;
+  token: string;
+  callbackUrl: string;
+  bookmarklet: string;
+  script: string;
+}
+
 // ---------- 实验性功能镜像：同步读取 + 变更事件 ----------
 // 设置的权威副本在 SQLite；这里维护 localStorage 镜像，让无法等待
 // 异步 getSettings 的组件（阅读器/导航）能同步读取开关状态。
@@ -369,6 +399,36 @@ export const api = {
   // 只测试清单/图集 + 代理连通性，不写库。
   testOnlineConnection: (url: string) =>
     invoke<OnlineProbe>("test_online_connection", { url }),
+  // 系统代理探测（只填入表单，不落库）。
+  detectSystemProxy: () => invoke<string | null>("detect_system_proxy"),
+  // 手动图片 URL 列表入库。
+  importResolvedPages: (url: string, title: string, pageUrls: string[]) =>
+    invoke<BookInfo>("import_resolved_pages", { url, title, pageUrls }),
+  // 外部系统浏览器协同导入：长驻配对，结果经 online-handoff-imported 回传。
+  startBrowserHandoff: (url: string) =>
+    invoke<BrowserHandoff>("start_browser_handoff", { targetUrl: url }),
+  stopBrowserHandoff: () => invoke<void>("stop_browser_handoff"),
+  // 下一话 / 多本批量导入。
+  getNextBook: (bookId: string) =>
+    invoke<BookInfo | null>("get_next_book", { bookId }),
+  importOnlineBatch: (payloadJson: string) =>
+    invoke<BookInfo[]>("import_online_batch", { payloadJson }),
+  // 会话级在线请求头（仅内存，不落库）。
+  getSessionOnlineHeaders: () =>
+    invoke<string | null>("get_session_online_headers"),
+  setSessionOnlineHeaders: (value: string) =>
+    invoke<void>("set_session_online_headers", { headers: value }),
+  clearSessionOnlineHeaders: () =>
+    invoke<void>("clear_session_online_headers"),
+  // 内嵌浏览器（独立 WebviewWindow）：启动/导航、下载扫描与导入。
+  openBrowserWindow: (url: string) =>
+    invoke<void>("open_browser_window", { url }),
+  navigateBrowser: (url: string) =>
+    invoke<void>("navigate_browser", { url }),
+  listBrowserDownloads: () =>
+    invoke<BrowserDownload[]>("list_browser_downloads"),
+  importBrowserDownload: (path: string) =>
+    invoke<string | null>("import_browser_download", { path }),
   translateRegion: (text: string) =>
     invoke<TranslateResult>("translate_region", { text }),
   getTransStats: () => invoke<TransStats>("get_trans_stats"),

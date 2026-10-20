@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -40,6 +40,14 @@ impl DbSlot {
     }
 }
 
+pub(crate) fn effective_online_headers(saved: &str, session: Option<&str>) -> String {
+    session
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(saved)
+        .to_string()
+}
+
 /// 渲染缓存根目录：环境变量优先（测试隔离），否则默认本地数据目录。
 fn default_render_root() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("MR_RENDER_CACHE_DIR") {
@@ -54,6 +62,8 @@ fn default_render_root() -> std::path::PathBuf {
 
 pub struct AppState {
     pub settings: Mutex<Settings>,
+    /// 进程内会话临时请求头；优先于 Settings.online_headers，绝不持久化/记日志。
+    pub session_online_headers: Mutex<Option<String>>,
     pub db: DbSlot,
     pub cache: ImageCache,
     /// 阶段三:OCR/翻译共用一个连接池化的 HTTP 客户端。
@@ -72,6 +82,7 @@ pub struct AppState {
     /// 磁盘渲染缓存（成品 JPEG，二次访问 ~1ms）。
     pub render: RenderCache,
     db_path: Mutex<std::path::PathBuf>,
+    handoff_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub _version: u64,
 }
 
@@ -79,6 +90,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             settings: Mutex::new(Settings::default()),
+            session_online_headers: Mutex::new(None),
             db: DbSlot::new(),
             cache: ImageCache::new(),
             http: reqwest::Client::new(),
@@ -89,7 +101,35 @@ impl AppState {
             webtoon_layouts: Mutex::new(HashMap::new()),
             render: RenderCache::new(default_render_root()),
             db_path: Mutex::new(std::path::PathBuf::new()),
+            handoff_cancel: Mutex::new(None),
             _version: 3,
+        }
+    }
+
+    /// 开始新的 handoff 会话；旧会话会被取消。
+    pub(crate) fn begin_handoff_cancel(&self) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut slot = self.handoff_cancel.lock();
+        if let Some(previous) = slot.replace(flag.clone()) {
+            previous.store(true, Ordering::SeqCst);
+        }
+        flag
+    }
+
+    /// 仅当当前会话仍是该 flag 时清理，避免新会话被旧线程误清。
+    pub(crate) fn finish_handoff(&self, flag: &Arc<AtomicBool>) {
+        let mut slot = self.handoff_cancel.lock();
+        if slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, flag))
+        {
+            *slot = None;
+        }
+    }
+
+    pub(crate) fn cancel_handoff(&self) {
+        if let Some(flag) = self.handoff_cancel.lock().take() {
+            flag.store(true, Ordering::SeqCst);
         }
     }
 
@@ -154,8 +194,9 @@ impl AppState {
             let stored: crate::online::StoredMeta = serde_json::from_str(&meta_json)
                 .map_err(|e| crate::source::BackendError::Msg(format!("在线书元数据损坏：{e}")))?;
             let s = self.settings.lock().clone();
-            let transport =
-                crate::online::http::UreqTransport::new(&s.online_proxy, &s.online_headers)?;
+            let session_headers = self.session_online_headers.lock().clone();
+            let headers = effective_online_headers(&s.online_headers, session_headers.as_deref());
+            let transport = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
             Arc::new(SourceHandle::open_online(
                 path,
                 stored.pages,
@@ -221,7 +262,7 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::AppState;
+    use super::{effective_online_headers, AppState};
     use crate::source::{BackendError, SourceHandle};
 
     fn test_state() -> AppState {
@@ -355,6 +396,8 @@ mod tests {
                     height: None,
                 },
             ],
+            series_id: None,
+            next_url: None,
         };
         let meta_json = serde_json::to_string(&meta).expect("序列化 StoredMeta");
         state
@@ -411,6 +454,39 @@ mod tests {
 
         let err = err_text(state.source_handle_for_book("anime-book"));
         assert_eq!(err, "第二阶段视频源尚未实现");
+    }
+
+    #[test]
+    fn session_headers_override_saved_headers_until_cleared() {
+        assert_eq!(
+            effective_online_headers("Cookie: saved", None),
+            "Cookie: saved"
+        );
+        assert_eq!(
+            effective_online_headers("Cookie: saved", Some("Cookie: session")),
+            "Cookie: session"
+        );
+        assert_eq!(
+            effective_online_headers("Cookie: saved", Some("   ")),
+            "Cookie: saved"
+        );
+    }
+
+    #[test]
+    fn handoff_cancel_flag_is_replaceable_and_finished() {
+        let state = AppState::new();
+        let flag = state.begin_handoff_cancel();
+        assert!(!flag.load(Ordering::SeqCst));
+        state.cancel_handoff();
+        assert!(flag.load(Ordering::SeqCst));
+
+        let flag = state.begin_handoff_cancel();
+        state.finish_handoff(&flag);
+        state.cancel_handoff();
+        assert!(
+            !flag.load(Ordering::SeqCst),
+            "finished session must not be cancellable"
+        );
     }
 
     #[test]

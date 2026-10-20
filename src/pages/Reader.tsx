@@ -104,6 +104,7 @@ export default function Reader() {
   const [entriesError, setEntriesError] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sizeTick, setSizeTick] = useState(0);
+  const [nextBusy, setNextBusy] = useState(false);
 
   /* ---------- 阶段三:选区翻译 ---------- */
   // 实验性开关（镜像 + 后端刷新 + 订阅）：关闭时入口隐藏、快捷键失效。
@@ -177,6 +178,38 @@ export default function Reader() {
   const solo = isSoloCover(spread, mode, prefs.dir);
   const canPrev = n > 0 && stepPage(page, n, mode, prefs.dir, -1) !== page;
   const canNext = n > 0 && stepPage(page, n, mode, prefs.dir, 1) !== page;
+  const atLastPage =
+    bookState === "ready" &&
+    book !== null &&
+    n > 0 &&
+    book.sourceType !== "local" &&
+    (mode === "webtoon"
+      ? wtProgress.page >= n - 1
+      : page >= n - 1 || spread.includes(n - 1));
+
+  // 「下一话」只在确实存在下一话时出现：已入库的下一话（get_next_book）
+  // 或尚未入库的下一话链接（book.nextUrl）。探针按 bookId 缓存，避免每次翻页重查。
+  const [nextProbe, setNextProbe] = useState<{ id: string; book: BookInfo | null }>({
+    id: "",
+    book: null,
+  });
+  const nextProbeRef = useRef("");
+  useEffect(() => {
+    const id = book?.id ?? "";
+    if (!id || book?.sourceType === "local" || !atLastPage) {
+      nextProbeRef.current = "";
+      setNextProbe((prev) => (prev.id === "" && prev.book === null ? prev : { id: "", book: null }));
+      return;
+    }
+    if (nextProbeRef.current === id) return;
+    nextProbeRef.current = id;
+    void api
+      .getNextBook(id)
+      .then((next) => setNextProbe({ id, book: next }))
+      .catch(() => setNextProbe({ id, book: null }));
+  }, [book?.id, book?.sourceType, atLastPage]);
+  const nextBook = nextProbe.id === (book?.id ?? "") ? nextProbe.book : null;
+  const showNextChapter = atLastPage && (nextBook !== null || !!book?.nextUrl);
 
   /* ---------- open book: get_book -> restore currentPage ---------- */
   useEffect(() => {
@@ -950,6 +983,35 @@ export default function Reader() {
     fetchIdx(idx);
   };
 
+  const goNextChapter = useCallback(async () => {
+    const current = trackRef.current.book;
+    if (!current || nextBusy) return;
+    setNextBusy(true);
+    try {
+      // 优先用探针结果；探针缺失（刚打开书、尚未到末页）时再查一次。
+      const probed =
+        nextBook && nextProbe.id === current.id ? nextBook : await api.getNextBook(current.id);
+      if (probed) {
+        nav(`/reader/${encodeURIComponent(probed.id)}`, { replace: true });
+        return;
+      }
+      if (current.nextUrl) {
+        try {
+          const resolved = await api.resolveOnlineUrl(current.nextUrl);
+          nav(`/reader/${encodeURIComponent(resolved.id)}`, { replace: true });
+        } catch (e) {
+          toastErr("resolve_online_url", e);
+        }
+        return;
+      }
+      toast("没有找到下一话");
+    } catch (e) {
+      toastErr("get_next_book", e);
+    } finally {
+      setNextBusy(false);
+    }
+  }, [nav, nextBusy, nextBook, nextProbe.id]);
+
   const dirRtl = prefs.dir === "rtl";
   const NextIcon = dirRtl ? ChevronLeft : ChevronRight;
   const PrevIcon = dirRtl ? ChevronRight : ChevronLeft;
@@ -1191,6 +1253,16 @@ export default function Reader() {
         <button className="rbtn" onClick={() => go(1)} disabled={!canNext} title="下一页">
           <NextIcon size={17} />
         </button>
+        {showNextChapter && (
+          <button
+            className="rbtn rbtn-next"
+            onClick={() => void goNextChapter()}
+            disabled={nextBusy}
+            title="下一话"
+          >
+            {nextBusy ? "解析中…" : "下一话 →"}
+          </button>
+        )}
         <button
           className="rbtn mono"
           style={{ fontSize: 11, padding: "6px 9px" }}

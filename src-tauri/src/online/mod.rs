@@ -3,9 +3,11 @@
 //! 统一解析入口见 [`resolve`]：一次拉取后先试 JSON 清单，再试单页 HTML 图集。
 
 pub mod direct;
+pub mod handoff;
 pub mod html;
 pub mod http;
 
+use std::collections::HashSet;
 use std::sync::{Condvar, Mutex};
 
 use crate::source::BackendError;
@@ -37,6 +39,12 @@ pub struct StoredMeta {
     pub manifest_hash: String,
     pub fetched_at: String,
     pub pages: Vec<PageRef>,
+    /// 同一系列的稳定标识；旧 meta_json 缺省为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_id: Option<String>,
+    /// 下一话的规范化 URL；旧 meta_json 缺省为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_url: Option<String>,
 }
 
 /// 在线源内部错误（最终统一映射为 [`BackendError::Network`]）。
@@ -65,8 +73,7 @@ pub fn normalize_url(raw: &str) -> Result<url::Url, BackendError> {
     if raw.len() > 2048 {
         return Err(BackendError::Msg("URL 过长（上限 2048 字节）".into()));
     }
-    let mut u = url::Url::parse(raw)
-        .map_err(|e| BackendError::Msg(format!("URL 无效：{e}")))?;
+    let mut u = url::Url::parse(raw).map_err(|e| BackendError::Msg(format!("URL 无效：{e}")))?;
     if !matches!(u.scheme(), "http" | "https") {
         return Err(BackendError::Msg("仅支持 http/https URL".into()));
     }
@@ -77,11 +84,40 @@ pub fn normalize_url(raw: &str) -> Result<url::Url, BackendError> {
     Ok(u)
 }
 
+/// 批量导入共用的页面 URL 整理：逐个规范化、保序去重、1..=MAX_PAGES。
+pub fn normalize_page_urls(page_urls: &[String]) -> Result<Vec<PageRef>, BackendError> {
+    let mut seen = HashSet::new();
+    let mut pages = Vec::new();
+    for (index, raw) in page_urls.iter().enumerate() {
+        let page = normalize_url(raw)
+            .map_err(|e| BackendError::Msg(format!("第 {} 页 URL 非法：{e}", index + 1)))?;
+        let page = page.to_string();
+        if seen.insert(page.clone()) {
+            pages.push(PageRef {
+                url: page,
+                width: None,
+                height: None,
+            });
+        }
+    }
+    if pages.is_empty() {
+        return Err(BackendError::Msg("页面列表不能为空".into()));
+    }
+    if pages.len() > MAX_PAGES {
+        return Err(BackendError::Msg(format!("页面数量超过上限 {MAX_PAGES}")));
+    }
+    Ok(pages)
+}
+
 /// 从 URL 推导书名：优先倒数第一个非空路径段（解码），否则退回主机名。
 pub fn title_from_url(u: &url::Url) -> String {
     u.path_segments()
         .and_then(|s| s.filter(|x| !x.is_empty()).last())
-        .map(|s| percent_encoding::percent_decode_str(s).decode_utf8_lossy().to_string())
+        .map(|s| {
+            percent_encoding::percent_decode_str(s)
+                .decode_utf8_lossy()
+                .to_string()
+        })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| u.host_str().unwrap_or("在线漫画").to_string())
 }
@@ -93,7 +129,11 @@ pub fn page_name(p: &PageRef, index: usize) -> String {
         .and_then(|u| {
             u.path_segments()
                 .and_then(|s| s.filter(|x| !x.is_empty()).last())
-                .map(|s| percent_encoding::percent_decode_str(s).decode_utf8_lossy().to_string())
+                .map(|s| {
+                    percent_encoding::percent_decode_str(s)
+                        .decode_utf8_lossy()
+                        .to_string()
+                })
         })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| format!("第 {} 页", index + 1))
@@ -105,7 +145,7 @@ pub fn resolve(
     raw_url: &str,
 ) -> Result<direct::OnlineBookMeta, BackendError> {
     let url = normalize_url(raw_url)?;
-    let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None)?;
+    let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None, Some(url.as_str()))?;
     if !(200..300).contains(&resp.status) {
         return Err(BackendError::Network(format!(
             "内容 HTTP {}：{}",
@@ -241,7 +281,7 @@ impl Drop for SemaphoreGuard<'_> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     #[test]
@@ -292,9 +332,17 @@ mod tests {
 
     #[test]
     fn page_name_uses_filename_or_index() {
-        let p = PageRef { url: "https://x/a/001.jpg".into(), width: None, height: None };
+        let p = PageRef {
+            url: "https://x/a/001.jpg".into(),
+            width: None,
+            height: None,
+        };
         assert_eq!(page_name(&p, 0), "001.jpg");
-        let p = PageRef { url: "https://x/".into(), width: None, height: None };
+        let p = PageRef {
+            url: "https://x/".into(),
+            width: None,
+            height: None,
+        };
         assert_eq!(page_name(&p, 2), "第 3 页");
     }
 
@@ -318,6 +366,37 @@ mod tests {
     fn network_error_has_single_prefix() {
         let e: BackendError = OnlineError::Network("连接失败".into()).into();
         assert_eq!(e.to_string(), "网络错误：连接失败");
+    }
+
+    #[test]
+    fn normalize_page_urls_dedupes_and_validates() {
+        let pages = normalize_page_urls(&[
+            "HTTP://X/1.jpg#a".into(),
+            "http://x/1.jpg#b".into(),
+            "http://x/2.jpg".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            pages.iter().map(|p| p.url.as_str()).collect::<Vec<_>>(),
+            vec!["http://x/1.jpg", "http://x/2.jpg"]
+        );
+        assert_eq!(
+            normalize_page_urls(&[]).unwrap_err().to_string(),
+            "页面列表不能为空"
+        );
+        assert_eq!(
+            normalize_page_urls(&["file:///x".into()])
+                .unwrap_err()
+                .to_string(),
+            "第 1 页 URL 非法：仅支持 http/https URL"
+        );
+        let too_many: Vec<String> = (0..=MAX_PAGES)
+            .map(|i| format!("http://x/{i}.jpg"))
+            .collect();
+        assert_eq!(
+            normalize_page_urls(&too_many).unwrap_err().to_string(),
+            format!("页面数量超过上限 {MAX_PAGES}")
+        );
     }
 
     #[test]
@@ -356,6 +435,7 @@ mod tests {
         body: Vec<u8>,
         final_url: String,
         calls: AtomicUsize,
+        scopes: Mutex<Vec<Option<String>>>,
     }
 
     impl StubTransport {
@@ -365,6 +445,7 @@ mod tests {
                 body: body.to_vec(),
                 final_url: "http://example.com/final".into(),
                 calls: AtomicUsize::new(0),
+                scopes: Mutex::new(Vec::new()),
             }
         }
 
@@ -376,6 +457,10 @@ mod tests {
         fn calls(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
         }
+
+        fn scopes(&self) -> Vec<Option<String>> {
+            self.scopes.lock().unwrap().clone()
+        }
     }
 
     impl http::HttpTransport for StubTransport {
@@ -384,8 +469,13 @@ mod tests {
             _url: &str,
             _max: usize,
             _referer: Option<&str>,
+            header_scope: Option<&str>,
         ) -> Result<http::HttpResponse, OnlineError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.scopes
+                .lock()
+                .unwrap()
+                .push(header_scope.map(str::to_string));
             Ok(http::HttpResponse {
                 status: self.status,
                 final_url: self.final_url.clone(),
@@ -479,5 +569,15 @@ mod tests {
         assert!(err.contains("404"), "{err}");
         assert!(err.contains("http://example.com/missing"), "{err}");
         assert!(!err.contains("token=secret"), "{err}");
+    }
+
+    #[test]
+    fn resolve_manifest_request_uses_normalized_url_as_scope() {
+        let t = StubTransport::ok(br#"{"pages":["http://x/1.jpg"]}"#);
+        resolve(&t, "http://example.com/list?token=secret#frag").unwrap();
+        assert_eq!(
+            t.scopes(),
+            vec![Some("http://example.com/list?token=secret".to_string())]
+        );
     }
 }

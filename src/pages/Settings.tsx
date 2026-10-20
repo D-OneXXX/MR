@@ -61,6 +61,9 @@ export default function SettingsPage() {
   const [onlineTestUrl, setOnlineTestUrl] = useState("");
   const [onlineProbe, setOnlineProbe] = useState<string | null>(null);
   const [testingOnline, setTestingOnline] = useState(false);
+  const [detectingProxy, setDetectingProxy] = useState(false);
+  const [sessionHeaders, setSessionHeaders] = useState(false);
+  const [sessionActive, setSessionActive] = useState(false);
   const [experimentalBusy, setExperimentalBusy] = useState<string | null>(null);
 
   const load = () => {
@@ -72,11 +75,17 @@ export default function SettingsPage() {
       api.getMemoryStats(),
       // 统计挂了不该拖垮设置页加载。
       api.getTransStats().catch(() => null),
+      // 会话请求头命令不可用时不应拖垮设置页。
+      api.getSessionOnlineHeaders().catch(() => null),
     ])
       .then(
-        ([s, m, t]) => {
+        ([s, m, t, session]) => {
           if (!alive) return;
-          setForm({ ...DEFAULT_FORM, ...s });
+          const sessionValue =
+            typeof session === "string" && session.trim().length > 0 ? session : "";
+          setForm({ ...DEFAULT_FORM, ...s, ...(sessionValue ? { onlineHeaders: sessionValue } : {}) });
+          setSessionHeaders(sessionValue.length > 0);
+          setSessionActive(sessionValue.length > 0);
           setMem(m);
           setStats(t);
           document.documentElement.dataset.theme = s.theme || "dark";
@@ -180,10 +189,40 @@ export default function SettingsPage() {
     }
   };
 
+  const onDetectProxy = async () => {
+    if (detectingProxy) return;
+    setDetectingProxy(true);
+    try {
+      const proxy = (await api.detectSystemProxy())?.trim() ?? "";
+      if (proxy) {
+        set("onlineProxy", proxy);
+        toast("已填入系统代理，点击保存后生效");
+      } else {
+        toast("未检测到开启的系统代理");
+      }
+    } catch (e) {
+      toastErr("detect_system_proxy", e);
+    } finally {
+      setDetectingProxy(false);
+    }
+  };
+
   const onSave = async () => {
+    // 设置尚未载入（或载入失败）时表单仍是默认值，禁止写库。
+    if (loading || loadError || saving) return;
     setSaving(true);
     try {
-      await api.setSettings(form);
+      if (sessionHeaders) {
+        // 先写入进程内存副本（含后端校验），再清库避免明文残留。
+        await api.setSessionOnlineHeaders(form.onlineHeaders);
+        setSessionActive(form.onlineHeaders.trim().length > 0);
+        await api.setSettings({ ...form, onlineHeaders: "" });
+      } else {
+        // 退出会话模式：先清内存副本，再按原逻辑持久化。
+        await api.clearSessionOnlineHeaders();
+        await api.setSettings(form);
+        setSessionActive(false);
+      }
       document.documentElement.dataset.theme = form.theme;
       try {
         localStorage.setItem("mr-theme", form.theme);
@@ -212,6 +251,11 @@ export default function SettingsPage() {
     <div>
       {loadError ? (
         <ErrorState message={`设置加载失败：${loadError}`} onRetry={load} />
+      ) : loading ? (
+        <div className="card section-card" role="status" aria-live="polite">
+          <h3 className="section-title">正在加载设置…</h3>
+          <p className="hint">加载完成前不可编辑或保存，请稍候。</p>
+        </div>
       ) : (
         <>
         <div className="card section-card">
@@ -571,15 +615,27 @@ export default function SettingsPage() {
             请求头以明文保存在本机，并会随请求发送到你配置的源或网关。
           </p>
           <div className="form-grid two" style={{ marginTop: 8 }}>
-            <label className="field">
+            <div className="field">
               <span>代理地址</span>
-              <input
-                className="input mono"
-                value={form.onlineProxy}
-                onChange={(e) => set("onlineProxy", e.currentTarget.value)}
-                placeholder="留空直连，或 http://127.0.0.1:7890 / socks5://..."
-              />
-            </label>
+              <div className="field-row">
+                <input
+                  className="input mono"
+                  value={form.onlineProxy}
+                  onChange={(e) => set("onlineProxy", e.currentTarget.value)}
+                  placeholder="留空直连，或 http://127.0.0.1:7890 / socks5://..."
+                  aria-label="代理地址"
+                />
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => void onDetectProxy()}
+                  disabled={detectingProxy}
+                  title="读取 Windows 系统代理并填入代理地址，不会自动保存"
+                >
+                  {detectingProxy ? "检测中…" : "获取系统代理"}
+                </button>
+              </div>
+            </div>
             <label className="field">
               <span>并发数</span>
               <input
@@ -593,7 +649,7 @@ export default function SettingsPage() {
                 }
               />
             </label>
-            <label className="field" style={{ gridColumn: "1 / -1" }}>
+            <div className="field" style={{ gridColumn: "1 / -1" }}>
               <span>自定义请求头（JSON 或单行 Cookie）</span>
               <textarea
                 className="input mono"
@@ -602,11 +658,31 @@ export default function SettingsPage() {
                 value={form.onlineHeaders}
                 onChange={(e) => set("onlineHeaders", e.currentTarget.value)}
                 placeholder='{"Authorization":"Bearer ..."} 或 session=...; token=...'
+                aria-label="自定义请求头"
               />
               <span className="hint">
                 敏感信息：请求头以明文保存在本机设置中，并会随请求发送到你配置的源或网关；请只填写你信任的源或网关。
               </span>
-            </label>
+              {sessionActive && (
+                <span className="hint" style={{ color: "var(--accent)" }}>
+                  当前使用会话临时请求头（未保存，退出应用即清除）
+                </span>
+              )}
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13 }}>
+                <input
+                  type="checkbox"
+                  checked={sessionHeaders}
+                  onChange={(e) => setSessionHeaders(e.currentTarget.checked)}
+                  disabled={saving}
+                  style={{ marginTop: 2 }}
+                />
+                <span>仅保存在内存中（退出应用即清除，不写入本地数据库）</span>
+              </label>
+              <span className="hint">勾选或取消后点击「保存设置」生效。</span>
+              <span className="hint">
+                协同导入时脚本里的 MR_SESSION_HEADERS 也只进内存，退出即焚、不落盘。
+              </span>
+            </div>
           </div>
           <div className="field-row" style={{ marginTop: 12 }}>
             <input
@@ -627,7 +703,7 @@ export default function SettingsPage() {
       )}
 
       <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn primary" onClick={onSave} disabled={saving}>
+        <button className="btn primary" onClick={onSave} disabled={saving || loading}>
           <Save size={14} /> {saving ? "保存中…" : "保存设置"}
         </button>
       </div>

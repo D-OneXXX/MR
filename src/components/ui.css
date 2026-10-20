@@ -306,7 +306,8 @@
 
 .sheet-panel {
   position: fixed;
-  top: 0;
+  /* 自绘标题栏高 40px；sheet 位于 .view-fade 层叠上下文内，需让出顶部。 */
+  top: 40px;
   right: 0;
   bottom: 0;
   z-index: 81;

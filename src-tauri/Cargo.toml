@@ -50,7 +50,10 @@ windows = { version = "0.62", features = [
     "Graphics_Imaging",
     "Media_Ocr",
     "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
     "Win32_System_Com",
+    "Win32_System_Registry",
 ] }
 
 [profile.release]
@@ -59,3 +62,8 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# 体积预算：关闭开发构建的增量缓存，避免 target/debug/incremental 反复膨胀。
+# 代价是 Rust 改动后的重编译稍慢；前端 HMR 不受影响。
+[profile.dev]
+incremental = false

@@ -20,6 +20,7 @@ pub trait HttpTransport: Send + Sync {
         url: &str,
         max_bytes: usize,
         referer: Option<&str>,
+        header_scope: Option<&str>,
     ) -> Result<HttpResponse, OnlineError>;
 }
 
@@ -145,6 +146,32 @@ fn same_origin(a: &url::Url, b: &url::Url) -> bool {
         && a.port_or_known_default() == b.port_or_known_default()
 }
 
+/// 解析导入源/整本书的 header scope；非法或非 http(s) 时返回 None（不发送用户头）。
+fn parse_header_scope(raw: Option<&str>) -> Option<url::Url> {
+    let u = url::Url::parse(raw?).ok()?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return None;
+    }
+    if !u.username().is_empty() || u.password().is_some() {
+        return None;
+    }
+    Some(u)
+}
+
+/// 跨源时去掉 Referer 的 query 与 fragment，同源保持原样。
+fn referer_value(target: &url::Url, page: &url::Url, scope: Option<&url::Url>) -> String {
+    let same_referer = same_origin(target, page);
+    let same_scope = scope.is_some_and(|s| same_origin(target, s));
+    if same_referer && same_scope {
+        page.to_string()
+    } else {
+        let mut u = page.clone();
+        u.set_query(None);
+        u.set_fragment(None);
+        u.to_string()
+    }
+}
+
 /// 归一化代理地址：小写 scheme；https 按 HTTP CONNECT 代理映射为 http；
 /// 仅保留 http/socks5，并要求非空 host。
 fn normalize_proxy(raw: &str) -> Result<Option<String>, OnlineError> {
@@ -153,8 +180,7 @@ fn normalize_proxy(raw: &str) -> Result<Option<String>, OnlineError> {
         return Ok(None);
     }
     validate_proxy(raw).map_err(OnlineError::Proxy)?;
-    let u =
-        url::Url::parse(raw).map_err(|e| OnlineError::Proxy(format!("代理地址无效：{e}")))?;
+    let u = url::Url::parse(raw).map_err(|e| OnlineError::Proxy(format!("代理地址无效：{e}")))?;
     let scheme = match u.scheme() {
         "http" | "https" => "http",
         "socks5" => "socks5",
@@ -196,19 +222,19 @@ impl UreqTransport {
     }
 
     /// 单次请求：应用手动请求头与派生的 Referer/Origin。
-    /// 仅当目标与原始请求同 origin（scheme+host+port）时应用全部用户请求头；
-    /// 跨 origin 重定向丢弃全部用户请求头（含 Cookie/Authorization/自定义密钥头），
+    /// 用户请求头只在目标与 header_scope 同 origin（scheme+host+port）时发送；
+    /// 跨 origin 丢弃全部用户请求头（含 Cookie/Authorization/自定义密钥头），
     /// 只保留由页面 URL 派生的 Referer/Origin。
     fn execute(
         &self,
         target: &url::Url,
-        original: &url::Url,
+        scope: Option<&url::Url>,
         max_bytes: usize,
         referer: Option<&str>,
     ) -> Result<RawResponse, OnlineError> {
-        let cross_origin = !same_origin(target, original);
+        let within_scope = scope.is_some_and(|s| same_origin(target, s));
         let mut req = self.agent.get(target.as_str());
-        if !cross_origin {
+        if within_scope {
             for (k, v) in &self.headers.values {
                 req = req.set(k, v);
             }
@@ -216,14 +242,14 @@ impl UreqTransport {
         if let Some(page) = referer {
             if let Ok(u) = url::Url::parse(page) {
                 if matches!(u.scheme(), "http" | "https") {
-                    if let Some(host) = u.host_str() {
+                    if u.host_str().is_some() {
                         // 跨 origin 时用户头已被丢弃，必须使用派生值；
                         // 同 origin 时显式配置的同名头优先。
-                        if cross_origin || !self.headers.has("referer") {
-                            req = req.set("Referer", page);
+                        if !within_scope || !self.headers.has("referer") {
+                            req = req.set("Referer", &referer_value(target, &u, scope));
                         }
-                        if cross_origin || !self.headers.has("origin") {
-                            let origin = format!("{}://{}", u.scheme(), host);
+                        if !within_scope || !self.headers.has("origin") {
+                            let origin = u.origin().ascii_serialization();
                             req = req.set("Origin", &origin);
                         }
                     }
@@ -241,17 +267,18 @@ impl UreqTransport {
         }
     }
 
-    /// 手动跟随 301/302/303/307/308；每一跳都重新应用请求头
+    /// 手动跟随 301/302/303/307/308；每一跳都按同一个 header_scope 判断
     /// （用户请求头只在同 origin 时发送，跨 origin 仅派生 Referer/Origin）。
     fn get_once(
         &self,
         url: &url::Url,
         max_bytes: usize,
         referer: Option<&str>,
+        scope: Option<&url::Url>,
     ) -> Result<RawResponse, OnlineError> {
         let mut current = url.clone();
         for hop in 0..=MAX_REDIRECTS {
-            let raw = self.execute(&current, url, max_bytes, referer)?;
+            let raw = self.execute(&current, scope, max_bytes, referer)?;
             if !is_redirect(raw.status) {
                 return Ok(raw);
             }
@@ -264,9 +291,9 @@ impl UreqTransport {
                 .location
                 .as_deref()
                 .ok_or_else(|| OnlineError::Network("重定向缺少 Location".into()))?;
-            let next = current.join(location).map_err(|e| {
-                OnlineError::Network(format!("重定向地址无效：{e}"))
-            })?;
+            let next = current
+                .join(location)
+                .map_err(|e| OnlineError::Network(format!("重定向地址无效：{e}")))?;
             if !matches!(next.scheme(), "http" | "https") {
                 return Err(OnlineError::Network("重定向到非 HTTP(S) URL".into()));
             }
@@ -340,10 +367,12 @@ impl HttpTransport for UreqTransport {
         url: &str,
         max_bytes: usize,
         referer: Option<&str>,
+        header_scope: Option<&str>,
     ) -> Result<HttpResponse, OnlineError> {
         let url = ensure_http_url(url)?;
+        let scope = parse_header_scope(header_scope);
         for attempt in 0..=2u32 {
-            match self.get_once(&url, max_bytes, referer)? {
+            match self.get_once(&url, max_bytes, referer, scope.as_ref())? {
                 raw if should_retry(raw.status) && attempt < 2 => {
                     let wait_ms = raw
                         .retry_after_s
@@ -407,11 +436,11 @@ mod tests {
             (404, "text/plain", b"missing".to_vec()),
         ]);
         let t = UreqTransport::new("", "").unwrap();
-        let r = t.get(&url, 1024, None).unwrap();
+        let r = t.get(&url, 1024, None, None).unwrap();
         assert_eq!(r.status, 200);
         assert_eq!(r.content_type.as_deref(), Some("image/png"));
         assert_eq!(r.body, b"png-bytes");
-        let r = t.get(&url, 1024, None).unwrap();
+        let r = t.get(&url, 1024, None, None).unwrap();
         assert_eq!(r.status, 404);
         assert_eq!(r.body, b"missing");
         h.join().unwrap();
@@ -424,7 +453,7 @@ mod tests {
             (200, "image/png", b"ok".to_vec()),
         ]);
         let t = UreqTransport::new("", "").unwrap();
-        let r = t.get(&url, 1024, None).unwrap();
+        let r = t.get(&url, 1024, None, None).unwrap();
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"ok");
         h.join().unwrap();
@@ -437,7 +466,7 @@ mod tests {
             (200, "image/png", b"ok".to_vec()),
         ]);
         let t = UreqTransport::new("", "").unwrap();
-        let r = t.get(&url, 1024, None).unwrap();
+        let r = t.get(&url, 1024, None, None).unwrap();
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"ok");
         h.join().unwrap();
@@ -450,7 +479,7 @@ mod tests {
             (200, "image/png", b"ok".to_vec()),
         ]);
         let t = UreqTransport::new("", "").unwrap();
-        let r = t.get(&url, 1024, None).unwrap();
+        let r = t.get(&url, 1024, None, None).unwrap();
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"ok");
         h.join().unwrap();
@@ -464,7 +493,7 @@ mod tests {
             (503, "text/plain", b"third".to_vec()),
         ]);
         let t = UreqTransport::new("", "").unwrap();
-        let r = t.get(&url, 1024, None).unwrap();
+        let r = t.get(&url, 1024, None, None).unwrap();
         assert_eq!(r.status, 503);
         assert_eq!(r.body, b"third");
         h.join().unwrap();
@@ -475,7 +504,7 @@ mod tests {
         let (url, h) = spawn_server(vec![(200, "image/png", vec![0u8; 16])]);
         let t = UreqTransport::new("", "").unwrap();
         assert!(matches!(
-            t.get(&url, 8, None),
+            t.get(&url, 8, None, None),
             Err(OnlineError::TooLarge(8))
         ));
         h.join().unwrap();
@@ -514,7 +543,7 @@ mod tests {
     fn rejects_non_http_url_without_network() {
         let t = UreqTransport::new("", "").unwrap();
         assert!(matches!(
-            t.get("file:///C:/a.png", 1024, None),
+            t.get("file:///C:/a.png", 1024, None, None),
             Err(OnlineError::Network(_))
         ));
         assert!(ensure_http_url("https://example.com/a.png").is_ok());
@@ -554,7 +583,12 @@ mod tests {
         let (url, h) = spawn_redirect();
         let t = UreqTransport::new("", "Cookie: sid=abc").unwrap();
         let r = t
-            .get(&url, 1024, Some("http://gallery.example/g/1"))
+            .get(
+                &url,
+                1024,
+                Some("http://gallery.example/g/1"),
+                Some(url.as_str()),
+            )
             .unwrap();
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"ok");
@@ -648,8 +682,7 @@ mod tests {
         })
     }
 
-    const CREDENTIAL_HEADERS: &str =
-        r#"{"Cookie":"sid=abc","Authorization":"Bearer secret","X-Test":"yes","X-Api-Key":"secret-key"}"#;
+    const CREDENTIAL_HEADERS: &str = r#"{"Cookie":"sid=abc","Authorization":"Bearer secret","X-Test":"yes","X-Api-Key":"secret-key"}"#;
 
     #[test]
     fn redirect_same_host_other_port_drops_all_user_headers() {
@@ -657,7 +690,9 @@ mod tests {
         let (target_url, target_h) = spawn_hop(None);
         let (start_url, start_h) = spawn_hop(Some(target_url));
         let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
-        let r = t.get(&start_url, 1024, None).unwrap();
+        let r = t
+            .get(&start_url, 1024, None, Some(start_url.as_str()))
+            .unwrap();
         assert_eq!(r.status, 200);
         let first = start_h.join().unwrap();
         assert_eq!(header_value(&first, "cookie"), Some("sid=abc"));
@@ -677,7 +712,9 @@ mod tests {
         let port = url::Url::parse(&target_url).unwrap().port().unwrap();
         let (start_url, start_h) = spawn_hop(Some(format!("http://localhost:{port}/final")));
         let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
-        let r = t.get(&start_url, 1024, None).unwrap();
+        let r = t
+            .get(&start_url, 1024, None, Some(start_url.as_str()))
+            .unwrap();
         assert_eq!(r.status, 200);
         let first = start_h.join().unwrap();
         assert_eq!(header_value(&first, "cookie"), Some("sid=abc"));
@@ -697,7 +734,9 @@ mod tests {
         let port = url::Url::parse(&target_url).unwrap().port().unwrap();
         let (start_url, start_h) = spawn_hop(Some(format!("http://localhost:{port}/final")));
         let t = UreqTransport::new("", r#"{"X-Api-Key":"secret-key"}"#).unwrap();
-        let r = t.get(&start_url, 1024, None).unwrap();
+        let r = t
+            .get(&start_url, 1024, None, Some(start_url.as_str()))
+            .unwrap();
         assert_eq!(r.status, 200);
         let first = start_h.join().unwrap();
         assert_eq!(header_value(&first, "x-api-key"), Some("secret-key"));
@@ -709,7 +748,7 @@ mod tests {
     fn redirect_same_origin_keeps_cookie_and_authorization() {
         let (url, h) = spawn_same_origin_redirect();
         let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
-        let r = t.get(&url, 1024, None).unwrap();
+        let r = t.get(&url, 1024, None, Some(url.as_str())).unwrap();
         assert_eq!(r.status, 200);
         let second = h.join().unwrap();
         assert_eq!(header_value(&second, "cookie"), Some("sid=abc"));
@@ -725,7 +764,7 @@ mod tests {
     fn rejects_redirect_target_with_userinfo() {
         let (start_url, h) = spawn_hop(Some("http://user:pass@127.0.0.1:1/final".into()));
         let t = UreqTransport::new("", "").unwrap();
-        let msg = match t.get(&start_url, 1024, None) {
+        let msg = match t.get(&start_url, 1024, None, None) {
             Ok(_) => panic!("重定向目标含 userinfo 时应报错"),
             Err(OnlineError::Network(msg)) => msg,
             Err(other) => panic!("unexpected error: {other}"),
@@ -739,7 +778,7 @@ mod tests {
         let target = format!("http://127.0.0.1:1/{}", "a".repeat(2100));
         let (start_url, h) = spawn_hop(Some(target));
         let t = UreqTransport::new("", "").unwrap();
-        let msg = match t.get(&start_url, 1024, None) {
+        let msg = match t.get(&start_url, 1024, None, None) {
             Ok(_) => panic!("重定向目标超长时应报错"),
             Err(OnlineError::Network(msg)) => msg,
             Err(other) => panic!("unexpected error: {other}"),
@@ -764,7 +803,7 @@ mod tests {
             }
         });
         let t = UreqTransport::new("", "").unwrap();
-        let err = match t.get(&format!("http://{addr}/loop"), 1024, None) {
+        let err = match t.get(&format!("http://{addr}/loop"), 1024, None, None) {
             Ok(_) => panic!("超过 5 次重定向应报错"),
             Err(OnlineError::Network(msg)) => msg,
             Err(other) => panic!("unexpected error: {other}"),
@@ -781,7 +820,7 @@ mod tests {
         drop(listener);
         let t = UreqTransport::new("", "").unwrap();
         let url = format!("http://127.0.0.1:{port}/x?token=secret");
-        let msg = match t.get(&url, 1024, None) {
+        let msg = match t.get(&url, 1024, None, None) {
             Ok(_) => panic!("连接被拒绝时应返回错误"),
             Err(OnlineError::Network(msg)) => msg,
             Err(other) => panic!("unexpected error: {other}"),
@@ -840,7 +879,12 @@ mod tests {
         ]);
         let t = UreqTransport::new("", r#"{"X-Test":"yes"}"#).unwrap();
         let r = t
-            .get(&url, 1024, Some("http://gallery.example/g/1"))
+            .get(
+                &url,
+                1024,
+                Some("http://gallery.example/g/1"),
+                Some(url.as_str()),
+            )
             .unwrap();
         assert_eq!(r.status, 200);
         h.join().unwrap();
@@ -855,7 +899,7 @@ mod tests {
         // 线上请求头也必须是规范的 `Cookie` 名与去掉前缀后的值。
         let (url, h) = spawn_header_server(&["Cookie: sid=xyz"]);
         let t = UreqTransport::new("", "COOKIE: sid=xyz").unwrap();
-        let r = t.get(&url, 1024, None).unwrap();
+        let r = t.get(&url, 1024, None, Some(url.as_str())).unwrap();
         assert_eq!(r.status, 200);
         h.join().unwrap();
     }
@@ -872,9 +916,115 @@ mod tests {
         )
         .unwrap();
         let r = t
-            .get(&url, 1024, Some("http://gallery.example/g/1"))
+            .get(
+                &url,
+                1024,
+                Some("http://gallery.example/g/1"),
+                Some(url.as_str()),
+            )
             .unwrap();
         assert_eq!(r.status, 200);
         h.join().unwrap();
+    }
+
+    #[test]
+    fn same_scope_page_sends_user_headers() {
+        let (url, h) = spawn_header_server(&[
+            "Cookie: sid=abc",
+            "Authorization: Bearer secret",
+            "X-Api-Key: secret-key",
+        ]);
+        let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
+        let r = t.get(&url, 1024, None, Some(url.as_str())).unwrap();
+        assert_eq!(r.status, 200);
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn cross_scope_page_drops_user_headers() {
+        let (url, h) = spawn_hop(None);
+        let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
+        let r = t
+            .get(&url, 1024, None, Some("http://gallery.example/g/1"))
+            .unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        for name in ["cookie", "authorization", "x-test", "x-api-key"] {
+            assert_eq!(header_value(&req, name), None, "{req}");
+        }
+    }
+
+    #[test]
+    fn invalid_header_scope_sends_no_user_headers() {
+        let (url, h) = spawn_hop(None);
+        let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
+        let r = t
+            .get(&url, 1024, None, Some("not a valid absolute url"))
+            .unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        for name in ["cookie", "authorization", "x-test", "x-api-key"] {
+            assert_eq!(header_value(&req, name), None, "{req}");
+        }
+    }
+
+    #[test]
+    fn cross_origin_referer_drops_query_and_fragment() {
+        let (url, h) = spawn_hop(None);
+        let referer = "http://gallery.example/g/1?token=secret#frag";
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t.get(&url, 1024, Some(referer), Some(referer)).unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        assert_eq!(
+            header_value(&req, "referer"),
+            Some("http://gallery.example/g/1"),
+            "{req}"
+        );
+        assert!(!req.contains("token=secret"), "{req}");
+        assert!(!req.contains("#frag"), "{req}");
+    }
+
+    #[test]
+    fn origin_header_includes_non_default_port_and_keeps_same_origin_referer() {
+        let (url, h) = spawn_hop(None);
+        let port = url::Url::parse(&url).unwrap().port().unwrap();
+        let referer = format!("{url}?token=secret#frag");
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t
+            .get(&url, 1024, Some(&referer), Some(url.as_str()))
+            .unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        assert_eq!(
+            header_value(&req, "origin"),
+            Some(format!("http://127.0.0.1:{port}").as_str()),
+            "{req}"
+        );
+        assert_eq!(
+            header_value(&req, "referer"),
+            Some(referer.as_str()),
+            "{req}"
+        );
+    }
+
+    #[test]
+    fn redirect_from_cross_scope_to_same_scope_restores_user_headers() {
+        let (same_scope_url, same_scope_h) = spawn_hop(None);
+        let (cross_scope_url, cross_scope_h) = spawn_hop(Some(same_scope_url.clone()));
+        let t = UreqTransport::new("", CREDENTIAL_HEADERS).unwrap();
+        let r = t
+            .get(&cross_scope_url, 1024, None, Some(same_scope_url.as_str()))
+            .unwrap();
+        assert_eq!(r.status, 200);
+        let first = cross_scope_h.join().unwrap();
+        assert_eq!(header_value(&first, "cookie"), None, "{first}");
+        let second = same_scope_h.join().unwrap();
+        assert_eq!(header_value(&second, "cookie"), Some("sid=abc"), "{second}");
+        assert_eq!(
+            header_value(&second, "authorization"),
+            Some("Bearer secret"),
+            "{second}"
+        );
     }
 }

@@ -1,6 +1,7 @@
 //! MangaReader 后端 — 阶段一真实实现（backend-pipeline）。
 //! 契约冻结：命令名与 JSON 形状与骨架一致，前端 `src/lib/tauri.ts` 无需改动。
 
+mod browser;
 pub mod cache;
 mod commands;
 pub mod db;
@@ -9,9 +10,10 @@ mod ocr;
 mod online;
 pub mod pipeline;
 pub mod render_cache;
-pub mod source;
 mod sidecar;
+pub mod source;
 mod state;
+mod system_proxy;
 mod translate;
 mod workbench;
 
@@ -19,6 +21,7 @@ pub mod batch;
 pub use state::AppState;
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -39,6 +42,10 @@ pub struct BookInfo {
     pub source_type: String,
     /// 条漫是否可用：本地 true；在线取决于清单尺寸。
     pub webtoon_ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -353,15 +360,28 @@ fn hydrate_settings(conn: &rusqlite::Connection, s: &mut Settings) {
     }
 }
 
+fn resolve_data_dir(
+    mr_data_dir: Option<String>,
+    fallback: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    mr_data_dir
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .or(fallback)
+        .ok_or_else(|| "无法定位本地数据目录".to_string())
+}
+
+pub(crate) fn data_dir() -> Result<PathBuf, String> {
+    resolve_data_dir(
+        std::env::var("MR_DATA_DIR").ok(),
+        dirs::data_local_dir().map(|d| d.join("com.local.manga-reader")),
+    )
+}
+
 fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
     // Windows 优先：`dirs::data_local_dir` → …\AppData\Local\com.local.manga-reader。
     // MR_DATA_DIR 用于测试/冒烟隔离；生产环境未设置时仍使用本地数据目录。
-    let dir = std::env::var("MR_DATA_DIR")
-        .ok()
-        .filter(|p| !p.trim().is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| dirs::data_local_dir().map(|d| d.join("com.local.manga-reader")))
-        .ok_or_else(|| "无法定位本地数据目录".to_string())?;
+    let dir = data_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let db_path = dir.join("library.db");
     let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
@@ -384,7 +404,7 @@ fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = Arc::new(AppState::new());
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(state)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -408,6 +428,7 @@ pub fn run() {
             commands::remove_books,
             commands::list_books,
             commands::get_book,
+            commands::get_next_book,
             commands::list_entries,
             commands::get_page,
             commands::get_thumbnail,
@@ -441,8 +462,46 @@ pub fn run() {
             batch::batch_cancel,
             batch::batch_list,
             commands::resolve_online_url,
-            commands::test_online_connection
+            commands::test_online_connection,
+            commands::import_resolved_pages,
+            commands::import_online_batch,
+            commands::set_session_online_headers,
+            commands::clear_session_online_headers,
+            commands::get_session_online_headers,
+            online::handoff::start_browser_handoff,
+            online::handoff::stop_browser_handoff,
+            online::handoff::cancel_browser_handoff,
+            system_proxy::detect_system_proxy,
+            browser::open_browser_window,
+            browser::navigate_browser,
+            browser::list_browser_downloads,
+            browser::import_browser_download
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|app_handle, event| {
+        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+            app_handle.state::<Arc<AppState>>().cancel_handoff();
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn data_dir_override_wins_and_blank_falls_back() {
+        let fallback = PathBuf::from("fallback-data");
+        assert_eq!(
+            resolve_data_dir(Some("override-data".into()), Some(fallback.clone())).unwrap(),
+            PathBuf::from("override-data")
+        );
+        assert_eq!(
+            resolve_data_dir(Some("   ".into()), Some(fallback.clone())).unwrap(),
+            fallback
+        );
+        assert!(resolve_data_dir(None, None).is_err());
+    }
 }

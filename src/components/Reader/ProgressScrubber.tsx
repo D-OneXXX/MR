@@ -83,19 +83,19 @@ export default function ProgressScrubber({
     >
       {draft !== null && preview && (
         <div
-          className="pointer-events-none absolute bottom-7 z-20 -translate-x-1/2"
+          className="pointer-events-none absolute bottom-8 z-20 -translate-x-1/2"
           style={{ left: `${Math.max(8, Math.min(92, pct))}%` }}
         >
-          <div className="flex flex-col items-center gap-1 rounded-lg border border-hairline bg-surface-solid/95 px-2 py-1.5 shadow-xl">
+          <div className="flex flex-col items-center gap-1 rounded-xl border border-border bg-card/95 px-2 py-1.5 shadow-hard-sm backdrop-blur-md">
             {preview.thumb && (
               <img
                 src={preview.thumb}
                 alt=""
                 draggable={false}
-                className="max-h-24 w-auto max-w-[120px] rounded object-contain"
+                className="max-h-24 w-auto max-w-[120px] rounded-lg object-contain"
               />
             )}
-            <span className="mono whitespace-nowrap text-[11px] tabular-nums text-ink">
+            <span className="mono whitespace-nowrap text-[11px] tabular-nums text-foreground">
               {preview.label}
             </span>
           </div>
@@ -110,7 +110,7 @@ export default function ProgressScrubber({
         disabled={disabled}
         aria-label={ariaLabel}
         getAriaLabel={() => ariaLabel}
-        className="[&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-track]]:bg-ink/20 [&_[data-slot=slider-thumb]]:size-4"
+        className="[&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-track]]:bg-foreground/20 [&_[data-slot=slider-thumb]]:size-4 [&_[data-slot=slider-thumb]]:border-primary"
         onValueChange={(v) => {
           const next = read(v);
           writeDraft(next);

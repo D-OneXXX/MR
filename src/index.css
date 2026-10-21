@@ -1,0 +1,343 @@
+/* MangaReader · MeetingIQ UI entry
+ *
+ * Tailwind CSS v4 + shadcn (base-nova / Base UI).
+ * Light: ice-blue canvas, white surfaces, zinc-900 outlines, hard offset shadows.
+ * Dark:  deep navy canvas, slate-blue surfaces, the same sky-blue brand.
+ *
+ * This is the only application stylesheet. The legacy fluid-v2 sheets
+ * (theme.css / ui.css / v3.css) have been removed.
+ */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+/* The app switches themes on <html data-theme="light|dark">. Match both the
+   root element and every descendant so `dark:` works on <html> too. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  color-scheme: light;
+
+  --sh-background: #eff8ff;
+  --sh-foreground: #09090b;
+  --sh-card: #ffffff;
+  --sh-card-foreground: #09090b;
+  --sh-popover: #ffffff;
+  --sh-popover-foreground: #09090b;
+  --sh-primary: #38a8f8;
+  --sh-primary-foreground: #09090b;
+  --sh-secondary: #e3f4ff;
+  --sh-secondary-foreground: #0b1b2b;
+  --sh-muted: #e7f1fa;
+  --sh-muted-foreground: #475569;
+  --sh-accent: #ddf0ff;
+  --sh-accent-foreground: #09090b;
+  --sh-destructive: #dc2626;
+  --sh-destructive-foreground: #ffffff;
+  --sh-warning: #b45309;
+  --sh-success: #047857;
+  --sh-border: #09090b;
+  --sh-input: #09090b;
+  --sh-ring: #38a8f8;
+
+  /* Hard offset shadows use a dedicated ink so the dark theme can pick navy. */
+  --mi-hard-shadow: #09090b;
+  --mi-ring-offset: #eff8ff;
+  --mi-fast: 120ms;
+  --mi-base: 180ms;
+  --mi-slow: 260ms;
+  --mi-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Reader canvas is always dark, in both themes. */
+  --v3-reader: #09090b;
+
+  /* Compatibility aliases for structural Reader CSS until it is fully ported. */
+  --v3-accent: var(--sh-primary);
+  --v3-accent-soft: rgb(56 168 248 / 0.16);
+  --v3-blur: 0px;
+  --v3-canvas: var(--sh-background);
+  --v3-shell: var(--sh-card);
+  --v3-surface: var(--sh-card);
+  --v3-surface-solid: var(--sh-card);
+  --v3-hairline: var(--sh-border);
+  --v3-text: var(--sh-foreground);
+  --v3-muted: var(--sh-muted-foreground);
+  --v3-warning: var(--sh-warning);
+  --v3-danger: var(--sh-destructive);
+  --v3-success: var(--sh-success);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --sh-background: #0b111e;
+  --sh-foreground: #f8fafc;
+  --sh-card: #151f32;
+  --sh-card-foreground: #f8fafc;
+  --sh-popover: #151f32;
+  --sh-popover-foreground: #f8fafc;
+  --sh-primary: #38a8f8;
+  --sh-primary-foreground: #09090b;
+  --sh-secondary: #1b2a42;
+  --sh-secondary-foreground: #e8f3ff;
+  --sh-muted: #1a263a;
+  --sh-muted-foreground: #94a3b8;
+  --sh-accent: #1e3350;
+  --sh-accent-foreground: #f8fafc;
+  --sh-destructive: #f87171;
+  --sh-destructive-foreground: #09090b;
+  --sh-warning: #fbbf24;
+  --sh-success: #34d399;
+  --sh-border: #334155;
+  --sh-input: #334155;
+  --sh-ring: #38a8f8;
+
+  --mi-hard-shadow: #020617;
+  --mi-ring-offset: #0b111e;
+
+  --v3-accent-soft: rgb(56 168 248 / 0.2);
+  --v3-canvas: var(--sh-background);
+  --v3-shell: var(--sh-card);
+  --v3-surface: var(--sh-card);
+  --v3-surface-solid: var(--sh-card);
+  --v3-hairline: var(--sh-border);
+  --v3-text: var(--sh-foreground);
+  --v3-muted: var(--sh-muted-foreground);
+  --v3-warning: var(--sh-warning);
+  --v3-danger: var(--sh-destructive);
+  --v3-success: var(--sh-success);
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", "PingFang SC", "Microsoft YaHei",
+    "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Geist Variable", "PingFang SC", "Microsoft YaHei",
+    "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+
+  --color-background: var(--sh-background);
+  --color-foreground: var(--sh-foreground);
+  --color-card: var(--sh-card);
+  --color-card-foreground: var(--sh-card-foreground);
+  --color-popover: var(--sh-popover);
+  --color-popover-foreground: var(--sh-popover-foreground);
+  --color-primary: var(--sh-primary);
+  --color-primary-foreground: var(--sh-primary-foreground);
+  --color-secondary: var(--sh-secondary);
+  --color-secondary-foreground: var(--sh-secondary-foreground);
+  --color-muted: var(--sh-muted);
+  --color-muted-foreground: var(--sh-muted-foreground);
+  --color-accent: var(--sh-accent);
+  --color-accent-foreground: var(--sh-accent-foreground);
+  --color-destructive: var(--sh-destructive);
+  --color-destructive-foreground: var(--sh-destructive-foreground);
+  --color-border: var(--sh-border);
+  --color-input: var(--sh-input);
+  --color-ring: var(--sh-ring);
+  --color-warning: var(--sh-warning);
+  --color-success: var(--sh-success);
+
+  /* Semantic aliases kept for shell/reader components. */
+  --color-canvas: var(--sh-background);
+  --color-ink: var(--sh-foreground);
+  --color-ink-muted: var(--sh-muted-foreground);
+  --color-surface: var(--sh-card);
+  --color-surface-solid: var(--sh-card);
+  --color-shell: var(--sh-card);
+  --color-hairline: var(--sh-border);
+  --color-brand: var(--sh-primary);
+  --color-reader: var(--v3-reader);
+  --color-danger: var(--sh-destructive);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.5rem;
+  --radius-pill: 999px;
+
+  --shadow-hard: 0 4px 0 0 var(--mi-hard-shadow);
+  --shadow-card: 0 3px 0 0 var(--mi-hard-shadow);
+  --shadow-hard-sm: 0 2px 0 0 var(--mi-hard-shadow);
+  --shadow-soft: 0 18px 50px -24px rgb(2 6 23 / 0.45);
+}
+
+@layer base {
+  :root {
+    --radius: 0.75rem;
+  }
+
+  * {
+    border-color: var(--sh-border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  html {
+    background: var(--sh-background);
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    background: var(--sh-background);
+    color: var(--sh-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+  }
+
+  button,
+  [role="button"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  ::selection {
+    background: var(--sh-primary);
+    color: var(--sh-primary-foreground);
+  }
+
+  ::placeholder {
+    color: var(--sh-muted-foreground);
+    opacity: 1;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--sh-muted-foreground) 40%, transparent)
+      transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+    background-color: color-mix(
+      in srgb,
+      var(--sh-muted-foreground) 38%,
+      transparent
+    );
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(
+      in srgb,
+      var(--sh-muted-foreground) 60%,
+      transparent
+    );
+  }
+}
+
+@utility mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Page transitions stay short and only fade; no layout movement. */
+@utility view-fade {
+  animation: view-in 220ms var(--mi-ease) both;
+}
+
+@utility fade-in {
+  animation: fade-in 160ms var(--mi-ease) both;
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Pixel-pet easter egg: pure CSS, retained from the previous shell. */
+@utility pet-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 34px 12px;
+  color: var(--sh-muted-foreground);
+}
+
+@utility pet-bubble {
+  max-width: 260px;
+  border: 1px solid var(--sh-border);
+  border-radius: 999px;
+  background: var(--sh-card);
+  padding: 8px 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--sh-muted-foreground);
+  box-shadow: var(--shadow-hard-sm);
+}
+
+@utility pixel-pet {
+  width: 84px;
+  height: 84px;
+  border: 1px solid var(--sh-border);
+  border-radius: 22px;
+  background:
+    conic-gradient(from 90deg at 30% 30%, #38a8f8 90deg, transparent 0) 20% 55% /
+      22% 22% no-repeat,
+    conic-gradient(from 90deg at 30% 30%, #38a8f8 90deg, transparent 0) 80% 55% /
+      22% 22% no-repeat,
+    linear-gradient(#fbbf24, #fbbf24) 25% 30% / 50% 45% no-repeat,
+    linear-gradient(#09090b, #09090b) 32% 45% / 10% 12% no-repeat,
+    linear-gradient(#09090b, #09090b) 58% 45% / 10% 12% no-repeat,
+    #ffffff;
+  box-shadow: var(--shadow-hard-sm);
+  animation: pet-bob 1.6s ease-in-out infinite;
+}
+
+@keyframes pet-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

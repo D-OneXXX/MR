@@ -3,7 +3,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Keyboard,
-  Languages,
   List,
   MoreHorizontal,
   Settings,
@@ -13,21 +12,19 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "@/components/Toast";
 import type { Direction, PageMode } from "@/components/Reader/spread";
 
-const BTN =
-  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-accent hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:pointer-events-none disabled:opacity-30";
-
-const MODES: { key: PageMode; label: string }[] = [
-  { key: "single", label: "单页" },
-  { key: "double", label: "双页" },
-  { key: "webtoon", label: "条漫" },
+const MODES: { key: PageMode; label: string; short: string }[] = [
+  { key: "single", label: "单页", short: "单" },
+  { key: "double", label: "双页", short: "双" },
+  { key: "webtoon", label: "条漫", short: "条" },
 ];
 
 const MENU_ITEM =
-  "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[12px] text-ink transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:pointer-events-none disabled:opacity-40";
+  "flex h-9 w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-[12px] font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40";
 
 interface Props {
   hidden: boolean;
@@ -48,17 +45,14 @@ interface Props {
   onSettings: () => void;
   shortcutsOpen: boolean;
   onShortcuts: () => void;
-  transOn: boolean;
-  regionMode: boolean;
-  onRegion: () => void;
-  regionDisabledReason: string | null;
   slider: ReactNode;
   pageLabel: ReactNode;
 }
 
 /**
- * 阅读器底部 Dock：上一页、页目录、模式分段、进度滑杆、页码、下一页；
- * 阅读设置 / 选区翻译 / 快捷键收进「更多」Popover。
+ * 阅读器底部 Dock：上一页、页目录、版式分段、进度滑杆、页码、下一页，
+ * 阅读设置 / 快捷键收进「更多」Popover。所有控件仍是真实 <button>，
+ * 供全局空格翻页去重判断使用。
  */
 export default function ReaderDock({
   hidden,
@@ -78,10 +72,6 @@ export default function ReaderDock({
   settingsOpen,
   onSettings,
   onShortcuts,
-  transOn,
-  regionMode,
-  onRegion,
-  regionDisabledReason,
   shortcutsOpen,
   slider,
   pageLabel,
@@ -98,32 +88,33 @@ export default function ReaderDock({
         hidden && "translate-y-2 opacity-0",
       )}
     >
-      <div className="glass hairline pointer-events-auto flex h-12 w-full max-w-[min(920px,94vw)] items-center gap-1 rounded-xl px-2 text-ink shadow-lg">
-        <button
-          type="button"
-          className={BTN}
+      <div className="pointer-events-auto flex h-14 w-full max-w-[min(960px,96vw)] items-center gap-1 rounded-full border border-border/70 bg-card/95 px-2 text-foreground shadow-hard-sm backdrop-blur-md">
+        <Button
+          variant="pill-ghost"
+          size="icon"
           onClick={onPrev}
           disabled={!canPrev}
           aria-label="上一页"
           title="上一页"
         >
-          <PrevIcon size={17} />
-        </button>
-        <button
-          type="button"
-          className={cn(BTN, tocOpen && "bg-accent text-ink")}
+          <PrevIcon className="size-4.5" />
+        </Button>
+        <Button
+          variant="pill-ghost"
+          size="icon"
           onClick={onToc}
           aria-label="页目录"
           aria-expanded={tocOpen}
           title="页目录"
+          className={cn(tocOpen && "bg-accent text-accent-foreground")}
         >
-          <List size={16} />
-        </button>
+          <List className="size-4" />
+        </Button>
 
-        <span className="mx-0.5 h-5 w-px shrink-0 bg-hairline" aria-hidden />
+        <span className="mx-0.5 h-5 w-px shrink-0 bg-border/60" aria-hidden />
 
         <div
-          className="flex shrink-0 items-center gap-0.5 rounded-lg border border-hairline p-0.5"
+          className="flex shrink-0 items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
           role="group"
           aria-label="版式"
         >
@@ -132,12 +123,14 @@ export default function ReaderDock({
               {webtoonReason}
             </span>
           )}
-          {MODES.map(({ key, label }) => {
+          {MODES.map(({ key, label, short }) => {
             const disabled = key === "webtoon" && !webtoonAllowed;
             return (
-              <button
+              <Button
                 key={key}
                 type="button"
+                variant={mode === key ? "pill-primary" : "pill-ghost"}
+                size="pill-sm"
                 onClick={() => {
                   if (disabled) {
                     toast(webtoonReason);
@@ -152,103 +145,71 @@ export default function ReaderDock({
                 aria-pressed={mode === key}
                 title={disabled ? webtoonReason : `切换到${label}`}
                 className={cn(
-                  "h-8 rounded-md px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
-                  disabled
-                    ? "cursor-not-allowed text-ink-muted/50 opacity-40 hover:bg-transparent hover:text-ink-muted/50"
-                    : mode === key
-                      ? "bg-brand text-white"
-                      : "text-ink-muted hover:bg-accent hover:text-ink",
+                  "h-8 px-2 text-[11px]",
+                  disabled &&
+                    "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground",
                 )}
               >
-                {label}
-              </button>
+                <span className="hidden sm:inline">{label}</span>
+                <span className="sm:hidden">{short}</span>
+              </Button>
             );
           })}
         </div>
 
-        <span className="mx-0.5 h-5 w-px shrink-0 bg-hairline" aria-hidden />
+        <span className="mx-0.5 h-5 w-px shrink-0 bg-border/60" aria-hidden />
 
         {slider}
 
-        <div className="mono shrink-0 px-1 text-[11px] tabular-nums text-ink-muted">
+        <div className="mono shrink-0 whitespace-nowrap px-1 text-[11px] tabular-nums text-muted-foreground">
           {pageLabel}
         </div>
 
-        <button
-          type="button"
-          className={BTN}
+        <Button
+          variant="pill-ghost"
+          size="icon"
           onClick={onNext}
           disabled={!canNext}
           aria-label="下一页"
           title="下一页"
         >
-          <NextIcon size={17} />
-        </button>
+          <NextIcon className="size-4.5" />
+        </Button>
 
-        <span className="mx-0.5 h-5 w-px shrink-0 bg-hairline" aria-hidden />
+        <span className="mx-0.5 h-5 w-px shrink-0 bg-border/60" aria-hidden />
 
         <Popover open={moreOpen} onOpenChange={onMoreOpenChange}>
           <PopoverTrigger
-            className={cn(BTN, moreOpen && "bg-accent text-ink")}
+            className={cn(
+              buttonVariants({ variant: "pill-ghost", size: "icon" }),
+              moreOpen && "bg-accent text-accent-foreground",
+            )}
             aria-label="更多"
             title="更多"
           >
-            <MoreHorizontal size={16} />
+            <MoreHorizontal className="size-4" />
           </PopoverTrigger>
           <PopoverContent
             align="end"
             side="top"
-            sideOffset={8}
+            sideOffset={10}
             data-reader-hud
-            className="w-48 rounded-xl border border-hairline bg-surface-solid p-1 text-ink shadow-xl"
+            className="reader-portal w-52! rounded-2xl! border! border-border! bg-popover! p-1.5! text-popover-foreground! shadow-hard!"
           >
             <button
               type="button"
               className={cn(MENU_ITEM, settingsOpen && "bg-accent")}
               onClick={onSettings}
             >
-              <Settings size={14} />
+              <Settings className="size-4 text-muted-foreground" />
               阅读设置
             </button>
-            {transOn && (
-              <button
-                type="button"
-                className={cn(
-                  MENU_ITEM,
-                  regionMode && "bg-accent",
-                  regionDisabledReason &&
-                    "cursor-not-allowed opacity-40 hover:bg-transparent",
-                )}
-                onClick={() => {
-                  if (regionDisabledReason) {
-                    toast(regionDisabledReason);
-                    return;
-                  }
-                  onRegion();
-                }}
-                aria-disabled={regionDisabledReason !== null}
-                aria-describedby={
-                  regionDisabledReason
-                    ? "reader-region-disabled-reason"
-                    : undefined
-                }
-                title={regionDisabledReason ?? "选区翻译 (o)"}
-              >
-                <Languages size={14} />
-                选区翻译
-              </button>
-            )}
-            {regionDisabledReason && (
-              <span id="reader-region-disabled-reason" className="sr-only">
-                {regionDisabledReason}
-              </span>
-            )}
             <button
               type="button"
               className={cn(MENU_ITEM, shortcutsOpen && "bg-accent")}
               onClick={onShortcuts}
             >
-              <Keyboard size={14} />
+              <Keyboard className="size-4 text-muted-foreground" />
               快捷键速查
             </button>
           </PopoverContent>

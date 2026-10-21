@@ -1,10 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Copy, Link2, Loader2, X } from "lucide-react";
-import { api, type BookInfo, type HandoffStatus } from "../lib/tauri";
+import {
+  AlertTriangle,
+  AppWindow,
+  BookOpen,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Copy,
+  FileJson,
+  Globe,
+  Images,
+  Link2,
+  Loader2,
+  Radio,
+  RefreshCw,
+  ShieldCheck,
+  X,
+} from "lucide-react";
+import { api, type BookInfo, type HandoffStatus } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
-import { toast, toastErr } from "./Toast";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { toast, toastErr } from "@/components/Toast";
 
 interface Props {
   onClose: () => void;
@@ -13,25 +44,6 @@ interface Props {
   initialTab?: "link" | "pair";
   initialUrl?: string;
 }
-
-const V3_BTN =
-  "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-hairline bg-white/[0.03] px-3 text-xs font-medium text-ink transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40";
-const V3_BTN_PRIMARY = cn(
-  V3_BTN,
-  "border-brand bg-brand text-white hover:bg-brand/90",
-);
-const V3_ICON_BTN =
-  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-accent hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40";
-const V3_FIELD =
-  "mono w-full min-w-0 rounded-md border border-hairline bg-canvas px-3 py-2 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-muted focus:border-brand focus-visible:ring-2 focus-visible:ring-brand";
-const V3_TAB =
-  "rounded-md px-3 py-1.5 text-xs font-medium text-ink-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40";
-const V3_TAB_ON = "bg-accent text-ink";
-const V3_HINT = "text-xs leading-relaxed text-ink-muted";
-const V3_INSET = {
-  backgroundColor:
-    "color-mix(in srgb, var(--v3-canvas) 60%, transparent)",
-} as const;
 
 function parsePastedPageUrls(raw: string): string[] {
   const text = raw.trim();
@@ -88,6 +100,22 @@ async function copyHandoffText(label: string, value: string): Promise<boolean> {
   }
 }
 
+function useCopyFeedback() {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef(0);
+
+  useEffect(() => () => window.clearTimeout(timerRef.current), []);
+
+  const copy = useCallback(async (toastLabel: string, value: string) => {
+    if (!(await copyHandoffText(toastLabel, value))) return;
+    setCopied(true);
+    window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setCopied(false), 1600);
+  }, []);
+
+  return { copied, copy };
+}
+
 function CopyAction({
   label,
   toastLabel,
@@ -97,30 +125,74 @@ function CopyAction({
   toastLabel: string;
   value: string;
 }) {
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef(0);
-
-  useEffect(() => () => window.clearTimeout(timerRef.current), []);
-
+  const { copied, copy } = useCopyFeedback();
   return (
-    <button
-      className={V3_BTN}
+    <Button
       type="button"
+      variant="pill"
+      size="pill-sm"
       disabled={!value}
-      onClick={async () => {
-        if (!(await copyHandoffText(toastLabel, value))) return;
-        setCopied(true);
-        window.clearTimeout(timerRef.current);
-        timerRef.current = window.setTimeout(() => setCopied(false), 1600);
-      }}
+      onClick={() => void copy(toastLabel, value)}
     >
-      {copied ? <Check size={14} /> : <Copy size={14} />}
+      {copied ? <Check /> : <Copy />}
       {copied ? "已复制" : label}
-    </button>
+    </Button>
   );
 }
 
-export const LIBRARY_REFRESH_EVENT = "mr-online-library-refresh";
+function CopyIconButton({
+  label,
+  toastLabel,
+  value,
+}: {
+  label: string;
+  toastLabel: string;
+  value: string;
+}) {
+  const { copied, copy } = useCopyFeedback();
+  return (
+    <Button
+      type="button"
+      variant="pill"
+      size="pill-icon-sm"
+      disabled={!value}
+      onClick={() => void copy(toastLabel, value)}
+      aria-label={label}
+      title={label}
+    >
+      {copied ? <Check /> : <Copy />}
+    </Button>
+  );
+}
+
+function InlineNotice({
+  tone,
+  children,
+}: {
+  tone: "error" | "success";
+  children: React.ReactNode;
+}) {
+  const error = tone === "error";
+  return (
+    <div
+      role={error ? "alert" : "status"}
+      className={cn(
+        "flex items-start gap-2 rounded-2xl border px-3 py-2 text-xs",
+        error
+          ? "border-destructive/40 bg-destructive/10 text-destructive"
+          : "border-success/40 bg-success/10 text-success",
+      )}
+    >
+      {error ? (
+        <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+      ) : (
+        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
+      )}
+      <span className="min-w-0 flex-1 break-words">{children}</span>
+    </div>
+  );
+}
+
 const HANDOFF_STATE_EVENT = "mr-online-handoff-state";
 
 export interface OnlineHandoffState {
@@ -203,7 +275,11 @@ function registerHandoffListeners() {
     "online-handoff-imported",
     (payload) => {
       const raw = payload as unknown;
-      const imported = Array.isArray(raw) ? (raw as BookInfo[]) : raw ? [raw as BookInfo] : [];
+      const imported = Array.isArray(raw)
+        ? (raw as BookInfo[])
+        : raw
+          ? [raw as BookInfo]
+          : [];
       if (imported.length > 0 && handoffStatus?.active) {
         handoffStatus = {
           ...handoffStatus,
@@ -252,15 +328,18 @@ export default function OnlineImportDialog({
   const { status } = useOnlineHandoffState();
   const [tab, setTab] = useState<"link" | "pair">(initialTab);
   const [url, setUrl] = useState(initialUrl);
-  const [busy, setBusy] = useState<"test" | "add" | "read" | "paste" | "batch" | null>(
+  const [busy, setBusy] = useState<
+    "test" | "add" | "read" | "paste" | "batch" | null
+  >(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [probe, setProbe] = useState<{ text: string; ok: boolean } | null>(
     null,
   );
-  const [err, setErr] = useState<string | null>(null);
-  const [probe, setProbe] = useState<string | null>(null);
   const [openingBrowser, setOpeningBrowser] = useState(false);
   const [openingCurrentUrl, setOpeningCurrentUrl] = useState(false);
   const [startingHandoff, setStartingHandoff] = useState(false);
   const [stoppingHandoff, setStoppingHandoff] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [allowSessionHeaders, setAllowSessionHeaders] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteTitle, setPasteTitle] = useState("");
@@ -290,18 +369,11 @@ export default function OnlineImportDialog({
     onClose();
   }, [onClose]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (busy !== null) {
-        e.preventDefault();
-        return;
-      }
-      close();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, close]);
+  const handleOpenChange = (next: boolean) => {
+    if (next) return;
+    if (busy !== null) return;
+    close();
+  };
 
   const run = async (mode: "test" | "add" | "read") => {
     if (busy !== null) return;
@@ -316,7 +388,10 @@ export default function OnlineImportDialog({
       if (mode === "test") {
         const p = await api.testOnlineConnection(url.trim());
         if (!aliveRef.current) return;
-        setProbe(`${p.title} · ${p.pageCount} 页 · ${p.elapsedMs} ms`);
+        setProbe({
+          text: `${p.title} · ${p.pageCount} 页 · ${p.elapsedMs} ms`,
+          ok: p.ok,
+        });
         if (!p.ok) setErr(p.message || "清单没有可读页面，无法入库");
       } else {
         const b = await api.resolveOnlineUrl(url.trim());
@@ -444,6 +519,16 @@ export default function OnlineImportDialog({
     }
   };
 
+  const refreshStatus = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await refreshHandoffStatus();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const openCurrentUrl = async () => {
     if (openingCurrentUrl) return;
     const target = url.trim();
@@ -466,361 +551,552 @@ export default function OnlineImportDialog({
     : "";
 
   return (
-    <div
-      className="fade-in fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm"
-      onClick={() => {
-        if (busy === null) close();
-      }}
-      role="presentation"
-    >
-      <div
-        className="glass hairline flex w-[min(620px,94vw)] flex-col gap-3 overflow-y-auto overscroll-contain rounded-xl p-5 text-ink shadow-2xl"
-        role="dialog"
-        aria-modal="true"
-        aria-label="URL 在线直读"
+    <Dialog open onOpenChange={handleOpenChange}>
+      <DialogContent
+        showCloseButton={false}
         aria-busy={busy !== null}
-        style={{
-          maxHeight: "calc(100vh - 96px)",
-          animation: "dialogIn 200ms var(--ease) both",
-        }}
-        onClick={(e) => e.stopPropagation()}
+        className="max-h-[calc(100vh-3rem)] w-[min(660px,94vw)]! max-w-[min(660px,94vw)]! grid-rows-[auto_minmax(0,1fr)] gap-0! overflow-hidden rounded-2xl! border border-border bg-popover p-0! shadow-hard sm:max-w-[660px]!"
       >
-        <div className="flex items-center gap-2">
-          <h2 className="m-0 flex items-center gap-2 text-[15px] font-semibold text-ink">
-            <Link2 size={16} className="text-brand" /> URL 在线直读
-          </h2>
-          <button
-            className={cn(V3_ICON_BTN, "ml-auto")}
+        <div className="flex shrink-0 items-start gap-3 border-b border-border px-5 py-4">
+          <span className="grid size-9 shrink-0 place-items-center rounded-full border border-border bg-secondary text-secondary-foreground">
+            <Link2 className="size-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <DialogTitle className="text-base font-bold text-foreground">
+              URL 在线直读
+            </DialogTitle>
+            <DialogDescription className="mt-0.5 text-xs text-muted-foreground">
+              JSON 清单、单页图集与外部浏览器配对导入
+            </DialogDescription>
+          </div>
+          <Button
             type="button"
+            variant="pill-ghost"
+            size="pill-icon-sm"
             onClick={close}
             disabled={busy !== null}
             title={busy !== null ? "处理进行中，完成前无法关闭" : "关闭"}
             aria-label="关闭"
           >
-            <X size={15} />
-          </button>
+            <X />
+          </Button>
         </div>
 
-        <div
-          className="grid grid-cols-2 gap-1 rounded-lg border border-hairline bg-canvas p-1"
-          role="tablist"
-          aria-label="导入方式"
+        <Tabs
+          value={tab}
+          onValueChange={(value) => {
+            if (value === "link" || value === "pair") setTab(value);
+          }}
+          className="flex min-h-0 flex-col gap-0"
         >
-          <button
-            role="tab"
-            aria-selected={tab === "link"}
-            className={cn(V3_TAB, tab === "link" && V3_TAB_ON)}
-            onClick={() => setTab("link")}
-            disabled={busy !== null}
-          >
-            链接 / 清单导入
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === "pair"}
-            className={cn(V3_TAB, tab === "pair" && V3_TAB_ON)}
-            onClick={() => setTab("pair")}
-            disabled={busy !== null}
-          >
-            外部浏览器配对
-          </button>
-        </div>
-
-        {tab === "link" ? (
-          <div
-            className="flex flex-col gap-3 rounded-xl border border-hairline p-3"
-            style={V3_INSET}
-            role="tabpanel"
-            aria-label="链接 / 清单导入"
-          >
-            <p className={V3_HINT} style={{ margin: 0 }}>
-              粘贴 JSON 清单或单页 HTML 图集的 URL。可在设置中手动填写 Cookie /
-              Authorization / 自定义请求头；不支持自动登录或需要脚本渲染的网页。
-            </p>
-            <input
-              className={V3_FIELD}
-              autoFocus
-              value={url}
-              disabled={busy !== null}
-              onChange={(e) => {
-                setUrl(e.currentTarget.value);
-                setErr(null);
-                setProbe(null);
-                setPasteErr(null);
-                setBatchErr(null);
-              }}
-              placeholder="https://example.com/manifest.json 或 https://example.com/gallery.html"
-              aria-label="JSON 清单或单页 HTML 图集 URL"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void run("read");
-                }
-              }}
-            />
-            {err && <p className="text-xs text-danger">{err}</p>}
-            {probe && <p className={cn(V3_HINT, "mono")}>{probe}</p>}
-            {busy !== null && (
-              <p className={V3_HINT}>正在处理，完成前无法关闭…</p>
-            )}
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                className={V3_BTN}
-                type="button"
-                onClick={() => void openAuxBrowser()}
-                disabled={busy !== null || openingBrowser}
-              >
-                {openingBrowser ? <Loader2 size={14} className="online-spin" /> : null}
-                打开辅助浏览窗口
-              </button>
-              <span className={cn(V3_HINT, "min-w-0 flex-1")}>
-                在窗口内自行完成登录与浏览；文件下载完成后会自动导入书库
-              </span>
-            </div>
-
-            <button
-              className={cn(V3_BTN, "self-start")}
-              type="button"
-              onClick={() => {
-                setPasteOpen((open) => !open);
-                setPasteErr(null);
-              }}
-              disabled={busy !== null}
+          <div className="shrink-0 px-5 pt-3">
+            <TabsList
+              className="h-auto w-full! flex-wrap justify-start gap-1 rounded-full border border-border bg-card p-1.5 shadow-hard-sm group-data-horizontal/tabs:h-auto"
+              aria-label="导入方式"
             >
-              粘贴图片 URL 列表导入
-            </button>
+              <TabsTrigger
+                value="link"
+                disabled={busy !== null}
+                className="h-9 flex-none gap-2 rounded-full border border-transparent px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              >
+                链接 / 清单导入
+              </TabsTrigger>
+              <TabsTrigger
+                value="pair"
+                disabled={busy !== null}
+                className="h-9 flex-none gap-2 rounded-full border border-transparent px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              >
+                外部浏览器配对
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
-            {pasteOpen && (
-              <div className="flex flex-col gap-2 rounded-lg border border-hairline p-3">
-                <input
-                  className={V3_FIELD}
-                  value={pasteTitle}
-                  onChange={(e) => setPasteTitle(e.currentTarget.value)}
-                  placeholder="标题（可留空，由后端按 URL 回退命名）"
-                  aria-label="图片清单标题"
+          <div className="min-h-0 overflow-y-auto overscroll-contain px-5 py-4">
+            <TabsContent
+              value="link"
+              aria-label="链接 / 清单导入"
+              className="flex flex-col gap-4"
+            >
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                粘贴 JSON 清单或单页 HTML 图集的 URL。可在设置中手动填写 Cookie /
+                Authorization / 自定义请求头；不支持自动登录或需要脚本渲染的网页。
+              </p>
+
+              <Card className="gap-3 rounded-2xl border-border bg-muted/20 p-4 shadow-none">
+                <div className="flex flex-col gap-1.5">
+                  <Label
+                    htmlFor="online-import-url"
+                    className="text-xs text-muted-foreground"
+                  >
+                    清单 / 图集 URL
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="online-import-url"
+                      autoFocus
+                      value={url}
+                      disabled={busy !== null}
+                      onChange={(e) => {
+                        setUrl(e.currentTarget.value);
+                        setErr(null);
+                        setProbe(null);
+                        setPasteErr(null);
+                        setBatchErr(null);
+                      }}
+                      placeholder="https://example.com/manifest.json 或 https://example.com/gallery.html"
+                      aria-label="JSON 清单或单页 HTML 图集 URL"
+                      className="h-10 font-mono text-xs"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void run("read");
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="pill"
+                      size="pill"
+                      className="shrink-0"
+                      onClick={() => void run("test")}
+                      disabled={busy !== null}
+                    >
+                      {busy === "test" ? (
+                        <Loader2 className="animate-spin" />
+                      ) : null}
+                      测试
+                    </Button>
+                  </div>
+                </div>
+
+                {err && <InlineNotice tone="error">{err}</InlineNotice>}
+                {probe && (
+                  <InlineNotice tone={probe.ok ? "success" : "error"}>
+                    {probe.text}
+                  </InlineNotice>
+                )}
+                {busy !== null && (
+                  <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    正在处理，完成前无法关闭…
+                  </p>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="pill"
+                    size="pill-sm"
+                    onClick={() => void openAuxBrowser()}
+                    disabled={busy !== null || openingBrowser}
+                  >
+                    {openingBrowser ? (
+                      <Loader2 className="animate-spin" />
+                    ) : (
+                      <AppWindow />
+                    )}
+                    打开辅助浏览窗口
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="pill-ghost"
+                    size="pill-sm"
+                    onClick={() => void openCurrentUrl()}
+                    disabled={busy !== null || openingCurrentUrl}
+                  >
+                    {openingCurrentUrl ? (
+                      <Loader2 className="animate-spin" />
+                    ) : (
+                      <Globe />
+                    )}
+                    系统浏览器
+                  </Button>
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  在窗口内自行完成登录与浏览；文件下载完成后会自动导入书库。
+                </p>
+              </Card>
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="pill"
+                  size="pill-sm"
+                  onClick={() => void run("add")}
                   disabled={busy !== null}
-                />
-                <textarea
-                  className={cn(V3_FIELD, "resize-y")}
-                  rows={5}
-                  value={pasteText}
-                  onChange={(e) => {
-                    setPasteText(e.currentTarget.value);
+                >
+                  {busy === "add" ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <BookOpen />
+                  )}
+                  仅加入书库
+                </Button>
+                <Button
+                  type="button"
+                  variant="pill-primary"
+                  size="pill"
+                  onClick={() => void run("read")}
+                  disabled={busy !== null}
+                  title="解析并直接阅读"
+                >
+                  {busy === "read" ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <BookOpen />
+                  )}
+                  加入并阅读
+                </Button>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  variant="pill-ghost"
+                  size="pill-sm"
+                  className="self-start"
+                  aria-expanded={pasteOpen}
+                  onClick={() => {
+                    setPasteOpen((open) => !open);
                     setPasteErr(null);
                   }}
-                  placeholder={
-                    '每行一个图片 URL\n或 JSON 数组：["https://example.com/1.jpg", ...]'
-                  }
-                  aria-label="图片 URL 列表"
                   disabled={busy !== null}
+                >
+                  <Images />
+                  粘贴图片 URL 列表导入
+                  <ChevronDown
+                    className={cn(
+                      "transition-transform",
+                      pasteOpen && "rotate-180",
+                    )}
+                  />
+                </Button>
+
+                {pasteOpen && (
+                  <Card className="gap-3 rounded-2xl border-border bg-card p-4 shadow-hard-sm">
+                    <div className="flex flex-col gap-1.5">
+                      <Label
+                        htmlFor="online-paste-title"
+                        className="text-xs text-muted-foreground"
+                      >
+                        标题
+                      </Label>
+                      <Input
+                        id="online-paste-title"
+                        value={pasteTitle}
+                        onChange={(e) => setPasteTitle(e.currentTarget.value)}
+                        placeholder="标题（可留空，由后端按 URL 回退命名）"
+                        aria-label="图片清单标题"
+                        disabled={busy !== null}
+                        className="h-9 text-xs"
+                      />
+                    </div>
+                    <Textarea
+                      rows={5}
+                      value={pasteText}
+                      onChange={(e) => {
+                        setPasteText(e.currentTarget.value);
+                        setPasteErr(null);
+                      }}
+                      placeholder={
+                        '每行一个图片 URL\n或 JSON 数组：["https://example.com/1.jpg", ...]'
+                      }
+                      aria-label="图片 URL 列表"
+                      disabled={busy !== null}
+                      className="font-mono text-xs"
+                    />
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      页面 URL 使用上方输入框；仅提交你手动提供的图片地址，不读取网页内容。
+                    </p>
+                    {pasteErr && (
+                      <InlineNotice tone="error">{pasteErr}</InlineNotice>
+                    )}
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="pill"
+                        size="pill-sm"
+                        onClick={() => {
+                          setPasteOpen(false);
+                          setPasteErr(null);
+                        }}
+                        disabled={busy !== null}
+                      >
+                        取消
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="pill-primary"
+                        size="pill-sm"
+                        onClick={() => void importPasted()}
+                        disabled={busy !== null || !pasteText.trim()}
+                      >
+                        {busy === "paste" ? (
+                          <Loader2 className="animate-spin" />
+                        ) : null}
+                        导入
+                      </Button>
+                    </div>
+                  </Card>
+                )}
+              </div>
+
+              <Card className="gap-3 rounded-2xl border-border bg-muted/20 p-4 shadow-none">
+                <div className="flex items-center gap-2">
+                  <FileJson className="size-4 text-muted-foreground" />
+                  <Label
+                    htmlFor="online-batch"
+                    className="text-sm font-semibold text-foreground"
+                  >
+                    多话合集 JSON
+                  </Label>
+                  <Badge variant="muted" className="ml-auto">
+                    合集
+                  </Badge>
+                </div>
+                <Textarea
+                  id="online-batch"
+                  rows={4}
+                  value={batchText}
+                  onChange={(e) => {
+                    setBatchText(e.currentTarget.value);
+                    setBatchErr(null);
+                  }}
+                  placeholder={'{"version":1,"seriesTitle":"...","chapters":[...]}'}
+                  aria-label="多话合集 JSON"
+                  disabled={busy !== null}
+                  className="font-mono text-xs"
                 />
-                <p className={V3_HINT} style={{ margin: 0 }}>
-                  页面 URL 使用上方输入框；仅提交你手动提供的图片地址，不读取网页内容。
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  粘贴包含 chapters 的合集结构；导入成功后刷新书库。
                 </p>
-                {pasteErr && <p className="text-xs text-danger">{pasteErr}</p>}
+                {batchErr && <InlineNotice tone="error">{batchErr}</InlineNotice>}
                 <div className="flex flex-wrap justify-end gap-2">
-                  <button
-                    className={V3_BTN}
-                    onClick={() => {
-                      setPasteOpen(false);
-                      setPasteErr(null);
-                    }}
-                    disabled={busy !== null}
+                  <Button
+                    type="button"
+                    variant="pill-primary"
+                    size="pill-sm"
+                    onClick={() => void importBatch()}
+                    disabled={busy !== null || !batchText.trim()}
                   >
-                    取消
-                  </button>
-                  <button
-                    className={V3_BTN_PRIMARY}
-                    onClick={() => void importPasted()}
-                    disabled={busy !== null || !pasteText.trim()}
+                    {busy === "batch" ? (
+                      <Loader2 className="animate-spin" />
+                    ) : null}
+                    导入合集
+                  </Button>
+                </div>
+              </Card>
+            </TabsContent>
+
+            <TabsContent
+              value="pair"
+              aria-label="外部浏览器配对"
+              className="flex flex-col gap-3"
+            >
+              <Card className="gap-3 rounded-2xl border-border bg-muted/20 p-4 shadow-none">
+                <div className="flex items-center gap-2">
+                  <Radio
+                    className={cn(
+                      "size-4 shrink-0",
+                      status?.active
+                        ? "text-primary"
+                        : "text-muted-foreground",
+                    )}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">
+                        {status?.active ? "配对监听中" : "配对未启动"}
+                      </span>
+                      <Badge variant={status?.active ? "success" : "muted"}>
+                        {status?.active ? "在线" : "空闲"}
+                      </Badge>
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                      {status?.active
+                        ? `127.0.0.1:${status.port} · 已接收 ${status.receivedChapters} 话`
+                        : "本地回环桥接未启动"}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="pill-ghost"
+                    size="pill-icon-sm"
+                    onClick={() => void refreshStatus()}
+                    disabled={refreshing}
+                    aria-label="刷新配对状态"
+                    title="刷新配对状态"
                   >
-                    {busy === "paste" ? (
-                      <Loader2 size={14} className="online-spin" />
-                    ) : null}{" "}
-                    导入
-                  </button>
+                    <RefreshCw
+                      className={cn(refreshing && "animate-spin")}
+                    />
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {status?.active ? (
+                    <Button
+                      type="button"
+                      variant="pill-danger"
+                      size="pill-sm"
+                      onClick={() => void stopPairing()}
+                      disabled={stoppingHandoff}
+                    >
+                      {stoppingHandoff ? "停止中…" : "停止监听"}
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="pill-primary"
+                      size="pill-sm"
+                      onClick={() => void startPairing()}
+                      disabled={startingHandoff}
+                    >
+                      {startingHandoff ? "启动中…" : "启动配对监听"}
+                    </Button>
+                  )}
+                  <span className="text-[11px] text-muted-foreground">
+                    接收的章节会自动加入书库
+                  </span>
+                </div>
+              </Card>
+
+              <div className="grid gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label
+                    htmlFor="handoff-callback"
+                    className="text-xs text-muted-foreground"
+                  >
+                    Callback URL
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="handoff-callback"
+                      readOnly
+                      value={status?.callbackUrl ?? ""}
+                      placeholder="启动配对后生成"
+                      aria-label="Callback URL"
+                      className="h-9 font-mono text-xs"
+                    />
+                    <CopyIconButton
+                      label="复制 Callback URL"
+                      toastLabel="Callback URL"
+                      value={status?.callbackUrl ?? ""}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <Label
+                    htmlFor="handoff-token"
+                    className="text-xs text-muted-foreground"
+                  >
+                    Pairing Token
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="handoff-token"
+                      readOnly
+                      value={status?.pairingToken ?? ""}
+                      placeholder="启动配对后生成"
+                      aria-label="Pairing Token"
+                      className="h-9 font-mono text-xs"
+                    />
+                    <CopyIconButton
+                      label="复制 Pairing Token"
+                      toastLabel="Pairing Token"
+                      value={status?.pairingToken ?? ""}
+                    />
+                  </div>
                 </div>
               </div>
-            )}
 
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs text-ink-muted">多话合集 JSON</span>
-              <textarea
-                className={cn(V3_FIELD, "resize-y")}
-                rows={4}
-                value={batchText}
-                onChange={(e) => {
-                  setBatchText(e.currentTarget.value);
-                  setBatchErr(null);
-                }}
-                placeholder={'{"version":1,"seriesTitle":"...","chapters":[...]}'}
-                aria-label="多话合集 JSON"
-                disabled={busy !== null}
-              />
-              <span className={V3_HINT}>
-                粘贴包含 chapters 的合集结构；导入成功后刷新书库。
-              </span>
-              {batchErr && <p className="text-xs text-danger">{batchErr}</p>}
-              <div className="flex flex-wrap justify-end gap-2">
-                <button
-                  className={V3_BTN_PRIMARY}
-                  onClick={() => void importBatch()}
-                  disabled={busy !== null || !batchText.trim()}
-                >
-                  {busy === "batch" ? (
-                    <Loader2 size={14} className="online-spin" />
-                  ) : null}{" "}
-                  导入合集
-                </button>
+              <div className="flex flex-wrap gap-2">
+                <CopyAction
+                  label="复制接口信息"
+                  toastLabel="接口信息"
+                  value={interfaceInfo}
+                />
+                <CopyAction
+                  label="复制推送模板（Fetch JSON）"
+                  toastLabel="推送模板"
+                  value={status?.script ?? ""}
+                />
               </div>
-            </div>
 
-            <div className="flex flex-wrap justify-end gap-2">
-              <button
-                className={V3_BTN}
-                onClick={() => void run("test")}
-                disabled={busy !== null}
-              >
-                {busy === "test" ? <Loader2 size={14} className="online-spin" /> : null} 测试
-              </button>
-              <button
-                className={V3_BTN}
-                onClick={() => void run("add")}
-                disabled={busy !== null}
-              >
-                {busy === "add" ? <Loader2 size={14} className="online-spin" /> : null} 仅加入书库
-              </button>
-              <button
-                className={V3_BTN_PRIMARY}
-                onClick={() => void run("read")}
-                disabled={busy !== null}
-              >
-                {busy === "read" ? (
-                  <Loader2 size={14} className="online-spin" />
-                ) : null}{" "}
-                解析并直接阅读
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div
-            className="flex flex-col gap-3 rounded-xl border border-hairline p-3"
-            style={V3_INSET}
-            role="tabpanel"
-            aria-label="外部浏览器配对"
-          >
-            <div className="flex items-center gap-2 rounded-md border border-hairline bg-canvas px-2.5 py-2">
-              <span
-                className={cn(
-                  "h-2 w-2 shrink-0 rounded-full",
-                  status?.active
-                    ? "bg-brand motion-safe:animate-pulse"
-                    : "bg-ink-muted/60",
-                )}
-              />
-              {status?.active ? (
-                <span className="mono min-w-0 flex-1 truncate text-xs text-ink-muted">
-                  127.0.0.1:{status.port} · 已接收 {status.receivedChapters} 话
-                </span>
-              ) : (
-                <span className="min-w-0 flex-1 text-xs text-ink-muted">
-                  本地回环桥接未启动
-                </span>
-              )}
-              {status?.active ? (
-                <button
-                  className={cn(V3_BTN, "ml-2 h-7")}
+              <Card className="gap-2 rounded-2xl border-border bg-muted/20 p-4 shadow-none">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="size-4 text-success" />
+                  <span className="text-xs font-semibold text-foreground">
+                    隐私说明
+                  </span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  脚本由你在自己的浏览器中手动执行，只读取当前页面已渲染的图片地址；不读取
+                  Cookie、不做翻页爬取。脚本会用 localStorage
+                  累积多话并一次推送整段合集；如需携带自己的请求头，编辑脚本里的{" "}
+                  <code className="font-mono text-foreground">
+                    MR_SESSION_HEADERS
+                  </code>{" "}
+                  常量（应用只在内存使用，不落盘、不记日志）。控制台可用{" "}
+                  <code className="font-mono text-foreground">
+                    MR_BRIDGE.reset()
+                  </code>{" "}
+                  清空收集。
+                </p>
+              </Card>
+
+              <div className="flex items-start justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-hard-sm">
+                <div className="min-w-0">
+                  <Label
+                    htmlFor="handoff-session-headers"
+                    className="text-sm font-semibold text-foreground"
+                  >
+                    允许接收临时请求头至内存
+                  </Label>
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                    退出应用即焚，不写入数据库，也不会写入日志。
+                  </p>
+                  {status?.active && (
+                    <p className="mt-1 text-[11px] text-warning">
+                      修改此开关需先停止监听，再重新启动配对。
+                    </p>
+                  )}
+                </div>
+                <Switch
+                  id="handoff-session-headers"
+                  checked={allowSessionHeaders}
+                  onCheckedChange={setAllowSessionHeaders}
+                  disabled={
+                    status?.active || startingHandoff || stoppingHandoff
+                  }
+                  aria-label="允许接收临时请求头至内存"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
                   type="button"
-                  onClick={() => void stopPairing()}
-                  disabled={stoppingHandoff}
+                  variant="pill"
+                  size="pill-sm"
+                  onClick={() => void openCurrentUrl()}
+                  disabled={openingCurrentUrl}
                 >
-                  {stoppingHandoff ? "停止中…" : "停止监听"}
-                </button>
-              ) : (
-                <button
-                  className={cn(V3_BTN_PRIMARY, "ml-2 h-7")}
-                  type="button"
-                  onClick={() => void startPairing()}
-                  disabled={startingHandoff}
-                >
-                  {startingHandoff ? "启动中…" : "启动配对监听"}
-                </button>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs text-ink-muted">Callback URL</span>
-              <input
-                className={V3_FIELD}
-                readOnly
-                value={status?.callbackUrl ?? ""}
-                placeholder="启动配对后生成"
-                aria-label="Callback URL"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs text-ink-muted">Pairing Token</span>
-              <input
-                className={V3_FIELD}
-                readOnly
-                value={status?.pairingToken ?? ""}
-                placeholder="启动配对后生成"
-                aria-label="Pairing Token"
-              />
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <CopyAction
-                label="复制接口信息"
-                toastLabel="接口信息"
-                value={interfaceInfo}
-              />
-              <CopyAction
-                label="复制推送模板（Fetch JSON）"
-                toastLabel="推送模板"
-                value={status?.script ?? ""}
-              />
-            </div>
-
-            <p className={V3_HINT} style={{ margin: 0 }}>
-              脚本由你在自己的浏览器中手动执行，只读取当前页面已渲染的图片地址；不读取
-              Cookie、不做翻页爬取。脚本会用 localStorage 累积多话并一次推送整段合集；如需携带自己的请求头，编辑脚本里的
-              MR_SESSION_HEADERS 常量（应用只在内存使用，不落盘、不记日志）。控制台可用
-              MR_BRIDGE.reset() 清空收集。
-            </p>
-
-            <label className="flex items-start gap-2 text-xs leading-relaxed text-ink">
-              <input
-                type="checkbox"
-                checked={allowSessionHeaders}
-                onChange={(e) => setAllowSessionHeaders(e.currentTarget.checked)}
-                disabled={status?.active || startingHandoff || stoppingHandoff}
-                className="mt-0.5 accent-[var(--v3-accent)]"
-              />
-              <span>允许接收临时请求头至内存（退出应用即焚，不写入数据库）</span>
-            </label>
-            {status?.active && (
-              <span className={V3_HINT}>修改此开关需先停止监听，再重新启动配对。</span>
-            )}
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                className={V3_BTN}
-                type="button"
-                onClick={() => void openCurrentUrl()}
-                disabled={openingCurrentUrl}
-              >
-                {openingCurrentUrl ? <Loader2 size={14} className="online-spin" /> : null}
-                在系统浏览器打开当前 URL
-              </button>
-              <span className={cn(V3_HINT, "min-w-0 flex-1")}>
-                当前 URL 取自「链接 / 清单导入」标签页
-              </span>
-            </div>
+                  {openingCurrentUrl ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <Globe />
+                  )}
+                  在系统浏览器打开当前 URL
+                </Button>
+                <span className="text-[11px] text-muted-foreground">
+                  当前 URL 取自「链接 / 清单导入」标签页
+                </span>
+              </div>
+            </TabsContent>
           </div>
-        )}
-      </div>
-    </div>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,16 +1,28 @@
-import { useEffect } from "react";
+import { AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface Props {
   title: string;
   message?: string;
-  /** 将被删除的路径清单（等宽小字、逐行列出）。 */
+  /** 将被删除的路径清单（已脱敏，等宽小字逐行列出）。 */
   paths?: string[];
   confirmText?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
-/** 确认对话框（流体 v2 组件清单）：玻璃遮罩 + 200ms 缩放淡入，Esc = 取消。 */
+/**
+ * MeetingIQ 确认对话框：shadcn/base-ui Dialog。
+ * 关闭（Esc / 遮罩点击）等价于取消；危险操作使用 pill-danger 按钮。
+ */
 export default function ConfirmDialog({
   title,
   message,
@@ -19,41 +31,56 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }: Props) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
   return (
-    <div
-      className="dialog-mask"
-      onClick={onCancel}
-      role="presentation"
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
     >
-      <div
-        className="dialog"
+      <DialogContent
+        showCloseButton={false}
         role="alertdialog"
-        aria-modal="true"
-        aria-label={title}
-        onClick={(e) => e.stopPropagation()}
+        className="max-w-[calc(100%-2rem)] gap-0 overflow-hidden rounded-2xl border border-border bg-card p-0 text-card-foreground shadow-hard sm:max-w-md"
       >
-        <h4>{title}</h4>
-        {message ? <p>{message}</p> : null}
+        <DialogHeader className="gap-3 px-6 pb-4 pt-6">
+          <span className="grid size-10 place-items-center rounded-full border border-border bg-destructive/10 text-destructive">
+            <AlertTriangle className="size-5" />
+          </span>
+          <DialogTitle className="text-lg font-bold leading-snug tracking-tight">
+            {title}
+          </DialogTitle>
+          {message ? (
+            <DialogDescription className="text-sm leading-relaxed text-muted-foreground">
+              {message}
+            </DialogDescription>
+          ) : null}
+        </DialogHeader>
+
         {paths && paths.length > 0 ? (
-          <p className="paths">{paths.join("\n")}</p>
+          <div className="mx-6 mb-5 max-h-44 overflow-y-auto rounded-xl border border-border bg-muted/60 p-3">
+            <ul className="space-y-1.5">
+              {paths.map((path, index) => (
+                <li
+                  key={`${index}-${path}`}
+                  className="break-all font-mono text-[11px] leading-relaxed text-muted-foreground"
+                >
+                  {path}
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
-        <div className="dialog-actions">
-          <button className="btn" onClick={onCancel}>
+
+        <DialogFooter className="mx-0 mb-0 flex-row justify-end rounded-b-2xl border-t border-border bg-muted/40 px-6 py-4">
+          <Button variant="pill" size="pill-sm" onClick={onCancel}>
             取消
-          </button>
-          <button className="btn primary" onClick={onConfirm}>
+          </Button>
+          <Button variant="pill-danger" size="pill-sm" onClick={onConfirm}>
             {confirmText}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,8 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { cn } from "@/lib/utils";
 
 export interface MenuItem {
   label: string;
   danger?: boolean;
+  icon?: ReactNode;
   onSelect: () => void;
 }
 
@@ -13,21 +16,33 @@ interface Props {
   onClose: () => void;
 }
 
+const MENU_WIDTH = 200;
+const ITEM_HEIGHT = 36;
+const EDGE = 8;
+
 /**
- * 右键菜单（卡片级操作：查看详情/继续阅读/移除/删除源文件…）。
+ * Tailwind 浮动右键菜单。
  *
- * 关闭时机有讲究：不能用「window 捕获阶段 mousedown 直接关」——
- * 捕获监听在事件到达菜单按钮之前触发，菜单在 mousedown 就被卸载，
- * 后续 mouseup/click 永远不会命中菜单项（按钮必失效）。
- * 正确做法：冒泡阶段监听 + 判断按下位置是否在菜单内。
+ * 关闭时机：冒泡阶段 mousedown + contains 判断，避免菜单在 mousedown
+ * 阶段被卸载导致后续 click 永远不命中菜单项。
  */
 export default function ContextMenu({ x, y, items, onClose }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const focusedRef = useRef(false);
 
   useEffect(() => {
+    // Focus the first item only on mount, not on every parent re-render.
+    if (!focusedRef.current) {
+      focusedRef.current = true;
+      const first = ref.current?.querySelector<HTMLButtonElement>(
+        '[role="menuitem"]',
+      );
+      first?.focus({ preventScroll: true });
+    }
+
     const inside = (e: MouseEvent) => {
-      const t = e.target as Node | null;
-      return !!(ref.current && t && ref.current.contains(t));
+      const target = e.target as Node | null;
+      return !!(ref.current && target && ref.current.contains(target));
     };
     const onDown = (e: MouseEvent) => {
       if (!inside(e)) onClose();
@@ -36,7 +51,25 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
       if (!inside(e)) onClose();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      const nodes = ref.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]',
+      );
+      if (!nodes || nodes.length === 0) return;
+      e.preventDefault();
+      const list = Array.from(nodes);
+      const current = list.indexOf(document.activeElement as HTMLButtonElement);
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      const next =
+        current < 0
+          ? 0
+          : (current + delta + list.length) % list.length;
+      list[next]?.focus({ preventScroll: true });
     };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("contextmenu", onCtx, true);
@@ -52,36 +85,54 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
     };
   }, [onClose]);
 
-  const left = Math.min(x, window.innerWidth - 190);
-  const top = Math.min(y, window.innerHeight - items.length * 38 - 16);
+  const left = Math.max(
+    EDGE,
+    Math.min(x, window.innerWidth - MENU_WIDTH - EDGE),
+  );
+  const top = Math.max(
+    EDGE,
+    Math.min(y, window.innerHeight - items.length * ITEM_HEIGHT - EDGE * 2),
+  );
 
-  return (
+  return createPortal(
     <div
       ref={ref}
-      className="ctx-menu"
       role="menu"
+      aria-label="书籍操作"
+      className="fixed z-[100] min-w-[180px] rounded-2xl border border-border bg-popover p-1.5 text-popover-foreground shadow-hard"
       style={{ left, top }}
-      // React 在根容器派发合成事件，stopPropagation 会拦住原生事件继续冒泡
-      // 到 window（配合上面的 contains 判断双保险，菜单内的按下绝不关闭菜单）。
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
       }}
     >
-      {items.map((it) => (
+      {items.map((item) => (
         <button
-          key={it.label}
+          key={item.label}
+          type="button"
           role="menuitem"
-          className={`ctx-item${it.danger ? " danger" : ""}`}
+          tabIndex={-1}
+          className={cn(
+            "flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium outline-none transition-colors",
+            item.danger
+              ? "text-destructive hover:bg-destructive/10 focus:bg-destructive/10"
+              : "text-foreground hover:bg-accent focus:bg-accent",
+          )}
           onClick={() => {
             onClose();
-            it.onSelect();
+            item.onSelect();
           }}
         >
-          {it.label}
+          {item.icon ? (
+            <span className="grid size-4 shrink-0 place-items-center [&_svg]:size-4">
+              {item.icon}
+            </span>
+          ) : null}
+          <span className="min-w-0 flex-1 truncate">{item.label}</span>
         </button>
       ))}
-    </div>
+    </div>,
+    document.body,
   );
 }

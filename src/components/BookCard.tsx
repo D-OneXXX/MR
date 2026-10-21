@@ -1,40 +1,46 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Check } from "lucide-react";
+import { BookOpen, Check, Layers } from "lucide-react";
 import { api, type BookInfo } from "@/lib/tauri";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 interface Props {
   book: BookInfo;
-  /** 单击选中：窄屏传入封面矩形做 shared-element 飞入，宽屏为 null。 */
-  onSelect?: (bookId: string, originRect: DOMRect | null) => void;
-  onOpen?: (bookId: string) => void;
-  /** 多选模式：显示选择圈，单击 = 勾选而非打开详情。 */
+  /** 聚合卡片的同系列总话数（全局、未过滤口径）。 */
+  seriesCount?: number;
+  /** 多选模式：单击卡片 = 勾选，而不是打开详情。 */
   selectMode?: boolean;
   checked?: boolean;
   onToggleCheck?: (bookId: string) => void;
+  /** 单击选中：传入封面矩形，便于上层做 shared-element。 */
+  onSelect?: (bookId: string, originRect: DOMRect | null) => void;
+  onOpen?: (bookId: string) => void;
   onContextMenu?: (e: React.MouseEvent, bookId: string) => void;
-  /** 聚合卡片的同系列总话数。 */
-  seriesCount?: number;
-  /** 窄屏延迟单击，留出双击判定窗口，避免 Sheet 抢走第二次点击。 */
+  /** 延迟单击，留出双击判定窗口，避免详情 sheet 抢走第二次点击。 */
   deferSelect?: boolean;
 }
 
 const FOCUS_RING =
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-canvas";
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
-/** v3 封面卡：3:4 封面 + 12px 圆角 + 内嵌 2px 进度；标题在 hover / focus 时浮现。 */
+/**
+ * MeetingIQ 风格书卡：白色卡片 + 硬阴影 + 3:4 封面。
+ * 单击详情、双击阅读、Shift+Enter 阅读；右键交给上层弹菜单。
+ */
 export default function BookCard({
   book,
-  onSelect,
-  onOpen,
+  seriesCount,
   selectMode,
   checked,
   onToggleCheck,
+  onSelect,
+  onOpen,
   onContextMenu,
-  seriesCount,
   deferSelect,
 }: Props) {
   const [cover, setCover] = useState<string | null>(null);
+  const [coverLoading, setCoverLoading] = useState(true);
   const clickTimer = useRef<number>(0);
   const isSeries = !!book.seriesId && (seriesCount ?? 1) > 1;
 
@@ -42,12 +48,18 @@ export default function BookCard({
 
   useEffect(() => {
     let alive = true;
+    setCover(null);
+    setCoverLoading(true);
     api.getThumbnail(book.id, 256).then(
       (img) => {
-        if (alive) setCover(img.dataUrl);
+        if (!alive) return;
+        setCover(img.dataUrl);
+        setCoverLoading(false);
       },
       () => {
-        if (alive) setCover(null);
+        if (!alive) return;
+        setCover(null);
+        setCoverLoading(false);
       },
     );
     return () => {
@@ -59,10 +71,18 @@ export default function BookCard({
     book.pageCount > 0
       ? Math.min(100, Math.round((book.currentPage / book.pageCount) * 100))
       : 0;
+  const sub =
+    book.currentPage > 0
+      ? `已读 ${book.currentPage} / ${book.pageCount} 页`
+      : `${book.pageCount} 页 · 未开始`;
 
-  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const clearPendingClick = () => {
     window.clearTimeout(clickTimer.current);
     clickTimer.current = 0;
+  };
+
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    clearPendingClick();
     if (selectMode) {
       onToggleCheck?.(book.id);
       return;
@@ -79,8 +99,7 @@ export default function BookCard({
   };
 
   const activate = (openReader: boolean) => {
-    window.clearTimeout(clickTimer.current);
-    clickTimer.current = 0;
+    clearPendingClick();
     if (selectMode) {
       onToggleCheck?.(book.id);
       return;
@@ -98,8 +117,8 @@ export default function BookCard({
   return (
     <div
       className={cn(
-        "group relative cursor-pointer rounded-lg outline-none transition-transform duration-200 ease-out hover:-translate-y-1",
-        checked && "ring-2 ring-brand ring-offset-2 ring-offset-canvas",
+        "group relative flex cursor-pointer select-none flex-col rounded-2xl border border-border bg-card p-2 shadow-card transition-all duration-200 ease-out hover:-translate-y-1 hover:shadow-hard",
+        checked && "ring-2 ring-primary ring-offset-2 ring-offset-background",
         FOCUS_RING,
       )}
       role="button"
@@ -114,8 +133,7 @@ export default function BookCard({
       onClick={handleClick}
       onDoubleClick={() => {
         if (selectMode) return;
-        window.clearTimeout(clickTimer.current);
-        clickTimer.current = 0;
+        clearPendingClick();
         onOpen?.(book.id);
       }}
       onKeyDown={(e) => {
@@ -129,8 +147,10 @@ export default function BookCard({
       }}
       onContextMenu={(e) => onContextMenu?.(e, book.id)}
     >
-      <div className="relative aspect-[3/4] overflow-hidden rounded-lg bg-surface-solid shadow-lg transition-shadow duration-200 group-hover:shadow-2xl">
-        {cover ? (
+      <div className="relative aspect-[3/4] overflow-hidden rounded-xl border border-border bg-muted">
+        {coverLoading ? (
+          <Skeleton className="absolute inset-0 rounded-xl" />
+        ) : cover ? (
           <img
             src={cover}
             alt=""
@@ -140,66 +160,60 @@ export default function BookCard({
             className="absolute inset-0 h-full w-full object-cover"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-ink-muted">
-            <BookOpen size={26} strokeWidth={1.5} />
+          <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+            <BookOpen className="size-7" strokeWidth={1.5} />
           </div>
         )}
-
-        {/* 封面内描边：token 随主题切换，ring-inset 叠在图片上，避免接缝漏边。 */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 z-[5] rounded-lg ring-1 ring-inset ring-hairline"
-        />
 
         {selectMode && (
           <span
             className={cn(
-              "absolute left-2 top-2 z-30 flex h-[22px] w-[22px] items-center justify-center rounded-full border-2 transition-colors",
+              "absolute left-2 top-2 z-20 grid size-6 place-items-center rounded-full border-2 border-border shadow-hard-sm transition-colors",
               checked
-                ? "border-brand bg-brand text-white"
-                : "border-ink/70 bg-black/35 text-transparent",
+                ? "bg-primary text-primary-foreground"
+                : "bg-card/90 text-transparent",
             )}
             aria-hidden
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleCheck?.(book.id);
-            }}
           >
-            <Check size={13} strokeWidth={3} />
+            <Check className="size-3.5" strokeWidth={3} />
           </span>
         )}
 
         {isSeries && (
-          <span
-            className={cn(
-              "absolute top-2 z-10 rounded-md border border-ink/10 bg-black/45 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm",
-              selectMode ? "left-10" : "left-2",
-            )}
+          <Badge
+            variant="outline"
+            className="absolute bottom-2 left-2 z-10 border-border bg-card/90 px-2 py-0.5 text-[10px] font-semibold text-foreground shadow-hard-sm backdrop-blur-sm"
           >
-            <span className="mono">合集 · {seriesCount} 话</span>
-          </span>
+            <Layers />
+            合集 · {seriesCount} 话
+          </Badge>
         )}
 
         {book.sourceType !== "local" && (
-          <span className="mono absolute right-2 top-2 z-10 rounded-md bg-brand px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white">
+          <Badge
+            variant="default"
+            className="absolute right-2 top-2 z-10 px-2 py-0.5 text-[10px] font-bold tracking-wide shadow-hard-sm"
+          >
             URL
-          </span>
+          </Badge>
         )}
+      </div>
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 translate-y-1 bg-gradient-to-t from-black/85 via-black/45 to-transparent px-2.5 pb-2.5 pt-8 opacity-0 transition duration-200 group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100">
-          <div className="truncate text-xs font-semibold text-white">
-            {book.title}
+      <div className="min-w-0 px-1 pb-1 pt-2.5">
+        <h3 className="truncate text-sm font-bold tracking-tight text-foreground">
+          {book.title}
+        </h3>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">{sub}</p>
+        <div className="mt-2 flex items-center gap-2">
+          <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary transition-[width] duration-200"
+              style={{ width: `${pct}%` }}
+            />
           </div>
-          <div className="mono mt-0.5 text-[10px] text-white/70">
-            {book.currentPage}/{book.pageCount} · {pct}%
-          </div>
-        </div>
-
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 h-0.5 bg-ink/20">
-          <div
-            className="h-full bg-brand transition-[width] duration-200"
-            style={{ width: `${pct}%` }}
-          />
+          <span className="text-[10px] font-semibold tabular-nums text-muted-foreground">
+            {pct}%
+          </span>
         </div>
       </div>
     </div>

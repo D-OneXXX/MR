@@ -1,28 +1,45 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
-  Copy,
-  Languages,
+  Info,
   Loader2,
+  Maximize2,
   RefreshCw,
-  X,
+  Search,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   api,
-  isTransEnabled,
   isWebtoonEnabled,
   onExperimentalChange,
   type BookInfo,
-  type OcrResult,
   type PageEntry,
-  type TranslateResult,
 } from "../lib/tauri";
+import { cn } from "@/lib/utils";
 import PixelPet from "../components/PixelPet";
 import ErrorState from "../components/ErrorState";
 import { Toaster, toast, toastErr } from "../components/Toast";
-import { cn } from "../lib/utils";
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import { Input } from "../components/ui/input";
+import { ScrollArea } from "../components/ui/scroll-area";
+import { Slider } from "../components/ui/slider";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "../components/ui/sheet";
 import {
   isSoloCover,
   spreadFor,
@@ -39,12 +56,6 @@ import ProgressScrubber, {
 } from "../components/Reader/ProgressScrubber";
 import TabSwitcher from "../components/Reader/TabSwitcher";
 import { useWorkspace } from "../features/workspace/WorkspaceContext";
-import {
-  isUsable,
-  normPoint,
-  rectFromPoints,
-  type Rect,
-} from "../components/Reader/region";
 import "../components/Reader.css";
 
 const MIN_ZOOM = 0.5;
@@ -54,6 +65,8 @@ const HIDE_MS = 1500;
 const SAVE_DEBOUNCE_MS = 500;
 
 const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
+const sliderNumber = (v: number | readonly number[]): number =>
+  Array.isArray(v) ? Number(v[0]) : Number(v);
 
 function loadPrefs(): { mode: PageMode; dir: Direction } {
   try {
@@ -127,48 +140,22 @@ export default function Reader() {
   const [scrub, setScrub] = useState<ScrubPreview | null>(null);
   const [tocShown, setTocShown] = useState(200);
 
-  /* ---------- 阶段三:选区翻译 ---------- */
-  // 实验性开关（镜像 + 后端刷新 + 订阅）：关闭时入口隐藏、快捷键失效。
-  const [transOn, setTransOn] = useState(isTransEnabled());
+  const [tocQuery, setTocQuery] = useState("");
+  const [jumpPage, setJumpPage] = useState("");
+
   const [wtOn, setWtOn] = useState(isWebtoonEnabled());
   useEffect(() => {
     // 首次读取会刷新 localStorage 镜像；镜像就绪后回灌，避免首启动时开关已开但按钮仍禁用。
     api.getSettings().then(
       () => {
-        setTransOn(isTransEnabled());
         setWtOn(isWebtoonEnabled());
       },
       () => {},
     );
     return onExperimentalChange(() => {
-      setTransOn(isTransEnabled());
       setWtOn(isWebtoonEnabled());
     });
   }, []);
-  // 开关中途关闭时退出选区模式。
-  useEffect(() => {
-    if (!transOn && regionRef.current) exitRegion();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transOn]);
-  const [regionMode, setRegionMode] = useState(false);
-  const [selPx, setSelPx] = useState<{
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  } | null>(null);
-  const [ocrRes, setOcrRes] = useState<OcrResult | null>(null);
-  const [ocrBusy, setOcrBusy] = useState(false);
-  const [transRes, setTransRes] = useState<TranslateResult | null>(null);
-  const [transBusy, setTransBusy] = useState(false);
-  const selDragRef = useRef<{
-    idx: number;
-    el: DOMRect;
-    ax: number;
-    ay: number;
-    pid: number;
-  } | null>(null);
-  const regionRef = useRef(false);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef(0);
@@ -665,11 +652,10 @@ export default function Reader() {
   }, []);
 
   useEffect(() => {
-    const panel = ocrBusy || ocrRes !== null || transBusy || transRes !== null;
     const overlay =
-      tocOpen || setOpen || panel || shortcutsOpen || moreOpen || tabsMenuOpen;
+      tocOpen || setOpen || shortcutsOpen || moreOpen || tabsMenuOpen;
     overlayRef.current = overlay;
-    uiLockRef.current = overlay || regionMode;
+    uiLockRef.current = overlay;
     if (uiLockRef.current) {
       setUiVisible(true);
       window.clearTimeout(hideTimer.current);
@@ -682,11 +668,6 @@ export default function Reader() {
     shortcutsOpen,
     moreOpen,
     tabsMenuOpen,
-    regionMode,
-    ocrBusy,
-    ocrRes,
-    transBusy,
-    transRes,
     poke,
   ]);
 
@@ -804,88 +785,6 @@ export default function Reader() {
     });
   }, [poke]);
 
-  /* ---------- 阶段三:选区翻译动作 ---------- */
-  // 请求序号:新动作/退出都会使在途请求的回包作废,防止旧结果覆盖新状态。
-  const reqSeq = useRef(0);
-
-  const exitRegion = useCallback(() => {
-    reqSeq.current += 1;
-    setRegionMode(false);
-    setSelPx(null);
-    selDragRef.current = null;
-    setOcrRes(null);
-    setTransRes(null);
-    setOcrBusy(false);
-    setTransBusy(false);
-    regionRef.current = false;
-    poke();
-  }, [poke]);
-
-  const toggleRegion = useCallback(() => {
-    setMoreOpen(false);
-    if (regionRef.current) {
-      exitRegion();
-    } else {
-      setRegionMode(true);
-      regionRef.current = true;
-      setTocOpen(false);
-      setSetOpen(false);
-      poke();
-    }
-  }, [exitRegion, poke]);
-
-  const runOcr = useCallback(
-    (idx: number, rect: Rect) => {
-      const seq = ++reqSeq.current;
-      setOcrBusy(true);
-      setOcrRes(null);
-      setTransRes(null);
-      api
-        .ocrRegion(bookId, idx, rect)
-        .then(
-          (res) => {
-            if (seq === reqSeq.current) setOcrRes(res);
-          },
-          (e) => {
-            if (seq === reqSeq.current) toastErr("ocr_region", e);
-          },
-        )
-        .finally(() => {
-          if (seq === reqSeq.current) setOcrBusy(false);
-        });
-    },
-    [bookId],
-  );
-
-  const doTranslate = useCallback(() => {
-    if (!ocrRes?.text) return;
-    const seq = ++reqSeq.current;
-    setTransBusy(true);
-    setTransRes(null);
-    api
-      .translateRegion(ocrRes.text)
-      .then(
-        (res) => {
-          if (seq === reqSeq.current) setTransRes(res);
-        },
-        (e) => {
-          if (seq === reqSeq.current) toastErr("translate_region", e);
-        },
-      )
-      .finally(() => {
-        if (seq === reqSeq.current) setTransBusy(false);
-      });
-  }, [ocrRes]);
-
-  const copyOcr = useCallback(() => {
-    const t = ocrRes?.text ?? transRes?.translated ?? "";
-    if (!t) return;
-    navigator.clipboard.writeText(t).then(
-      () => toast("已复制"),
-      () => toastErr("clipboard", "复制失败"),
-    );
-  }, [ocrRes, transRes]);
-
   /* ---------- keyboard ---------- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -906,6 +805,16 @@ export default function Reader() {
         tag === "TEXTAREA" ||
         tag === "SELECT" ||
         (el?.isContentEditable ?? false)
+      ) {
+        return;
+      }
+      // 弹层/弹窗打开时，HUD 内的按键不再穿透到画布翻页（Esc 仍可关闭）。
+      if (
+        overlayRef.current &&
+        e.key !== "Escape" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        (el?.closest("[data-reader-hud]") ?? false)
       ) {
         return;
       }
@@ -947,20 +856,10 @@ export default function Reader() {
         case "F":
           toggleMode();
           break;
-        case "o":
-        case "O":
-          // 阶段三:选区翻译开关(带修饰键时不劫持,如 Ctrl+O);实验性关闭时失效。
-          if (transOn && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            e.preventDefault();
-            toggleRegion();
-          }
-          break;
         case "Escape":
-          // 页签菜单开着先关菜单;选区开着先退选区,弹层开着先关弹层,否则返回书库。
+          // 页签菜单开着先关菜单,弹层开着先关弹层,否则返回书库。
           if (tabsMenuOpen) {
             setTabsMenuOpen(false);
-          } else if (regionRef.current) {
-            exitRegion();
           } else if (overlayRef.current) {
             setTocOpen(false);
             setSetOpen(false);
@@ -994,10 +893,7 @@ export default function Reader() {
     go,
     jumpTo,
     toggleMode,
-    toggleRegion,
-    exitRegion,
     nav,
-    transOn,
     showNextChapter,
     goNextChapter,
     ws,
@@ -1039,25 +935,6 @@ export default function Reader() {
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (trackRef.current.mode === "webtoon") return; // 条漫滚动容器自管
-    // 阶段三:选区模式下,单指在页图上按下 → 开始框选(不影响双指缩放)。
-    if (regionMode && e.pointerType !== "touch" && e.button === 0) {
-      const img = (e.target as HTMLElement).closest("img");
-      if (img) {
-        // 捕获指针:拖到工具栏/浮层上松手也能收到 pointerup,避免状态卡死。
-        e.currentTarget.setPointerCapture?.(e.pointerId);
-        const r = img.getBoundingClientRect();
-        const p = normPoint(r, e.clientX, e.clientY);
-        selDragRef.current = {
-          idx: Number(img.dataset.idx),
-          el: r,
-          ax: p.x,
-          ay: p.y,
-          pid: e.pointerId,
-        };
-        setSelPx({ left: e.clientX, top: e.clientY, width: 0, height: 0 });
-        return;
-      }
-    }
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.current.size === 2) {
@@ -1066,7 +943,7 @@ export default function Reader() {
         dist: Math.hypot(a.x - b.x, a.y - b.y),
         mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
       };
-    } else if (pointers.current.size === 1 && !selDragRef.current) {
+    } else if (pointers.current.size === 1) {
       tap.current = { x: e.clientX, y: e.clientY, t: Date.now(), id: e.pointerId };
     }
     poke();
@@ -1074,19 +951,6 @@ export default function Reader() {
 
   const onPointerMove = (e: React.PointerEvent) => {
     if (trackRef.current.mode === "webtoon") return;
-    // 阶段三:框选拖动(不进入 pan/pinch 分支)。
-    if (selDragRef.current && selDragRef.current.pid === e.pointerId) {
-      const d = selDragRef.current;
-      const p = normPoint(d.el, e.clientX, e.clientY);
-      const r = rectFromPoints(d.ax, d.ay, p.x, p.y);
-      setSelPx({
-        left: d.el.left + r.x * d.el.width,
-        top: d.el.top + r.y * d.el.height,
-        width: r.w * d.el.width,
-        height: r.h * d.el.height,
-      });
-      return;
-    }
     const prev = pointers.current.get(e.pointerId);
     if (!prev) return;
     const dx = e.clientX - prev.x;
@@ -1126,16 +990,6 @@ export default function Reader() {
 
   const endPointer = (e: React.PointerEvent) => {
     if (trackRef.current.mode === "webtoon") return;
-    // 阶段三:框选收尾 → 发起 OCR。
-    if (selDragRef.current && selDragRef.current.pid === e.pointerId) {
-      const d = selDragRef.current;
-      selDragRef.current = null;
-      setSelPx(null);
-      const p = normPoint(d.el, e.clientX, e.clientY);
-      const rect = rectFromPoints(d.ax, d.ay, p.x, p.y);
-      if (isUsable(rect) && !Number.isNaN(d.idx)) runOcr(d.idx, rect);
-      return;
-    }
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current.dist = 0;
     // tap (no drag) toggles chrome
@@ -1164,28 +1018,45 @@ export default function Reader() {
   }, [poke]);
 
   /* ---------- toc ---------- */
+  const loadEntries = () => {
+    if (entriesLoading) return;
+    setEntriesLoading(true);
+    setEntriesError(false);
+    api.listEntries(bookId).then(
+      (list) => {
+        setEntries(list);
+        setEntriesLoading(false);
+      },
+      (e) => {
+        setEntriesLoading(false);
+        setEntriesError(true);
+        toastErr("list_entries", e);
+      },
+    );
+  };
+
   const openToc = () => {
     setShortcutsOpen(false);
     setSetOpen(false);
     setMoreOpen(false);
     setTocShown(200);
-    setTocOpen((o) => !o);
-    if ((!entries || entriesError) && !entriesLoading) {
-      setEntriesLoading(true);
-      setEntriesError(false);
-      api.listEntries(bookId).then(
-        (list) => {
-          setEntries(list);
-          setEntriesLoading(false);
-        },
-        (e) => {
-          setEntriesLoading(false);
-          setEntriesError(true);
-          toastErr("list_entries", e);
-        },
-      );
-    }
+    setTocQuery("");
+    setJumpPage("");
+    const next = !tocOpen;
+    setTocOpen(next);
+    if (next && (!entries || entriesError) && !entriesLoading) loadEntries();
   };
+
+  const filteredEntries = useMemo(() => {
+    const list = entries ?? [];
+    const q = tocQuery.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(
+      (entry) =>
+        entry.name.toLowerCase().includes(q) ||
+        String(entry.index + 1) === q,
+    );
+  }, [entries, tocQuery]);
 
   /* ---------- progress scrubber（拖拽预览不发请求；松手才跳页） ---------- */
   const pagedMax = Math.max(0, n - 1);
@@ -1237,7 +1108,8 @@ export default function Reader() {
     setTocOpen(false);
     setShortcutsOpen(false);
     setMoreOpen(false);
-  }, []);  const toggleShortcuts = useCallback(() => {
+  }, []);
+  const toggleShortcuts = useCallback(() => {
     setShortcutsOpen((v) => !v);
     setTocOpen(false);
     setSetOpen(false);
@@ -1245,16 +1117,27 @@ export default function Reader() {
   }, []);
 
   const dirRtl = prefs.dir === "rtl";
-  const spreadSet = new Set(spread);
+  const webtoonReason = wtOn
+    ? "本书不支持条漫模式"
+    : "条漫模式未开启（设置 → 实验性功能）";
+  const activePages =
+    mode === "webtoon" ? new Set([wtProgress.page]) : new Set(spread);
   // spreadFor 已是视觉左→右顺序，DOM 顺序即视觉顺序，不再翻转。
   const ordered = spread;
+
+  const commitPageJump = () => {
+    const requested = Number(jumpPage);
+    if (!Number.isInteger(requested) || requested < 1 || requested > n) return;
+    setJumpPage("");
+    jumpTo(requested - 1);
+  };
 
   return (
     <div className={`reader-root${uiVisible ? "" : " chrome-hidden"}`}>
       {/* canvas */}
       <div
         ref={canvasRef}
-        className={`reader-canvas${regionMode ? " region-mode" : ""}`}
+        className="reader-canvas"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endPointer}
@@ -1269,18 +1152,18 @@ export default function Reader() {
           <div className="reader-center">
             <div className="reader-err">
               <PixelPet mode="empty" message="没找到这本书" />
-              <button onClick={() => nav("/")}>
-                <ArrowLeft size={14} style={{ verticalAlign: -2 }} /> 返回书库
-              </button>
+              <Button variant="pill" size="pill-sm" onClick={() => nav("/")}>
+                <ArrowLeft className="size-3.5" /> 返回书库
+              </Button>
             </div>
           </div>
         ) : n === 0 ? (
           <div className="reader-center">
             <div className="reader-err">
               <PixelPet mode="empty" message="这本书没有可读页面" />
-              <button onClick={() => nav("/")}>
-                <ArrowLeft size={14} style={{ verticalAlign: -2 }} /> 返回书库
-              </button>
+              <Button variant="pill" size="pill-sm" onClick={() => nav("/")}>
+                <ArrowLeft className="size-3.5" /> 返回书库
+              </Button>
             </div>
           </div>
         ) : mode === "webtoon" && book ? (
@@ -1318,9 +1201,13 @@ export default function Reader() {
                 ) : failed[idx] ? (
                   <div className="reader-err">
                     <PixelPet mode="empty" message={`第 ${idx + 1} 页缺页`} />
-                    <button onClick={() => retryIdx(idx)}>
-                      <RefreshCw size={14} style={{ verticalAlign: -2 }} /> 重试
-                    </button>
+                    <Button
+                      variant="pill"
+                      size="pill-sm"
+                      onClick={() => retryIdx(idx)}
+                    >
+                      <RefreshCw className="size-3.5" /> 重试
+                    </Button>
                   </div>
                 ) : (
                   <PixelPet mode="loading" message={`正在加载第 ${idx + 1} 页`} />
@@ -1328,17 +1215,6 @@ export default function Reader() {
               </div>
             ))}
           </div>
-        )}
-        {selPx && (
-          <div
-            className="region-overlay"
-            style={{
-              left: selPx.left,
-              top: selPx.top,
-              width: selPx.width,
-              height: selPx.height,
-            }}
-          />
         )}
       </div>
 
@@ -1376,9 +1252,7 @@ export default function Reader() {
         onNext={() => go(1)}
         mode={mode}
         webtoonAllowed={webtoonAllowed}
-        webtoonReason={
-          wtOn ? "本书不支持条漫模式" : "条漫模式未开启（设置 → 实验性功能）"
-        }
+        webtoonReason={webtoonReason}
         onMode={setMode}
         tocOpen={tocOpen}
         onToc={openToc}
@@ -1396,12 +1270,6 @@ export default function Reader() {
         onSettings={toggleSettings}
         shortcutsOpen={shortcutsOpen}
         onShortcuts={toggleShortcuts}
-        transOn={transOn}
-        regionMode={regionMode}
-        onRegion={toggleRegion}
-        regionDisabledReason={
-          mode === "webtoon" ? "条漫模式暂不支持选区翻译" : null
-        }
         slider={
           <ProgressScrubber
             value={sliderValue}
@@ -1419,15 +1287,15 @@ export default function Reader() {
         pageLabel={
           mode === "webtoon" ? (
             <>
-              <span className="text-ink">
+              <span className="text-foreground">
                 {Math.round(wtProgress.pct * 100)}%
               </span>
-              <span className="px-1 text-ink-muted/70">·</span>
+              <span className="px-1 text-muted-foreground/70">·</span>
               {Math.min(n, wtProgress.page + 1)}/{n}
             </>
           ) : (
             <>
-              <span className="text-[13px] font-semibold text-ink">
+              <span className="text-[12px] font-semibold text-foreground">
                 {n > 0 ? page + 1 : "–"}
               </span>
               <span className="px-0.5">/</span>
@@ -1437,267 +1305,345 @@ export default function Reader() {
         }
       />
 
-      {/* 页目录面板：窗口化渲染（先 200 项，可继续加载） */}
-      {tocOpen && (
-        <div
+      {/* 页目录：shadcn Sheet，搜索 + 窗口化 200 项 + 页码跳转 */}
+      <Sheet
+        open={tocOpen}
+        onOpenChange={(open) => {
+          setTocOpen(open);
+          if (!open) setJumpPage("");
+        }}
+      >
+        <SheetContent
+          side="right"
           data-reader-hud
-          className="glass hairline absolute right-3 top-16 bottom-24 z-40 flex w-[min(340px,86vw)] flex-col overflow-hidden rounded-xl text-ink shadow-2xl"
+          className="reader-portal w-full! gap-0! border-l-border! bg-card! p-0! text-card-foreground! shadow-hard! sm:w-[420px]! sm:max-w-[420px]!"
         >
-          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-3">
-            <span className="text-[12px] font-medium">页目录</span>
-            <span className="mono text-[11px] text-ink-muted">
-              {entries ? entries.length : "…"}
-            </span>
-            <button
-              type="button"
-              className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-accent hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-              onClick={() => setTocOpen(false)}
-              aria-label="关闭页目录"
-              title="关闭"
-            >
-              <X size={14} />
-            </button>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-            {entriesError ? (
-              <ErrorState message="目录加载失败" onRetry={openToc} />
-            ) : entriesLoading || !entries ? (
-              <PixelPet mode="loading" message="正在加载目录" />
-            ) : entries.length === 0 ? (
-              <PixelPet mode="empty" message="暂无目录" />
-            ) : (
-              <>
-                {entries.slice(0, tocShown).map((en) => (
-                  <button
-                    key={en.index}
-                    type="button"
-                    className={cn(
-                      "flex w-full items-baseline gap-2 rounded-md border border-transparent px-2 py-2 text-left text-[12px] transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
-                      spreadSet.has(en.index) && "border-brand/60 bg-accent",
-                    )}
-                    onClick={() => jumpTo(en.index)}
-                    title={`跳到第 ${en.index + 1} 页`}
-                  >
-                    <span className="mono w-9 shrink-0 text-right text-[11px] text-brand">
-                      {en.index + 1}
-                    </span>
-                    <span className="truncate text-ink-muted">{en.name}</span>
-                  </button>
-                ))}
-                {entries.length > tocShown && (
-                  <button
-                    type="button"
-                    className="mx-auto mt-1 flex min-h-8 w-fit items-center justify-center rounded-md border border-hairline px-3 text-[11px] text-ink-muted transition-colors hover:bg-accent hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-                    onClick={() => setTocShown((v) => v + 200)}
-                  >
-                    加载更多（剩余 {entries.length - tocShown} 页）
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      )}
+          <SheetHeader className="border-b border-border/70 px-5 py-4 pr-12">
+            <div className="flex items-center gap-2">
+              <SheetTitle className="text-sm font-bold">页目录</SheetTitle>
+              <Badge
+                variant="secondary"
+                className="mono border-border/60 px-2 py-0.5 text-[10px]"
+              >
+                {entries ? filteredEntries.length : "…"}
+              </Badge>
+            </div>
+            <SheetDescription className="text-[11px] text-muted-foreground">
+              搜索页码或文件名，点击条目跳转。
+            </SheetDescription>
+          </SheetHeader>
 
-      {/* 阅读设置面板（方向/版式/缩放；快捷键提示留在底部） */}
-      {setOpen && (
-        <div
-          data-reader-hud
-          className="glass hairline absolute bottom-20 left-1/2 z-40 flex w-[min(380px,92vw)] -translate-x-1/2 flex-col gap-3 rounded-xl p-3 text-ink shadow-2xl"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[12px] text-ink-muted">版式</span>
-            <div
-              className="flex items-center gap-0.5 rounded-lg border border-hairline p-0.5"
-              role="group"
-              aria-label="版式"
-            >
-              {(wtOn && book?.webtoonReady !== false
-                ? (["single", "double", "webtoon"] as const)
-                : (["single", "double"] as const)
-              ).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  aria-pressed={mode === m}
-                  className={cn(
-                    "h-8 rounded-md px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
-                    mode === m
-                      ? "bg-brand text-white"
-                      : "text-ink-muted hover:bg-accent hover:text-ink",
+          <div className="px-4 py-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={tocQuery}
+                onChange={(e) => {
+                  setTocQuery(e.currentTarget.value);
+                  setTocShown(200);
+                }}
+                placeholder="搜索页码或文件名"
+                aria-label="搜索页目录"
+                className="h-9 bg-background/40 pl-9 text-xs"
+              />
+            </div>
+          </div>
+
+          <ScrollArea className="min-h-0 flex-1 px-2">
+            <div className="flex flex-col gap-0.5 pb-3">
+              {entriesError ? (
+                <ErrorState message="目录加载失败" onRetry={loadEntries} />
+              ) : entriesLoading || !entries ? (
+                <div className="flex min-h-48 items-center justify-center">
+                  <PixelPet mode="loading" message="正在加载目录" />
+                </div>
+              ) : filteredEntries.length === 0 ? (
+                <div className="flex min-h-48 items-center justify-center">
+                  <PixelPet mode="empty" message="没有匹配的页" />
+                </div>
+              ) : (
+                <>
+                  {filteredEntries.slice(0, tocShown).map((en) => (
+                    <button
+                      key={en.index}
+                      type="button"
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-xl border border-transparent px-2.5 py-2 text-left text-[12px] outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-inset",
+                        activePages.has(en.index) &&
+                          "border-primary/40 bg-primary/10 text-foreground",
+                      )}
+                      onClick={() => jumpTo(en.index)}
+                      title={`跳到第 ${en.index + 1} 页`}
+                    >
+                      <span className="mono w-10 shrink-0 text-right text-[11px] tabular-nums text-primary">
+                        {en.index + 1}
+                      </span>
+                      <span className="truncate text-muted-foreground">
+                        {en.name}
+                      </span>
+                    </button>
+                  ))}
+                  {filteredEntries.length > tocShown && (
+                    <Button
+                      variant="pill"
+                      size="pill-sm"
+                      className="mx-auto mt-2"
+                      onClick={() => setTocShown((v) => v + 200)}
+                    >
+                      加载更多（剩余 {filteredEntries.length - tocShown} 页）
+                    </Button>
                   )}
-                  onClick={() => setMode(m)}
-                >
-                  {m === "single" ? "单页" : m === "double" ? "双页" : "条漫"}
-                </button>
-              ))}
+                </>
+              )}
             </div>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[12px] text-ink-muted">翻页方向</span>
-            <div
-              className="flex items-center gap-0.5 rounded-lg border border-hairline p-0.5"
-              role="group"
-              aria-label="翻页方向"
-            >
-              <button
-                type="button"
-                aria-pressed={dirRtl}
-                className={cn(
-                  "h-8 rounded-md px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
-                  dirRtl
-                    ? "bg-brand text-white"
-                    : "text-ink-muted hover:bg-accent hover:text-ink",
-                )}
-                onClick={() => setPrefs((p) => ({ ...p, dir: "rtl" }))}
-              >
-                日式右开
-              </button>
-              <button
-                type="button"
-                aria-pressed={!dirRtl}
-                className={cn(
-                  "h-8 rounded-md px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
-                  !dirRtl
-                    ? "bg-brand text-white"
-                    : "text-ink-muted hover:bg-accent hover:text-ink",
-                )}
-                onClick={() => setPrefs((p) => ({ ...p, dir: "ltr" }))}
-              >
-                西式左开
-              </button>
-            </div>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[12px] text-ink-muted">
-              缩放{" "}
-              <span className="mono text-ink">{Math.round(zoom * 100)}%</span>
-            </span>
-            <input
-              type="range"
-              className="w-[150px] accent-brand"
-              min={MIN_ZOOM}
-              max={MAX_ZOOM}
-              step={0.1}
-              value={zoom}
-              onChange={(e) => setZoom(clampZoom(Number(e.currentTarget.value)))}
-              aria-label="缩放"
+          </ScrollArea>
+
+          <div className="flex items-center gap-2 border-t border-border/70 px-4 py-3">
+            <span className="text-[11px] text-muted-foreground">跳至</span>
+            <Input
+              type="number"
+              min={1}
+              max={Math.max(1, n)}
+              value={jumpPage}
+              onChange={(e) => setJumpPage(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitPageJump();
+              }}
+              aria-label="跳至页码"
+              placeholder="页码"
+              className="mono h-9 w-20 text-center text-xs"
             />
+            <span className="text-[11px] text-muted-foreground">/ {n || "–"}</span>
+            <Button
+              variant="pill-primary"
+              size="pill-sm"
+              className="ml-auto"
+              onClick={commitPageJump}
+              disabled={n === 0 || !jumpPage}
+            >
+              跳转
+            </Button>
           </div>
-          <p className="text-[11px] leading-relaxed text-ink-muted">
-            ←/→ 翻页（右开时 ← 为下一页）· Space 下一页 · Shift+Space 上一页
-            <br />
-            f 切换版式 · Ctrl+滚轮/双指缩放 · 拖拽平移 · 双击重置 · Esc 返回
-          </p>
-        </div>
-      )}
+        </SheetContent>
+      </Sheet>
+
+      {/* 阅读设置：shadcn Dialog + 胶囊分段控件 */}
+      <Dialog open={setOpen} onOpenChange={setSetOpen}>
+        <DialogContent
+          data-reader-hud
+          className="reader-portal max-w-[calc(100%-2rem)]! gap-0! overflow-hidden rounded-2xl! border! border-border! bg-card! p-0! text-card-foreground! shadow-hard! sm:max-w-[440px]!"
+        >
+          <DialogHeader className="border-b border-border/70 px-5 py-4">
+            <DialogTitle className="flex items-center gap-2 text-sm font-bold">
+              <SlidersHorizontal className="size-4 text-primary" />
+              阅读设置
+            </DialogTitle>
+            <DialogDescription className="text-[11px] text-muted-foreground">
+              版式、方向与缩放即时生效。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 px-5 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-medium text-muted-foreground">版式</span>
+              <div
+                className="flex items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
+                role="group"
+                aria-label="版式"
+              >
+                {(
+                  [
+                    { key: "single", label: "单页" },
+                    { key: "double", label: "双页" },
+                    { key: "webtoon", label: "条漫" },
+                  ] as const
+                ).map(({ key, label }) => {
+                  const disabled = key === "webtoon" && !webtoonAllowed;
+                  return (
+                    <Button
+                      key={key}
+                      type="button"
+                      variant={mode === key ? "pill-primary" : "pill-ghost"}
+                      size="pill-sm"
+                      aria-pressed={mode === key}
+                      disabled={disabled}
+                      title={disabled ? webtoonReason : `切换到${label}`}
+                      onClick={() => setMode(key)}
+                      className="h-8 px-2.5 text-[11px]"
+                    >
+                      {label}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-medium text-muted-foreground">翻页方向</span>
+              <div
+                className="flex items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
+                role="group"
+                aria-label="翻页方向"
+              >
+                <Button
+                  type="button"
+                  variant={dirRtl ? "pill-primary" : "pill-ghost"}
+                  size="pill-sm"
+                  aria-pressed={dirRtl}
+                  onClick={() => setPrefs((p) => ({ ...p, dir: "rtl" }))}
+                  className="h-8 px-2.5 text-[11px]"
+                >
+                  日式右开
+                </Button>
+                <Button
+                  type="button"
+                  variant={!dirRtl ? "pill-primary" : "pill-ghost"}
+                  size="pill-sm"
+                  aria-pressed={!dirRtl}
+                  onClick={() => setPrefs((p) => ({ ...p, dir: "ltr" }))}
+                  className="h-8 px-2.5 text-[11px]"
+                >
+                  西式左开
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-muted-foreground">缩放</span>
+                <span className="mono text-xs tabular-nums text-foreground">
+                  {Math.round(zoom * 100)}%
+                </span>
+              </div>
+              <Slider
+                value={[zoom]}
+                min={MIN_ZOOM}
+                max={MAX_ZOOM}
+                step={0.1}
+                aria-label="缩放"
+                getAriaLabel={() => "缩放"}
+                onValueChange={(v) =>
+                  setZoom(clampZoom(sliderNumber(v)))
+                }
+                className="[&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-thumb]]:size-4"
+              />
+              <Button
+                variant="pill"
+                size="pill-sm"
+                className="w-full"
+                onClick={resetView}
+              >
+                <Maximize2 className="size-3.5" />
+                适应画布
+              </Button>
+            </div>
+
+            {!webtoonAllowed && (
+              <p className="flex items-start gap-2 rounded-xl border border-border/60 bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                <Info className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                {wtOn
+                  ? "本书不支持条漫模式。"
+                  : "条漫模式未开启，可在 设置 → 实验性功能 中打开。"}
+              </p>
+            )}
+
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              ←/→ 翻页（右开时 ← 为下一页）· Space 下一页 · Shift+Space 上一页
+              <br />
+              f 切换版式 · Ctrl+滚轮/双指缩放 · 拖拽平移 · 双击重置 · Esc 返回
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 快捷键速查表（? 呼出） */}
-      {shortcutsOpen && (
-        <div
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent
           data-reader-hud
-          className="glass hairline absolute bottom-20 left-1/2 z-40 w-[min(380px,92vw)] -translate-x-1/2 rounded-xl p-3 text-ink shadow-2xl"
+          className="reader-portal max-w-[calc(100%-2rem)]! gap-0! overflow-hidden rounded-2xl! border! border-border! bg-card! p-0! text-card-foreground! shadow-hard! sm:max-w-[440px]!"
         >
-          <h4 className="mb-2 text-[12px] font-semibold">快捷键速查</h4>
-          <div className="flex flex-col gap-1">
-            {READER_SHORTCUTS.map((s) => (
-              <div key={s.keys} className="flex items-baseline gap-3 text-[12px]">
-                <span className="mono min-w-[128px] shrink-0 font-semibold text-ink">
-                  {s.keys}
-                </span>
-                <span className="text-ink-muted">{s.action}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+          <DialogHeader className="border-b border-border/70 px-5 py-4">
+            <DialogTitle className="text-sm font-bold">快捷键速查</DialogTitle>
+            <DialogDescription className="text-[11px] text-muted-foreground">
+              阅读态快捷键（与设置页同源）。
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="max-h-[min(72vh,560px)] px-4 py-3">
+            <div className="flex flex-col gap-1 pb-2">
+              {READER_SHORTCUTS.map((s) => (
+                <div
+                  key={s.keys}
+                  className="flex items-baseline gap-3 rounded-lg px-2 py-1.5 text-[12px] odd:bg-muted/40"
+                >
+                  <kbd className="mono min-w-[124px] shrink-0 rounded-md border border-border/60 bg-background/40 px-1.5 py-0.5 text-[11px] font-semibold text-foreground">
+                    {s.keys}
+                  </kbd>
+                  <span className="text-muted-foreground">{s.action}</span>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
 
       {showNextChapter && (
-        <button
+        <div
           data-reader-hud
-          className="reader-next-pill"
-          type="button"
-          onClick={() => void goNextChapter()}
-          disabled={nextBusy}
+          className="absolute bottom-24 right-4 z-30 w-[min(340px,calc(100vw-2rem))]"
         >
-          <span className="reader-next-kicker">本话已读完</span>
-          <span className="reader-next-title">
-            {nextBusy ? (
-              <>
-                <Loader2 size={14} className="rr-spin" />
-                <span className="reader-next-name">正在载入下一话…</span>
-              </>
-            ) : (
-              <>
-                <span className="reader-next-name">下一话：{nextTitle}</span>
-                <ArrowRight size={15} />
-              </>
-            )}
-          </span>
-        </button>
-      )}
-
-      {/* 阶段三:选区结果面板 */}
-      {regionMode && (ocrBusy || ocrRes || transBusy || transRes) && (
-        <div data-reader-hud className="reader-region fade-in">
-          <div className="rr-head">
-            <span>
-              选区 OCR
-              {ocrBusy ? " · 识别中…" : ocrRes ? ` · ${ocrRes.elapsedMs} ms` : ""}
-            </span>
-            <span style={{ display: "flex", gap: 2 }}>
-              <button
-                className="rbtn"
-                onClick={copyOcr}
-                title="复制"
-                disabled={!ocrRes && !transRes}
+          <button
+            type="button"
+            onClick={() => void goNextChapter()}
+            disabled={nextBusy}
+            className="group flex w-full items-center gap-3 rounded-2xl border border-border/80 bg-card/95 p-3.5 text-left text-card-foreground shadow-hard outline-none backdrop-blur-md transition-colors hover:border-primary/60 focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-wait"
+          >
+            <span className="min-w-0 flex-1">
+              <Badge
+                variant="secondary"
+                className="mb-1.5 border-border/60 px-2 py-0.5 text-[10px]"
               >
-                <Copy size={14} />
-              </button>
-              <button className="rbtn" onClick={exitRegion} title="关闭并退出选区 (Esc)">
-                <X size={14} />
-              </button>
-            </span>
-          </div>
-          <div className="rr-text mono">
-            {ocrBusy ? "…" : ocrRes?.text || "未识别到文本"}
-          </div>
-          <div className="rr-actions">
-            <button
-              className="rbtn rr-translate"
-              onClick={doTranslate}
-              disabled={transBusy || !ocrRes?.text}
-            >
-              {transBusy ? <RefreshCw size={14} className="rr-spin" /> : <Languages size={14} />}
-              {transBusy ? "翻译中…" : "翻译"}
-            </button>
-            {transRes && (
-              <span className="rr-meta mono">
-                {transRes.model} · {transRes.elapsedMs} ms
+                本话已读完
+              </Badge>
+              <span className="block truncate text-[13px] font-semibold">
+                {nextBusy ? "正在载入下一话…" : `下一话：${nextTitle}`}
               </span>
-            )}
-          </div>
-          {transRes && <div className="rr-text rr-trans">{transRes.translated}</div>}
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                {nextBusy ? "正在解析章节链接" : "前往下一话"}
+              </span>
+            </span>
+            <span className="grid size-9 shrink-0 place-items-center rounded-full border border-border bg-primary text-primary-foreground shadow-hard-sm">
+              {nextBusy ? (
+                <Loader2 className="reader-spin size-4" />
+              ) : (
+                <ArrowRight className="size-4" />
+              )}
+            </span>
+          </button>
         </div>
       )}
 
       {/* 条漫自动建议：检测到长条画面且本书未记忆过选择（受实验开关与本书可用性门控） */}
       {wtOn && book?.webtoonReady !== false && wtSuggest && mode !== "webtoon" && (
-        <div data-reader-hud className="wt-suggest glass-bar fade-in">
-          <span>检测到长条画面，是否切换条漫模式？</span>
-          <button
-            className="rbtn mono"
-            style={{ fontSize: 11, padding: "5px 9px" }}
+        <div
+          data-reader-hud
+          className="fade-in absolute bottom-24 left-1/2 z-30 flex w-[min(560px,calc(100vw-2rem))] -translate-x-1/2 flex-wrap items-center gap-2 rounded-full border border-border/80 bg-card/95 py-2 pl-4 pr-2 text-card-foreground shadow-hard-sm backdrop-blur-md"
+        >
+          <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+            检测到长条画面，是否切换条漫模式？
+          </span>
+          <Button
+            variant="pill-primary"
+            size="pill-sm"
             onClick={() => {
               setMode("webtoon");
               setWtSuggest(false);
             }}
           >
             切换条漫
-          </button>
-          <button
-            className="rbtn mono"
-            style={{ fontSize: 11, padding: "5px 9px" }}
+          </Button>
+          <Button
+            variant="pill-ghost"
+            size="pill-sm"
             onClick={() => {
               try {
                 localStorage.setItem(`mr-wt-${bookId}`, prefs.mode);
@@ -1709,7 +1655,7 @@ export default function Reader() {
             }}
           >
             保持分页
-          </button>
+          </Button>
         </div>
       )}
 

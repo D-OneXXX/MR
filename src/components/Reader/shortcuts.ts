@@ -4,7 +4,6 @@ export const READER_SHORTCUTS: { keys: string; action: string }[] = [
   { keys: "Space", action: "下一页" },
   { keys: "Shift + Space", action: "上一页" },
   { keys: "f", action: "切换版式（单页 / 双页 / 条漫）" },
-  { keys: "o", action: "选区翻译开关" },
   { keys: "Ctrl + 1…9", action: "切换到书库 / 阅读页签" },
   { keys: "Ctrl + W", action: "关闭当前阅读页签" },
   { keys: "Ctrl + 滚轮 / 双指", action: "缩放" },

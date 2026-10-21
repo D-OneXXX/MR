@@ -1,12 +1,47 @@
-/* Reader — dark immersive canvas. Scoped .reader-* only; tokens from theme.css.
-   Geist Mono for numbers, glass-bar base, 150ms transitions, 150ms fade-in. */
+/* Reader — dark immersive canvas.
+   Structural layout only; all chrome lives in Tailwind/shadcn components.
+   `.reader-root` (and `.reader-portal` layers) pin the MeetingIQ dark token
+   set so utilities resolve dark even while the app theme is light. */
+
+.reader-root,
+.reader-portal {
+  --sh-background: #09090b;
+  --sh-foreground: #f8fafc;
+  --sh-card: #151f32;
+  --sh-card-foreground: #f8fafc;
+  --sh-popover: #151f32;
+  --sh-popover-foreground: #f8fafc;
+  --sh-primary: #38a8f8;
+  --sh-primary-foreground: #09090b;
+  --sh-secondary: #1b2a42;
+  --sh-secondary-foreground: #e8f3ff;
+  --sh-muted: #1a263a;
+  --sh-muted-foreground: #94a3b8;
+  --sh-accent: #1e3350;
+  --sh-accent-foreground: #f8fafc;
+  --sh-border: #334155;
+  --sh-input: #334155;
+  --sh-ring: #38a8f8;
+  --sh-destructive: #f87171;
+  --sh-destructive-foreground: #09090b;
+  --sh-warning: #fbbf24;
+  --sh-success: #34d399;
+  --mi-hard-shadow: #020617;
+  --mi-ring-offset: #09090b;
+  --v3-reader: #09090b;
+  color-scheme: dark;
+}
 
 .reader-root {
   position: fixed;
   inset: 0;
-  /* 阅读态始终不透明深色画布（亮色主题同样适用，见 v3 契约）。 */
+  /* .view-fade 的结束帧 transform 会成为 fixed 的包含块（高度 0）；
+     显式铺满视口，保证画布始终与窗口一致。 */
+  width: 100vw;
+  height: 100vh;
+  /* 阅读态始终不透明深色画布（亮色主题同样适用）。 */
   background: #09090b;
-  color: #f4f4f5;
+  color: #f8fafc;
   overflow: hidden;
   z-index: 20;
 }
@@ -16,7 +51,6 @@
 .reader-canvas {
   position: absolute;
   inset: 0;
-  /* v3 的 reader-canvas 工具类会跟随主题；阅读画布必须恒定深色，这里覆盖。 */
   background: #09090b;
   touch-action: none;
   user-select: none;
@@ -66,9 +100,9 @@
   padding-bottom: 60px;
 }
 .reader-center .pet-bubble {
-  background: rgba(19, 19, 22, 0.9);
-  border-color: #27272a;
-  color: #a1a1aa;
+  background: #151f32;
+  border-color: #334155;
+  color: #94a3b8;
 }
 
 .reader-err {
@@ -76,24 +110,22 @@
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  color: #a1a1aa;
+  color: #94a3b8;
   font-size: 13px;
 }
-.reader-err button {
-  background: transparent;
-  border: 1px solid #3f3f46;
-  color: #f4f4f5;
-  border-radius: 8px;
-  padding: 6px 14px;
-  cursor: pointer;
-  transition: border-color 150ms ease;
-}
-.reader-err button:hover { border-color: var(--v3-accent); }
 
-/* 快捷键速查表(设置页同源数据) */
-.sc-row { display: flex; gap: 12px; padding: 4px 0; font-size: 12px; align-items: baseline; }
-.sc-keys { min-width: 128px; font-weight: 600; flex: none; }
-.sc-action { color: var(--muted); }
+/* 页面淡入（仅透明度，不触碰平移/缩放的 transform）。 */
+.reader-root .fade-in {
+  animation: reader-fade-in 160ms ease both;
+}
+@keyframes reader-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 下一话加载指示（保持旋转动画独立于 Tailwind JIT）。 */
+.reader-spin { animation: reader-rot 0.9s linear infinite; }
+@keyframes reader-rot { to { transform: rotate(360deg); } }
 
 /* ============ 条漫模式 ============ */
 .webtoon-scroll {
@@ -127,116 +159,8 @@
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  color: var(--muted);
-  background: var(--card);
+  color: #94a3b8;
+  background: #151f32;
   border: none;
   cursor: pointer;
 }
-.wt-suggest {
-  position: fixed;
-  bottom: 78px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 40;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-/* 选区/条漫建议按钮：视觉不变，补足 32px 命中区 */
-.rbtn {
-  background: transparent;
-  border: 1px solid transparent;
-  color: #e4e4e7;
-  border-radius: 10px;
-  padding: 6px;
-  min-width: 32px;
-  min-height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: border-color 150ms ease, background 150ms ease, opacity 150ms ease;
-  flex: none;
-}
-.rbtn:hover { border-color: #52525b; background: rgba(255, 255, 255, 0.06); }
-.rbtn:disabled { opacity: 0.28; cursor: default; }
-.rbtn:disabled:hover { border-color: transparent; background: transparent; }
-
-/* 设置面板的原生 range：视觉不变，补足 32px 命中高度。 */
-.reader-root input[type="range"] {
-  min-width: 150px;
-  min-height: 32px;
-  accent-color: var(--v3-accent);
-}
-
-/* Toast floats above the bottom bar */
-.reader-root .toaster { bottom: 92px; z-index: 60; }
-.reader-root .toast {
-  background: rgba(24, 24, 27, 0.95);
-  border-color: #3f3f46;
-  color: #f4f4f5;
-}
-
-/* Stage-3 region translate */
-.reader-canvas.region-mode { cursor: crosshair; }
-
-.region-overlay {
-  position: fixed;
-  border: 2px dashed var(--v3-accent);
-  background: var(--v3-accent-soft);
-  border-radius: 4px;
-  pointer-events: none;
-  z-index: 35;
-}
-
-.reader-region {
-  position: absolute;
-  bottom: 74px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(560px, 92vw);
-  max-height: min(46vh, 420px);
-  overflow-y: auto;
-  background: rgba(18, 18, 22, 0.94);
-  backdrop-filter: blur(var(--v3-blur));
-  border: 1px solid #27272a;
-  border-radius: 14px;
-  padding: 12px 14px;
-  z-index: 45;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.rr-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
-  color: #a1a1aa;
-}
-.rr-text {
-  font-size: 13px;
-  line-height: 1.7;
-  color: #e4e4e7;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 96px;
-  overflow-y: auto;
-}
-.rr-trans { color: var(--v3-accent); max-height: 140px; }
-.rr-actions { display: flex; align-items: center; gap: 10px; }
-.rr-translate {
-  border: 1px solid #3f3f46;
-  border-radius: 8px;
-  padding: 6px 14px;
-  gap: 6px;
-  font-size: 12px;
-}
-.rr-translate:disabled { opacity: 0.4; }
-.rr-meta { font-size: 11px; color: #71717a; }
-.rr-spin { animation: rr-rot 0.9s linear infinite; }
-@keyframes rr-rot { to { transform: rotate(360deg); } }

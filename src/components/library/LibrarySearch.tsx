@@ -12,7 +12,7 @@ interface Props {
 
 const INPUT_ID = "library-search-input";
 
-/** MeetingIQ 嵌套胶囊搜索框；Ctrl+K（全局事件）聚焦并全选。 */
+/** 嵌套胶囊搜索框；Ctrl+K（全局事件）聚焦并全选。 */
 export default function LibrarySearch({ value, onChange, onCommit }: Props) {
   useEffect(() => {
     const focus = () => {

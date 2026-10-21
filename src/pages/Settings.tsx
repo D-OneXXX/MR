@@ -24,7 +24,7 @@ import {
   Trash2,
   TrendingUp,
   Wifi,
-  Zap,
+  Activity,
   type LucideIcon,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -990,7 +990,7 @@ export default function SettingsPage() {
             </SettingsSection>
 
             <SettingsSection
-              icon={Zap}
+              icon={Activity}
               title="连通性测试"
               description="解析目标清单或图集，只做探测，不写入书库。"
             >

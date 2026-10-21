@@ -78,7 +78,7 @@ function readSourceFilter(): SourceFilter {
 }
 
 /**
- * 书库主页（`/`）— MeetingIQ 浅色画布：
+ * 书库主页（`/`）— 冰蓝胶囊浅色画布：
  * 大标题 + 胶囊搜索 + 分段筛选 + 书卡网格 + 详情 Sheet。
  * 导入、拖放、多选、右键菜单与在线直读门控保持既有行为。
  */

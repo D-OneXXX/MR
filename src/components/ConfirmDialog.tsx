@@ -20,7 +20,7 @@ interface Props {
 }
 
 /**
- * MeetingIQ 确认对话框：shadcn/base-ui Dialog。
+ * 胶囊风格确认对话框：shadcn/base-ui Dialog。
  * 关闭（Esc / 遮罩点击）等价于取消；危险操作使用 pill-danger 按钮。
  */
 export default function ConfirmDialog({

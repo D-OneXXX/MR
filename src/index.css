@@ -1,4 +1,4 @@
-/* MangaReader · MeetingIQ UI entry
+/* MangaReader · 冰蓝胶囊 UI entry
  *
  * Tailwind CSS v4 + shadcn (base-nova / Base UI).
  * Light: ice-blue canvas, white surfaces, zinc-900 outlines, hard offset shadows.
@@ -11,6 +11,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* Geist Variable is bundled from @fontsource-variable/geist under SIL OFL 1.1.
+   Chinese glyphs intentionally fall back to OS fonts; no commercial font packages. */
 @import "@fontsource-variable/geist";
 
 /* The app switches themes on <html data-theme="light|dark">. Match both the
@@ -111,10 +113,10 @@
 }
 
 @theme inline {
-  --font-sans: "Geist Variable", "PingFang SC", "Microsoft YaHei",
-    "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "Geist Variable", "PingFang SC", "Microsoft YaHei",
-    "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist Variable", "PingFang SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Geist Variable", "PingFang SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
 
   --color-background: var(--sh-background);

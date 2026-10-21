@@ -25,7 +25,7 @@ const FOCUS_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 /**
- * MeetingIQ 风格书卡：白色卡片 + 硬阴影 + 3:4 封面。
+ * 冰蓝胶囊风格书卡：白色卡片 + 硬阴影 + 3:4 封面。
  * 单击详情、双击阅读、Shift+Enter 阅读；右键交给上层弹菜单。
  */
 export default function BookCard({

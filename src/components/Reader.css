@@ -1,7 +1,7 @@
 /* Reader — dark immersive canvas.
    Structural layout only; all chrome lives in Tailwind/shadcn components.
-   `.reader-root` (and `.reader-portal` layers) pin the MeetingIQ dark token
-   set so utilities resolve dark even while the app theme is light. */
+   `.reader-root` (and `.reader-portal` layers) pin the dark token set so
+   utilities resolve dark even while the app theme is light. */
 
 .reader-root,
 .reader-portal {

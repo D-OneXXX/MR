@@ -11,9 +11,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-/* Geist Variable is bundled from @fontsource-variable/geist under SIL OFL 1.1.
+/* Plus Jakarta Sans Variable is bundled from
+   @fontsource-variable/plus-jakarta-sans under SIL OFL 1.1.
    Chinese glyphs intentionally fall back to OS fonts; no commercial font packages. */
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/plus-jakarta-sans";
 
 /* The app switches themes on <html data-theme="light|dark">. Match both the
    root element and every descendant so `dark:` works on <html> too. */
@@ -113,10 +114,12 @@
 }
 
 @theme inline {
-  --font-sans: "Geist Variable", "PingFang SC", "Microsoft YaHei UI",
-    "Microsoft YaHei", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "Geist Variable", "PingFang SC", "Microsoft YaHei UI",
-    "Microsoft YaHei", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", "Inter",
+    "Inter Variable", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
+    sans-serif;
+  --font-heading: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", "Inter",
+    "Inter Variable", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
+    sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
 
   --color-background: var(--sh-background);

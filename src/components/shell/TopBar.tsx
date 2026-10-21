@@ -1,6 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import {
-  BookOpen,
   Globe2,
   LibraryBig,
   Moon,
@@ -11,6 +10,7 @@ import {
 import type { BookInfo } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/features/theme/ThemeProvider";
+import BrandLogo from "./BrandLogo";
 import StatusPill from "./StatusPill";
 import { WindowControls } from "./WindowControls";
 
@@ -55,20 +55,10 @@ export default function TopBar({
           to="/"
           end
           onClick={onClearLibraryBadge}
-          className="pointer-events-auto flex shrink-0 items-center gap-2.5 rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="pointer-events-auto shrink-0 rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           aria-label="MangaReader 书库"
         >
-          <span className="grid size-9 place-items-center rounded-2xl border border-border bg-primary text-primary-foreground shadow-hard-sm">
-            <BookOpen className="size-4.5" strokeWidth={2.4} />
-          </span>
-          <span className="hidden select-none flex-col leading-none sm:flex">
-            <span className="text-[14px] font-extrabold tracking-tight">
-              MangaReader
-            </span>
-            <span className="mono mt-1 text-[9px] tracking-[0.16em] text-muted-foreground">
-              LOCAL FIRST
-            </span>
-          </span>
+          <BrandLogo />
         </NavLink>
 
         <nav

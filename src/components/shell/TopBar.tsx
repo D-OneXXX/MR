@@ -9,9 +9,12 @@ import {
 } from "lucide-react";
 import type { BookInfo } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/i18n";
 import { useTheme } from "@/features/theme/ThemeProvider";
+import { useSafeMode } from "@/features/safeMode/SafeModeContext";
 import BrandLogo from "./BrandLogo";
 import StatusPill from "./StatusPill";
+import SafeModePill from "./SafeModePill";
 import { WindowControls } from "./WindowControls";
 
 interface TopBarProps {
@@ -41,12 +44,19 @@ export default function TopBar({
   onClearLibraryBadge,
 }: TopBarProps) {
   const nav = useNavigate();
+  const { t } = useI18n();
+  const { active: safeMode } = useSafeMode();
   const { mode, resolved, cycleTheme } = useTheme();
+  const themeName = resolved === "dark" ? t("theme.dark") : t("theme.light");
+  const themeTitle =
+    mode === "system"
+      ? t("theme.currentSystem", { theme: themeName })
+      : t("theme.current", { theme: themeName });
 
   return (
     <header
       data-tauri-drag-region
-      className="relative z-40 flex h-16 shrink-0 items-center px-3 sm:px-5"
+      className="relative z-40 flex h-16 w-full shrink-0 items-center px-3 sm:px-5"
     >
       <div className="absolute inset-0" data-tauri-drag-region />
 
@@ -56,25 +66,29 @@ export default function TopBar({
           end
           onClick={onClearLibraryBadge}
           className="pointer-events-auto shrink-0 rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-          aria-label="MangaReader 书库"
+          aria-label={t("nav.brand")}
         >
           <BrandLogo />
         </NavLink>
 
         <nav
-          aria-label="主导航"
+          aria-label={t("nav.main")}
           className="pointer-events-auto mx-auto flex shrink-0 items-center gap-0.5 rounded-full border border-border bg-card p-1 shadow-hard"
         >
           <NavLink
             to="/"
             end
             onClick={onClearLibraryBadge}
+            title={t("nav.library")}
+            aria-label={t("nav.library")}
             className={({ isActive }) =>
               cn(navItem, isActive ? navActive : navIdle)
             }
           >
-            <LibraryBig className="size-4" />
-            <span>书库</span>
+            <LibraryBig className="size-4 shrink-0" />
+            <span className="hidden whitespace-nowrap lg:inline">
+              {t("nav.library")}
+            </span>
             {libraryBadge > 0 && (
               <span className="absolute -right-1 -top-1 grid min-w-4 place-items-center rounded-full border border-border bg-foreground px-1 py-0.5 text-[9px] font-bold leading-none text-background">
                 {libraryBadge > 99 ? "99+" : libraryBadge}
@@ -87,61 +101,73 @@ export default function TopBar({
             className={cn(navItem, navIdle, "disabled:opacity-35")}
             disabled={!lastRead}
             title={
-              lastRead ? `继续阅读《${lastRead.title}》` : "还没有在读书籍"
+              lastRead
+                ? t("nav.continueTitle", { title: lastRead.title })
+                : t("nav.continueEmpty")
             }
             aria-label={
               lastRead
-                ? `继续阅读《${lastRead.title}》`
-                : "继续阅读（还没有在读书籍）"
+                ? t("nav.continueTitle", { title: lastRead.title })
+                : t("nav.continueEmpty")
             }
             onClick={() =>
               lastRead && nav(`/reader/${encodeURIComponent(lastRead.id)}`)
             }
           >
-            <Play className="size-4" />
-            <span>继续阅读</span>
+            <Play className="size-4 shrink-0" />
+            <span className="hidden whitespace-nowrap lg:inline">
+              {t("nav.continue")}
+            </span>
           </button>
 
-          <NavLink
-            to="/browser"
-            className={({ isActive }) =>
-              cn(navItem, isActive ? navActive : navIdle)
-            }
-          >
-            <Globe2 className="size-4" />
-            <span>浏览器</span>
-          </NavLink>
+          {!safeMode && (
+            <NavLink
+              to="/browser"
+              title={t("nav.browser")}
+              aria-label={t("nav.browser")}
+              className={({ isActive }) =>
+                cn(navItem, isActive ? navActive : navIdle)
+              }
+            >
+              <Globe2 className="size-4 shrink-0" />
+              <span className="hidden whitespace-nowrap lg:inline">
+                {t("nav.browser")}
+              </span>
+            </NavLink>
+          )}
 
           <NavLink
             to="/settings"
+            title={t("nav.settings")}
+            aria-label={t("nav.settings")}
             className={({ isActive }) =>
               cn(navItem, isActive ? navActive : navIdle)
             }
           >
-            <Settings2 className="size-4" />
-            <span>设置</span>
+            <Settings2 className="size-4 shrink-0" />
+            <span className="hidden whitespace-nowrap lg:inline">
+              {t("nav.settings")}
+            </span>
           </NavLink>
         </nav>
 
         <div className="pointer-events-auto flex shrink-0 items-center gap-1.5">
-          <StatusPill
-            onlineProxy={onlineProxy}
-            onlineOn={onlineOn}
-            settingsReady={settingsReady}
-            settingsError={settingsError}
-          />
+          {safeMode ? (
+            <SafeModePill />
+          ) : (
+            <StatusPill
+              onlineProxy={onlineProxy}
+              onlineOn={onlineOn}
+              settingsReady={settingsReady}
+              settingsError={settingsError}
+            />
+          )}
           <button
             type="button"
             className="grid size-8 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             onClick={cycleTheme}
-            title={`主题：${
-              mode === "system"
-                ? `跟随系统（当前${resolved === "dark" ? "深色" : "浅色"}）`
-                : mode === "dark"
-                  ? "深色"
-                  : "浅色"
-            }，点击切换`}
-            aria-label="切换主题"
+            title={themeTitle}
+            aria-label={t("theme.toggle")}
           >
             {resolved === "dark" ? (
               <Sun className="size-4" />

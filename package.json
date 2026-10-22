@@ -1,13 +1,17 @@
 {
   "name": "manga-reader-tauri",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.12.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run version:check && tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "version:sync": "node scripts/version-sync.mjs",
+    "version:check": "node scripts/version-check.mjs",
+    "test:version": "node --test scripts/version.test.mjs",
+    "qa:audit": "node tests/qa/run-qa.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

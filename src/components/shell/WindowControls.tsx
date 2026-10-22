@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { Copy, Minus, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/i18n";
 
 /** Frameless-window controls. Kept outside the nav pill so dragging works. */
 export function WindowControls({ className }: { className?: string }) {
+  const { t } = useI18n();
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -57,8 +59,8 @@ export function WindowControls({ className }: { className?: string }) {
       <button
         type="button"
         className={base}
-        title="最小化"
-        aria-label="最小化"
+        title={t("window.minimize")}
+        aria-label={t("window.minimize")}
         onClick={act(() => getCurrentWindow().minimize())}
       >
         <Minus className="size-4" />
@@ -66,8 +68,8 @@ export function WindowControls({ className }: { className?: string }) {
       <button
         type="button"
         className={base}
-        title={maximized ? "还原" : "最大化"}
-        aria-label={maximized ? "还原" : "最大化"}
+        title={maximized ? t("window.restore") : t("window.maximize")}
+        aria-label={maximized ? t("window.restore") : t("window.maximize")}
         onClick={act(() => getCurrentWindow().toggleMaximize())}
       >
         {maximized ? <Copy className="size-3.5" /> : <Square className="size-3.5" />}
@@ -78,8 +80,8 @@ export function WindowControls({ className }: { className?: string }) {
           base,
           "hover:bg-destructive hover:text-white focus-visible:ring-destructive",
         )}
-        title="关闭"
-        aria-label="关闭"
+        title={t("window.close")}
+        aria-label={t("window.close")}
         onClick={act(() => getCurrentWindow().close())}
       >
         <X className="size-4" />

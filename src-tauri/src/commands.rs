@@ -24,7 +24,16 @@ use crate::{
     SeriesProgress, Settings, TransStats, TranslateResult,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use image::GenericImageView as _;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::State;
+
+use crate::online::filter::{
+    FilterAction, FilterMemory, FilterRule, FilterStats, FilterThresholds, FilteredPage, RulePattern,
+    RuleSource, SiteProfile,
+};
+use crate::online::http::HttpTransport;
 
 pub(crate) fn err(e: impl ToString) -> String {
     e.to_string()
@@ -96,7 +105,7 @@ fn numeric_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// 数字段按数值比较；非数字结构不同则退回字典序，避免“第10话/第2卷”误排。
-fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+pub(crate) fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     let a_parts = natural_segments(a);
     let b_parts = natural_segments(b);
     let a_text: Vec<&str> = a_parts
@@ -854,8 +863,16 @@ pub async fn clear_thumbnail_cache(state: State<'_, Arc<AppState>>) -> Result<u3
 
 /// `sysinfo` 只刷新本进程内存（不扫全进程表，低开销）。
 fn blocking_memory(cache: (u64, u64, usize, usize, u64, usize)) -> MemoryStats {
+    use std::sync::OnceLock;
     use sysinfo::{get_current_pid, ProcessesToUpdate, System};
-    let mut sys = System::new();
+
+    // Reuse and serialize the process table: concurrent `System::new` +
+    // refresh calls can stall on Windows while the reader is materializing
+    // long-strip pages, which used to block the whole Settings page.
+    static PROCESS_SYSTEM: OnceLock<parking_lot::Mutex<System>> = OnceLock::new();
+    let mut sys = PROCESS_SYSTEM
+        .get_or_init(|| parking_lot::Mutex::new(System::new()))
+        .lock();
     let pid = get_current_pid().unwrap_or_else(|_| sysinfo::Pid::from(0));
     sys.refresh_processes(ProcessesToUpdate::Some(&[pid]));
     let process_mb = sys
@@ -1487,6 +1504,7 @@ pub async fn resolve_online_url(
     state: State<'_, Arc<AppState>>,
     url: String,
 ) -> Result<BookInfo, String> {
+    crate::resilience::ensure_online_allowed()?;
     let st = state.inner().clone();
     let (row, changed) = blocking(move || {
         let s = st.settings.lock().clone();
@@ -1497,8 +1515,15 @@ pub async fn resolve_online_url(
         let headers =
             crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
         let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
-        let meta = crate::online::resolve(&http, &url)?;
-        apply_resolved_meta(&st, &meta)
+        let host = crate::online::filter::url_host(&url);
+        let memory = filter_memory_for(&st, &host)?;
+        let thresholds = thresholds_from(memory.profile.as_ref());
+        let meta = crate::online::resolve_with(&http, &url, &memory, &thresholds)?;
+        let (row, changed) = apply_resolved_meta(&st, &meta)?;
+        if let Err(e) = persist_filter_learning(&st, &meta, &row.id) {
+            crate::logging::log_error("online_filter", &format!("站点学习落库失败：{e}"));
+        }
+        Ok((row, changed))
     })
     .await?;
 
@@ -1521,6 +1546,7 @@ pub async fn import_resolved_pages(
     title: String,
     page_urls: Vec<String>,
 ) -> Result<BookInfo, String> {
+    crate::resilience::ensure_online_allowed()?;
     if !state.settings.lock().experimental_online {
         return Err("在线直读未开启".into());
     }
@@ -1533,13 +1559,32 @@ pub async fn resolve_online_batch(
     state: State<'_, Arc<AppState>>,
     payload_json: String,
 ) -> Result<Vec<BookInfo>, String> {
+    crate::resilience::ensure_online_allowed()?;
     if !state.settings.lock().experimental_online {
         return Err("在线直读未开启".into());
     }
     let st = state.inner().clone();
     blocking(move || {
-        let metas = crate::online::direct::parse_batch_payload(payload_json.as_bytes())?;
-        ingest_resolved_batch(&st, metas)
+        let s = st.settings.lock().clone();
+        let session_headers = st.session_online_headers.lock().clone();
+        let headers =
+            crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
+        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let memory = FilterMemory::default();
+        let thresholds = FilterThresholds::default();
+        let metas = crate::online::direct::parse_batch_payload_with(
+            payload_json.as_bytes(),
+            &http,
+            &memory,
+            &thresholds,
+        )?;
+        let books = ingest_resolved_batch(&st, metas.clone())?;
+        for (meta, book) in metas.iter().zip(books.iter()) {
+            if let Err(e) = persist_filter_learning(&st, meta, &book.id) {
+                crate::logging::log_error("online_filter", &format!("批量学习落库失败：{e}"));
+            }
+        }
+        Ok(books)
     })
     .await
 }
@@ -1550,6 +1595,7 @@ pub async fn test_online_connection(
     state: State<'_, Arc<AppState>>,
     url: String,
 ) -> Result<OnlineProbe, String> {
+    crate::resilience::ensure_online_allowed()?;
     let st = state.inner().clone();
     blocking(move || {
         let s = st.settings.lock().clone();
@@ -1560,8 +1606,11 @@ pub async fn test_online_connection(
         let headers =
             crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
         let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let host = crate::online::filter::url_host(&url);
+        let memory = filter_memory_for(&st, &host)?;
+        let thresholds = thresholds_from(memory.profile.as_ref());
         let t0 = Instant::now();
-        let meta = crate::online::resolve(&http, &url)?;
+        let meta = crate::online::resolve_with(&http, &url, &memory, &thresholds)?;
         // 与 resolve 相同的 0 页门禁：可连通但不可入库，ok 反映最终可用性。
         let ok = meta.page_count > 0;
         let page_count = meta.page_count as u32;
@@ -1578,6 +1627,858 @@ pub async fn test_online_connection(
         })
     })
     .await
+}
+
+// ---------- 在线图片提纯：规则库、标记/恢复与 Telegram ----------
+
+const TELEGRAM_DOC_MAX_BYTES: usize = 256 * 1024 * 1024;
+
+fn filter_memory_for(st: &AppState, host: &str) -> Result<FilterMemory, BackendError> {
+    let (profile, rules) = st
+        .db
+        .with(|conn| {
+            let profile = db::get_filter_profile(conn, host).map_err(err)?;
+            let rules = db::rules_for_host(conn, host).map_err(err)?;
+            Ok((profile, rules))
+        })
+        .map_err(BackendError::Msg)?;
+    Ok(FilterMemory {
+        host: host.to_string(),
+        profile,
+        rules,
+    })
+}
+
+fn thresholds_from(profile: Option<&SiteProfile>) -> FilterThresholds {
+    let mut thresholds = FilterThresholds::default();
+    if let Some(profile) = profile {
+        thresholds.width_min = profile.width_min;
+        thresholds.width_max = profile.width_max;
+        if let Some(aspect) = profile.aspect_max {
+            thresholds.max_aspect = thresholds.max_aspect.max(aspect).min(5.0);
+        }
+    }
+    thresholds
+}
+
+fn load_online_stored(row: &db::BookRow) -> Result<crate::online::StoredMeta, BackendError> {
+    serde_json::from_str(&row.meta_json)
+        .map_err(|e| BackendError::Msg(format!("在线书元数据损坏：{e}")))
+}
+
+fn rebuild_online_meta(
+    row: &db::BookRow,
+    stored: &crate::online::StoredMeta,
+    pages: Vec<crate::online::PageRef>,
+    filtered: Vec<FilteredPage>,
+) -> Result<crate::online::direct::OnlineBookMeta, BackendError> {
+    let canonical = crate::online::normalize_url(&row.path)?;
+    let links = crate::online::direct::MetaLinks {
+        series_id: stored.series_id.clone(),
+        series_title: stored.series_title.clone(),
+        next_url: stored.next_url.clone(),
+        chapter_index: stored.chapter_index,
+    };
+    let mut meta = crate::online::direct::make_meta_with_links(
+        &canonical,
+        &row.title,
+        pages,
+        links,
+    )?;
+    let mut next: crate::online::StoredMeta = serde_json::from_str(&meta.meta_json)
+        .map_err(|e| BackendError::Msg(format!("内部元数据错误：{e}")))?;
+    next.schema = 2;
+    next.filtered = filtered.clone();
+    next.filter_profile = stored.filter_profile.clone();
+    meta.meta_json = serde_json::to_string(&next)
+        .map_err(|e| BackendError::Msg(format!("清单元数据序列化失败：{e}")))?;
+    meta.page_count = next.pages.len();
+    meta.filtered = filtered;
+    meta.filter_profile = next.filter_profile;
+    Ok(meta)
+}
+
+fn page_rule_id(prefix: &str, host: &str, pattern: &RulePattern) -> String {
+    let payload = serde_json::to_string(pattern).unwrap_or_default();
+    let digest = hex::encode(Sha256::digest(format!("{host}|{payload}").as_bytes()));
+    format!("{prefix}-{}", &digest[..24])
+}
+
+fn main_page_template(pages: &[crate::online::PageRef]) -> Option<String> {
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for page in pages {
+        if let Some(template) = crate::online::filter::url_template(&page.url) {
+            *counts.entry(template).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(template, _)| template)
+}
+
+fn invalidate_book_caches(st: &AppState, book_id: &str) {
+    st.cache.remove_book(book_id);
+    st.render.remove_book(book_id);
+    st.webtoon_layouts.lock().remove(book_id);
+    st.invalidate_sources();
+}
+
+/// 解析成功后把站点档案与被过滤事件落库；失败不影响阅读。
+fn persist_filter_learning(
+    st: &AppState,
+    meta: &crate::online::direct::OnlineBookMeta,
+    book_id: &str,
+) -> Result<(), BackendError> {
+    let host = meta
+        .filter_profile
+        .as_ref()
+        .map(|p| p.host.clone())
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| crate::online::filter::url_host(&meta.canonical_url));
+    let host_for_db = host.clone();
+    st.db
+        .with(|conn| {
+            if meta.page_count >= 3 {
+                if let Some(profile) = meta.filter_profile.as_ref() {
+                    db::upsert_filter_profile(conn, profile).map_err(err)?;
+                }
+            }
+            for page in &meta.filtered {
+                let url = crate::online::filter::redacted_url(&page.url);
+                db::record_filter_event(
+                    conn,
+                    &host_for_db,
+                    book_id,
+                    &url,
+                    "blocked",
+                    &page.reason,
+                    page.width,
+                    page.height,
+                    page.sha256.as_deref(),
+                )
+                .map_err(err)?;
+            }
+            Ok(())
+        })
+        .map_err(BackendError::Msg)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OnlineFilterExport {
+    version: u32,
+    exported_at: String,
+    rules: Vec<FilterRule>,
+    profiles: Vec<SiteProfile>,
+}
+
+fn validate_filter_rule(rule: &FilterRule) -> Result<(), String> {
+    if rule.host.trim().is_empty() || rule.host.len() > 253 {
+        return Err("规则 host 非法".into());
+    }
+    match &rule.pattern {
+        RulePattern::UrlTemplate { template } => {
+            if !(template.starts_with("http://") || template.starts_with("https://"))
+                || template.contains('?')
+                || template.contains('#')
+                || template.len() > 2048
+            {
+                return Err("URL 模板必须是无 query/fragment 的 http(s) 地址".into());
+            }
+        }
+        RulePattern::ExactUrl { url } => {
+            if !(url.starts_with("http://") || url.starts_with("https://"))
+                || url.contains('?')
+                || url.contains('#')
+                || url.len() > 2048
+            {
+                return Err("精确 URL 必须是无 query/fragment 的 http(s) 地址".into());
+            }
+        }
+        RulePattern::Sha256 { hash } => {
+            if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err("SHA-256 规则必须是 64 位十六进制".into());
+            }
+        }
+        RulePattern::DomClass { value } => {
+            if value.trim().is_empty() || value.len() > 120 {
+                return Err("DOM class 规则长度非法".into());
+            }
+        }
+        RulePattern::Size { width, height } => {
+            if *width == 0 || *height == 0 || *width > 100_000 || *height > 100_000 {
+                return Err("尺寸规则非法".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_online_filter_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<FilterStats, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.db
+            .with(|conn| db::filter_stats(conn).map_err(err))
+            .map_err(BackendError::Msg)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_online_filter_rules(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<FilterRule>, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.db
+            .with(|conn| db::list_filter_rules(conn).map_err(err))
+            .map_err(BackendError::Msg)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn export_online_filter_rules(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.db
+            .with(|conn| {
+                let rules = db::list_filter_rules(conn).map_err(err)?;
+                let profiles = db::list_filter_profiles(conn).map_err(err)?;
+                serde_json::to_string_pretty(&OnlineFilterExport {
+                    version: 1,
+                    exported_at: db::now_str(),
+                    rules,
+                    profiles,
+                })
+                .map_err(|e| err(format!("导出序列化失败：{e}")))
+            })
+            .map_err(BackendError::Msg)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn import_online_filter_rules(
+    state: State<'_, Arc<AppState>>,
+    json: String,
+) -> Result<u32, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let value: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| BackendError::Msg(format!("规则 JSON 无效：{e}")))?;
+        let (rules_value, profiles_value) = if value.is_array() {
+            (value, serde_json::Value::Null)
+        } else {
+            (
+                value
+                    .get("rules")
+                    .cloned()
+                    .ok_or_else(|| BackendError::Msg("规则 JSON 缺少 rules 数组".into()))?,
+                value.get("profiles").cloned().unwrap_or(serde_json::Value::Null),
+            )
+        };
+        let mut rules: Vec<FilterRule> = serde_json::from_value(rules_value)
+            .map_err(|e| BackendError::Msg(format!("规则格式不符：{e}")))?;
+        let profiles: Vec<SiteProfile> = if profiles_value.is_null() {
+            Vec::new()
+        } else {
+            serde_json::from_value(profiles_value)
+                .map_err(|e| BackendError::Msg(format!("站点档案格式不符：{e}")))?
+        };
+        if rules.len() > 5000 || profiles.len() > 5000 {
+            return Err(BackendError::Msg("导入规则/档案数量超过上限 5000".into()));
+        }
+        for rule in &mut rules {
+            validate_filter_rule(rule).map_err(BackendError::Msg)?;
+            if rule.id.trim().is_empty() {
+                rule.id = page_rule_id("imp", &rule.host, &rule.pattern);
+            }
+            rule.source = RuleSource::Imported;
+            if rule.created_at.trim().is_empty() {
+                rule.created_at = db::now_str();
+            }
+        }
+        let imported = rules.len() as u32;
+        st.db
+            .with(|conn| {
+                let tx = conn.unchecked_transaction().map_err(err)?;
+                for rule in &rules {
+                    db::upsert_filter_rule(&tx, rule).map_err(err)?;
+                }
+                for profile in &profiles {
+                    db::upsert_filter_profile(&tx, profile).map_err(err)?;
+                }
+                tx.commit().map_err(err)?;
+                Ok(())
+            })
+            .map_err(BackendError::Msg)?;
+        Ok(imported)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn reset_online_filter_rules(
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.db
+            .with(|conn| db::clear_filter_learning(conn).map_err(err))
+            .map_err(BackendError::Msg)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_filtered_pages(
+    state: State<'_, Arc<AppState>>,
+    book_id: String,
+) -> Result<Vec<FilteredPage>, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let row = st
+            .db
+            .with(|conn| db::get_book(conn, &book_id).map_err(err))
+            .map_err(BackendError::Msg)?
+            .ok_or_else(|| BackendError::Msg("书籍不存在".into()))?;
+        let stored = load_online_stored(&row)?;
+        Ok(stored.filtered)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn mark_online_page_non_content(
+    state: State<'_, Arc<AppState>>,
+    book_id: String,
+    page_index: u32,
+) -> Result<BookInfo, String> {
+    let st = state.inner().clone();
+    let st_work = st.clone();
+    let book_id_for_cache = book_id.clone();
+    let row = blocking(move || {
+        let st = st_work;
+        let (row, stored) = st
+            .db
+            .with(|conn| {
+                let row = db::get_book(conn, &book_id)
+                    .map_err(err)?
+                    .ok_or_else(|| err("书籍不存在"))?;
+                let stored = load_online_stored(&row).map_err(err)?;
+                Ok((row, stored))
+            })
+            .map_err(BackendError::Msg)?;
+        if row.source_type == "local" {
+            return Err(BackendError::Msg("只有在线书支持标记非正文".into()));
+        }
+        let index = page_index as usize;
+        let page = stored
+            .pages
+            .get(index)
+            .cloned()
+            .ok_or_else(|| BackendError::Msg("页码越界".into()))?;
+        if stored.pages.len() <= 1 {
+            return Err(BackendError::Msg("最后一页不能标记为非正文".into()));
+        }
+        // 尽力读取图片字节做 SHA-256 指纹；失败不阻断标记。
+        let sha256 = st
+            .source_handle_for_book(&book_id)
+            .ok()
+            .and_then(|handle| handle.read_raw(index).ok())
+            .map(|raw| hex::encode(Sha256::digest(&raw.bytes)));
+        let sha256_for_event = sha256.clone();
+        let host = crate::online::filter::url_host(&page.url);
+        let template = crate::online::filter::url_template(&page.url);
+        let mut remaining = stored.pages.clone();
+        remaining.remove(index);
+        let main_template = main_page_template(&remaining);
+        let mut filtered = stored.filtered.clone();
+        filtered.push(FilteredPage {
+            url: page.url.clone(),
+            width: page.width,
+            height: page.height,
+            reason: "user".into(),
+            score: 0.0,
+            order: index,
+            anchor: page.anchor.clone(),
+            sha256: sha256.clone(),
+        });
+        filtered.sort_by_key(|p| p.order);
+        let meta = rebuild_online_meta(&row, &stored, remaining, filtered)?;
+        let new_page_count = meta.page_count as u32;
+        let now = db::now_str();
+        let mut rules = Vec::new();
+        let exact = RulePattern::ExactUrl {
+            url: crate::online::filter::redacted_url(&page.url),
+        };
+        rules.push(FilterRule {
+            id: page_rule_id("usr", &host, &exact),
+            host: host.clone(),
+            action: FilterAction::Block,
+            source: RuleSource::User,
+            pattern: exact,
+            reason: "user-marked".into(),
+            created_at: now.clone(),
+            hits: 0,
+        });
+        // 只有尾部推广图等“非主序列模板”才写 URL 模板规则，
+        // 防止把正文模板整体拉黑。
+        if let Some(template) = template {
+            if main_template.as_deref() != Some(template.as_str()) {
+                let pattern = RulePattern::UrlTemplate { template };
+                rules.push(FilterRule {
+                    id: page_rule_id("usr", &host, &pattern),
+                    host: host.clone(),
+                    action: FilterAction::Block,
+                    source: RuleSource::User,
+                    pattern,
+                    reason: "user-marked-template".into(),
+                    created_at: now.clone(),
+                    hits: 0,
+                });
+            }
+        }
+        if let Some(hash) = sha256 {
+            let pattern = RulePattern::Sha256 { hash };
+            rules.push(FilterRule {
+                id: page_rule_id("usr", &host, &pattern),
+                host: host.clone(),
+                action: FilterAction::Block,
+                source: RuleSource::User,
+                pattern,
+                reason: "user-marked-hash".into(),
+                created_at: now,
+                hits: 0,
+            });
+        }
+        let redacted = crate::online::filter::redacted_url(&page.url);
+        let row = st
+            .db
+            .with(|conn| {
+                let tx = conn.unchecked_transaction().map_err(err)?;
+                for rule in &rules {
+                    db::upsert_filter_rule(&tx, rule).map_err(err)?;
+                }
+                db::upsert_online_book(
+                    &tx,
+                    &row.id,
+                    &row.path,
+                    &row.title,
+                    new_page_count,
+                    &row.source_type,
+                    &meta.meta_json,
+                )
+                .map_err(err)?;
+                let current = if index < row.current_page as usize {
+                    row.current_page.saturating_sub(1)
+                } else {
+                    row.current_page
+                };
+                let current = current.min(new_page_count.saturating_sub(1));
+                tx.execute(
+                    "UPDATE books SET current_page=?1 WHERE id=?2",
+                    rusqlite::params![current as i64, row.id],
+                )
+                .map_err(err)?;
+                db::record_filter_event(
+                    &tx,
+                    &host,
+                    &row.id,
+                    &redacted,
+                    "blocked",
+                    "user",
+                    page.width,
+                    page.height,
+                    sha256_for_event.as_deref(),
+                )
+                .map_err(err)?;
+                tx.commit().map_err(err)?;
+                db::get_book(conn, &row.id)
+                    .map_err(err)?
+                    .ok_or_else(|| err("标记后回读书籍失败"))
+            })
+            .map_err(BackendError::Msg)?;
+        Ok(row)
+    })
+    .await?;
+    invalidate_book_caches(&st, &book_id_for_cache);
+    Ok(to_book_info(row))
+}
+
+#[tauri::command]
+pub async fn restore_online_filtered_page(
+    state: State<'_, Arc<AppState>>,
+    book_id: String,
+    filtered_index: u32,
+) -> Result<BookInfo, String> {
+    let st = state.inner().clone();
+    let st_work = st.clone();
+    let book_id_for_cache = book_id.clone();
+    let row = blocking(move || {
+        let st = st_work;
+        let (row, stored) = st
+            .db
+            .with(|conn| {
+                let row = db::get_book(conn, &book_id)
+                    .map_err(err)?
+                    .ok_or_else(|| err("书籍不存在"))?;
+                let stored = load_online_stored(&row).map_err(err)?;
+                Ok((row, stored))
+            })
+            .map_err(BackendError::Msg)?;
+        let filtered_page = stored
+            .filtered
+            .get(filtered_index as usize)
+            .cloned()
+            .ok_or_else(|| BackendError::Msg("过滤记录不存在".into()))?;
+        let host = crate::online::filter::url_host(&filtered_page.url);
+        let template = crate::online::filter::url_template(&filtered_page.url);
+        let redacted = crate::online::filter::redacted_url(&filtered_page.url);
+        let mut pages = stored.pages.clone();
+        let insert_at = filtered_page.order.min(pages.len());
+        pages.insert(
+            insert_at,
+            crate::online::PageRef {
+                url: filtered_page.url.clone(),
+                width: filtered_page.width,
+                height: filtered_page.height,
+                anchor: filtered_page.anchor.clone(),
+            },
+        );
+        let mut filtered = stored.filtered.clone();
+        filtered.remove(filtered_index as usize);
+        let meta = rebuild_online_meta(&row, &stored, pages, filtered)?;
+        let new_page_count = meta.page_count as u32;
+        let now = db::now_str();
+        let allow_patterns = {
+            let mut patterns = vec![RulePattern::ExactUrl {
+                url: redacted.clone(),
+            }];
+            if let Some(template) = &template {
+                patterns.push(RulePattern::UrlTemplate {
+                    template: template.clone(),
+                });
+            }
+            patterns
+        };
+        let row = st
+            .db
+            .with(|conn| {
+                let tx = conn.unchecked_transaction().map_err(err)?;
+                // 删除与该页匹配的用户 block 规则；保留其他章节规则。
+                let existing = db::rules_for_host(&tx, &host).map_err(err)?;
+                let mut remove_ids = Vec::new();
+                for rule in existing {
+                    if rule.action != FilterAction::Block {
+                        continue;
+                    }
+                    let matched = match &rule.pattern {
+                        RulePattern::UrlTemplate { template: value } => {
+                            template.as_deref() == Some(value.as_str())
+                        }
+                        RulePattern::ExactUrl { url } => *url == redacted,
+                        RulePattern::Sha256 { hash } => {
+                            filtered_page.sha256.as_deref() == Some(hash.as_str())
+                        }
+                        RulePattern::Size { width, height } => {
+                            filtered_page.width == Some(*width)
+                                && filtered_page.height == Some(*height)
+                        }
+                        RulePattern::DomClass { .. } => false,
+                    };
+                    if matched {
+                        remove_ids.push(rule.id);
+                    }
+                }
+                db::delete_filter_rules(&tx, &remove_ids).map_err(err)?;
+                for pattern in allow_patterns {
+                    let rule = FilterRule {
+                        id: page_rule_id("allow", &host, &pattern),
+                        host: host.clone(),
+                        action: FilterAction::Allow,
+                        source: RuleSource::User,
+                        pattern,
+                        reason: "user-restored".into(),
+                        created_at: now.clone(),
+                        hits: 0,
+                    };
+                    db::upsert_filter_rule(&tx, &rule).map_err(err)?;
+                }
+                // 恢复即修正本站阈值：把该页尺寸纳入标准宽度区间。
+                let mut profile = db::get_filter_profile(&tx, &host)
+                    .map_err(err)?
+                    .unwrap_or_else(|| SiteProfile::empty(host.clone()));
+                if let Some(width) = filtered_page.width {
+                    profile.width_min = Some(profile.width_min.map_or(width, |v| v.min(width)));
+                    profile.width_max = Some(profile.width_max.map_or(width, |v| v.max(width)));
+                }
+                if let (Some(width), Some(height)) = (filtered_page.width, filtered_page.height) {
+                    let aspect = crate::online::filter::aspect_ratio(width, height);
+                    profile.aspect_max = Some(
+                        profile
+                            .aspect_max
+                            .map_or(aspect.max(2.8), |v| v.max(aspect).max(2.8))
+                            .min(5.0),
+                    );
+                }
+                profile.updated_at = now.clone();
+                db::upsert_filter_profile(&tx, &profile).map_err(err)?;
+                db::upsert_online_book(
+                    &tx,
+                    &row.id,
+                    &row.path,
+                    &row.title,
+                    new_page_count,
+                    &row.source_type,
+                    &meta.meta_json,
+                )
+                .map_err(err)?;
+                let current = if insert_at <= row.current_page as usize {
+                    row.current_page.saturating_add(1)
+                } else {
+                    row.current_page
+                };
+                let current = current.min(new_page_count.saturating_sub(1));
+                tx.execute(
+                    "UPDATE books SET current_page=?1 WHERE id=?2",
+                    rusqlite::params![current as i64, row.id],
+                )
+                .map_err(err)?;
+                db::record_filter_event(
+                    &tx,
+                    &host,
+                    &row.id,
+                    &redacted,
+                    "restored",
+                    "user",
+                    filtered_page.width,
+                    filtered_page.height,
+                    filtered_page.sha256.as_deref(),
+                )
+                .map_err(err)?;
+                tx.commit().map_err(err)?;
+                db::get_book(conn, &row.id)
+                    .map_err(err)?
+                    .ok_or_else(|| err("恢复后回读书籍失败"))
+            })
+            .map_err(BackendError::Msg)?;
+        Ok(row)
+    })
+    .await?;
+    invalidate_book_caches(&st, &book_id_for_cache);
+    Ok(to_book_info(row))
+}
+
+#[tauri::command]
+pub async fn get_filtered_preview(
+    state: State<'_, Arc<AppState>>,
+    book_id: String,
+    filtered_index: u32,
+) -> Result<PageImage, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let row = st
+            .db
+            .with(|conn| db::get_book(conn, &book_id).map_err(err))
+            .map_err(BackendError::Msg)?
+            .ok_or_else(|| BackendError::Msg("书籍不存在".into()))?;
+        let stored = load_online_stored(&row)?;
+        let page = stored
+            .filtered
+            .get(filtered_index as usize)
+            .cloned()
+            .ok_or_else(|| BackendError::Msg("过滤记录不存在".into()))?;
+        let s = st.settings.lock().clone();
+        let session_headers = st.session_online_headers.lock().clone();
+        let headers =
+            crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
+        let transport = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let mut url = page.url.clone();
+        let mut resp = transport.get(
+            &url,
+            crate::online::PAGE_MAX_BYTES,
+            Some(&row.path),
+            Some(&row.path),
+        )?;
+        if matches!(resp.status, 403 | 404) {
+            if let Some(anchor) = page.anchor.as_ref() {
+                if let Ok(Some(fresh)) =
+                    crate::online::telegram::refresh_page_url(&transport, anchor)
+                {
+                    if let Ok(normalized) = crate::online::normalize_url(&fresh) {
+                        url = normalized.to_string();
+                        resp = transport.get(
+                            &url,
+                            crate::online::PAGE_MAX_BYTES,
+                            Some(&row.path),
+                            Some(&row.path),
+                        )?;
+                    }
+                }
+            }
+        }
+        if !(200..300).contains(&resp.status) {
+            return Err(BackendError::Network(format!(
+                "过滤图预览 HTTP {}",
+                resp.status
+            )));
+        }
+        let image = image::load_from_memory(&resp.body)
+            .map_err(|e| BackendError::Decode(format!("过滤图预览解码失败：{e}")))?;
+        let (orig_w, orig_h) = image.dimensions();
+        let thumb = image.thumbnail(360, 540);
+        let (width, height) = thumb.dimensions();
+        let mut buf = Vec::new();
+        let mut encoder =
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80);
+        encoder
+            .encode_image(&thumb)
+            .map_err(|e| BackendError::Decode(format!("过滤图预览编码失败：{e}")))?;
+        Ok(PageImage {
+            index: filtered_index,
+            width,
+            height,
+            orig_width: orig_w,
+            orig_height: orig_h,
+            mime: "image/jpeg".into(),
+            data_url: format!("data:image/jpeg;base64,{}", B64.encode(&buf)),
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn resolve_telegram_channel(
+    state: State<'_, Arc<AppState>>,
+    url: String,
+    before: Option<i64>,
+) -> Result<crate::online::telegram::TelegramChannel, String> {
+    crate::resilience::ensure_online_allowed()?;
+    let st = state.inner().clone();
+    blocking(move || {
+        let s = st.settings.lock().clone();
+        if !s.experimental_online {
+            return Err(BackendError::Msg("在线直读未开启".into()));
+        }
+        let session_headers = st.session_online_headers.lock().clone();
+        let headers =
+            crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
+        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let host = crate::online::filter::url_host(&url);
+        let memory = filter_memory_for(&st, &host)?;
+        let thresholds = thresholds_from(memory.profile.as_ref());
+        crate::online::telegram::fetch_channel(&http, &url, before, &memory, &thresholds)
+    })
+    .await
+}
+
+fn safe_telegram_download_name(raw: &str) -> String {
+    let base = Path::new(raw)
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("telegram.cbz");
+    let mut cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ' | '(' | ')') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(120)
+        .collect();
+    let lower = cleaned.to_ascii_lowercase();
+    if !(lower.ends_with(".zip") || lower.ends_with(".cbz")) {
+        cleaned.push_str(".cbz");
+    }
+    if cleaned
+        .trim_matches(|c| c == '.' || c == ' ' || c == '_')
+        .is_empty()
+    {
+        "telegram.cbz".into()
+    } else {
+        cleaned
+    }
+}
+
+#[tauri::command]
+pub async fn download_telegram_document(
+    state: State<'_, Arc<AppState>>,
+    url: String,
+    filename: String,
+) -> Result<BookInfo, String> {
+    crate::resilience::ensure_online_allowed()?;
+    let st = state.inner().clone();
+    let st_work = st.clone();
+    let row = blocking(move || {
+        let st = st_work;
+        let s = st.settings.lock().clone();
+        if !s.experimental_online {
+            return Err(BackendError::Msg("在线直读未开启".into()));
+        }
+        let canonical = crate::online::normalize_url(&url)?;
+        let lower_path = canonical.path().to_ascii_lowercase();
+        let lower_name = filename.to_ascii_lowercase();
+        // Telegram CDN 直链经常没有扩展名，以用户点击的附件名为准。
+        if !(lower_path.ends_with(".zip")
+            || lower_path.ends_with(".cbz")
+            || lower_name.ends_with(".zip")
+            || lower_name.ends_with(".cbz"))
+        {
+            return Err(BackendError::Msg("仅支持公开的 .zip/.cbz 漫画附件".into()));
+        }
+        let session_headers = st.session_online_headers.lock().clone();
+        let headers =
+            crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
+        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let resp = http.get(
+            canonical.as_str(),
+            TELEGRAM_DOC_MAX_BYTES,
+            Some("https://t.me/"),
+            Some(canonical.as_str()),
+        )?;
+        if !(200..300).contains(&resp.status) {
+            return Err(BackendError::Network(format!(
+                "Telegram 附件 HTTP {}",
+                resp.status
+            )));
+        }
+        let safe_name = safe_telegram_download_name(&filename);
+        let root = st
+            .db_path()
+            .parent()
+            .map(|p| p.join("downloads").join("telegram"))
+            .unwrap_or_else(|| std::env::temp_dir().join("manga-reader-telegram"));
+        std::fs::create_dir_all(&root)?;
+        let digest = hex::encode(Sha256::digest(canonical.as_str().as_bytes()));
+        let path = root.join(format!("{}-{}", &digest[..12], safe_name));
+        std::fs::write(&path, &resp.body)?;
+        let db_path = st.db_path();
+        let imported = {
+            let conn = rusqlite::Connection::open(db_path)?;
+            db::init_schema(&conn)?;
+            scan_single_book(&conn, &path)
+        };
+        match imported {
+            Ok(book) => Ok(book),
+            Err(e) => {
+                let _ = std::fs::remove_file(&path);
+                Err(e)
+            }
+        }
+    })
+    .await?;
+    invalidate_book_caches(&st, &row.id);
+    Ok(row)
 }
 
 fn set_readonly_flag(path: &Path, readonly: bool) -> Result<(), std::io::Error> {
@@ -1936,6 +2837,7 @@ mod tests {
             url: format!("https://example.com/pages/{index}.jpg"),
             width: Some(800),
             height: Some(1200),
+            anchor: None,
         }
     }
 
@@ -1959,6 +2861,8 @@ mod tests {
             series_title: None,
             chapter_index: None,
             next_url: None,
+            filtered: Vec::new(),
+            filter_profile: None,
         };
         crate::online::direct::OnlineBookMeta {
             canonical_url: canonical_url.to_string(),
@@ -1970,6 +2874,8 @@ mod tests {
             series_title: None,
             chapter_index: None,
             next_url: None,
+            filtered: Vec::new(),
+            filter_profile: None,
         }
     }
 

@@ -11,11 +11,15 @@ import {
   ListChecks,
   Loader2,
   Plus,
+  ShieldCheck,
   Trash2,
   Upload,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { useI18n, translate } from "@/i18n";
+import { useSafeMode } from "@/features/safeMode/SafeModeContext";
+import { recordBreadcrumb } from "@/features/resilience";
 import {
   api,
   isOnlineEnabled,
@@ -33,7 +37,7 @@ import ConfirmDialog from "@/components/ConfirmDialog";
 import ErrorState from "@/components/ErrorState";
 import PixelPet from "@/components/PixelPet";
 import OnlineImportDialog from "@/components/OnlineImportDialog";
-import { toast, toastErr } from "@/components/Toast";
+import { toast } from "@/components/Toast";
 import LibraryFilters, {
   type SourceFilter,
 } from "@/components/library/LibraryFilters";
@@ -77,6 +81,15 @@ function readSourceFilter(): SourceFilter {
   return "all";
 }
 
+/** 后端字符串错误原样展示，其余统一走本地化文案。 */
+function notifyError(cmd: string, error: unknown): void {
+  toast(
+    typeof error === "string" && error.length > 0
+      ? error
+      : translate("error.requestFailed", { cmd }),
+  );
+}
+
 /**
  * 书库主页（`/`）— 冰蓝胶囊浅色画布：
  * 大标题 + 胶囊搜索 + 分段筛选 + 书卡网格 + 详情 Sheet。
@@ -84,6 +97,8 @@ function readSourceFilter(): SourceFilter {
  */
 export default function LibraryPage() {
   const nav = useNavigate();
+  const { t, formatNumber } = useI18n();
+  const { active: safeMode } = useSafeMode();
   const [groupSeries, setGroupSeries] = useState(readGrouping);
   const [sourceFilter, setSourceFilter] = useState(readSourceFilter);
   const [dash, setDash] = useState<Dashboard | null>(null);
@@ -113,8 +128,8 @@ export default function LibraryPage() {
   const [onlineOn, setOnlineOn] = useState(isOnlineEnabled);
   useEffect(() => onExperimentalChange(() => setOnlineOn(isOnlineEnabled())), []);
   useEffect(() => {
-    if (!onlineOn) setOnlineOpen(false);
-  }, [onlineOn]);
+    if (!onlineOn || safeMode) setOnlineOpen(false);
+  }, [onlineOn, safeMode]);
 
   useEffect(() => {
     try {
@@ -150,8 +165,8 @@ export default function LibraryPage() {
       setBooks(list);
       setAllBooks(all ?? list);
     } catch (e) {
-      setLoadError(typeof e === "string" ? e : "加载失败");
-      toastErr("list_books", e);
+      setLoadError(typeof e === "string" ? e : "");
+      notifyError("list_books", e);
     } finally {
       setLoading(false);
     }
@@ -169,16 +184,27 @@ export default function LibraryPage() {
   }, [debounced, reload]);
 
   const visibleBooks = useMemo(() => {
-    if (sourceFilter === "all") return books;
+    const localOnly = safeMode
+      ? books.filter((book) => book.sourceType === "local")
+      : books;
+    if (sourceFilter === "all") return localOnly;
     const local = sourceFilter === "local";
-    return books.filter((book) => (book.sourceType === "local") === local);
-  }, [books, sourceFilter]);
+    return localOnly.filter((book) => (book.sourceType === "local") === local);
+  }, [books, sourceFilter, safeMode]);
+
+  const accessibleAllBooks = useMemo(
+    () =>
+      safeMode
+        ? allBooks.filter((book) => book.sourceType === "local")
+        : allBooks,
+    [allBooks, safeMode],
+  );
 
   // 合集计数始终取「未按来源过滤」的全量列表（搜索时另取全库），
   // 这样筛选在线/本地不会改变合集总话数。
   const displayBooks = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const book of allBooks) {
+    for (const book of accessibleAllBooks) {
       const sid = book.seriesId?.trim();
       if (sid) counts.set(sid, (counts.get(sid) ?? 0) + 1);
     }
@@ -209,7 +235,7 @@ export default function LibraryPage() {
         seriesCount: sid ? counts.get(sid) ?? group.filteredCount : 1,
       };
     });
-  }, [visibleBooks, groupSeries, allBooks]);
+  }, [visibleBooks, groupSeries, accessibleAllBooks]);
 
   const checkedBooks = useMemo(
     () => visibleBooks.filter((book) => checkedIds.has(book.id)),
@@ -219,10 +245,10 @@ export default function LibraryPage() {
   const checkedHasOnline = checkedBooks.some((book) => book.sourceType !== "local");
   const batchDeleteLabel =
     checkedHasLocal && checkedHasOnline
-      ? "删除 / 彻底移除…"
+      ? t("library.deleteMixed")
       : checkedHasOnline
-        ? "彻底移除…"
-        : "删除源文件…";
+        ? t("library.deleteOnline")
+        : t("library.deleteLocal");
 
   // 搜索/来源筛选变化后，已勾选但不再可见的书不应继续留在批量集合里。
   useEffect(() => {
@@ -258,7 +284,7 @@ export default function LibraryPage() {
   const detailSeriesBooks = useMemo(() => {
     const sid = selectedBook?.seriesId?.trim();
     if (!sid) return undefined;
-    const list = allBooks.filter((book) => book.seriesId?.trim() === sid);
+    const list = accessibleAllBooks.filter((book) => book.seriesId?.trim() === sid);
     if (list.length === 0) return undefined;
     return [...list].sort((a, b) => {
       const ai = a.chapterIndex ?? Number.MAX_SAFE_INTEGER;
@@ -266,7 +292,7 @@ export default function LibraryPage() {
       if (ai !== bi) return ai - bi;
       return a.updatedAt.localeCompare(b.updatedAt);
     });
-  }, [allBooks, selectedBook]);
+  }, [accessibleAllBooks, selectedBook]);
 
   const commitSearch = useCallback(() => {
     setDebounced(query.trim());
@@ -322,12 +348,16 @@ export default function LibraryPage() {
   }, [selectMode, exitSelectMode]);
 
   const openOnline = useCallback(() => {
+    if (safeMode) {
+      toast(t("safeMode.onlineDisabled"));
+      return;
+    }
     if (!onlineOn) {
-      toast("请先在设置中开启实验性「在线直读」");
+      toast(translate("library.enableOnlineFirst"));
       return;
     }
     setOnlineOpen(true);
-  }, [onlineOn]);
+  }, [onlineOn, safeMode, t]);
 
   /* ---------- 导入（逐路径调用，聚合结果后统一 toast） ---------- */
   const importPaths = useCallback(
@@ -349,24 +379,45 @@ export default function LibraryPage() {
           failed += result.failed;
           for (const item of result.items) {
             if (item.status === "failed") {
-              failMsgs.push(`${item.path}：${item.message}`);
+              failMsgs.push(
+                translate("import.itemFailed", {
+                  path: item.path,
+                  message: item.message,
+                }),
+              );
             }
           }
         } catch (e) {
           failed += 1;
-          failMsgs.push(typeof e === "string" ? e : "导入失败");
+          failMsgs.push(
+            typeof e === "string" && e.length > 0
+              ? e
+              : translate("import.failedFallback"),
+          );
         }
       }
       setImporting(null);
       await reload(debounced);
-      const parts = [`新增 ${added}`];
-      if (restored > 0) parts.push(`恢复 ${restored}（进度保留）`);
-      if (skipped > 0) parts.push(`已在书库 ${skipped}`);
-      if (failed > 0) parts.push(`失败 ${failed}`);
-      toast(`导入完成：${parts.join(" · ")}`);
-      if (failMsgs.length > 0) toastErr("import_books", failMsgs[0]);
+      const parts = [translate("import.added", { count: formatNumber(added) })];
+      if (restored > 0) {
+        parts.push(
+          translate("import.restored", { count: formatNumber(restored) }),
+        );
+      }
+      if (skipped > 0) {
+        parts.push(
+          translate("import.inLibrary", { count: formatNumber(skipped) }),
+        );
+      }
+      if (failed > 0) {
+        parts.push(
+          translate("import.failed", { count: formatNumber(failed) }),
+        );
+      }
+      toast(translate("import.complete", { summary: parts.join(" · ") }));
+      if (failMsgs.length > 0) notifyError("import_books", failMsgs[0]);
     },
-    [debounced, reload],
+    [debounced, formatNumber, reload],
   );
 
   // 添加压缩包：文件对话框（zip/cbz 多选）→ 每个压缩包 = 一本书。
@@ -374,8 +425,10 @@ export default function LibraryPage() {
     try {
       const picked = await openDialog({
         multiple: true,
-        title: "选择漫画压缩包（zip / cbz，可多选）",
-        filters: [{ name: "漫画压缩包", extensions: ["zip", "cbz"] }],
+        title: translate("import.filesTitle"),
+        filters: [
+          { name: translate("import.filesFilter"), extensions: ["zip", "cbz"] },
+        ],
       });
       const paths =
         typeof picked === "string"
@@ -383,9 +436,10 @@ export default function LibraryPage() {
           : Array.isArray(picked)
             ? picked
             : [];
+      if (paths.length > 0) recordBreadcrumb("archiveImport");
       await importPaths(paths);
     } catch {
-      toast("文件选择器不可用，请改用拖拽导入");
+      toast(translate("import.pickerUnavailable"));
     }
   }, [importPaths]);
 
@@ -395,7 +449,7 @@ export default function LibraryPage() {
       const picked = await openDialog({
         directory: true,
         multiple: true,
-        title: "选择漫画文件夹（一个文件夹 = 一本书，可多选）",
+        title: translate("import.folderTitle"),
       });
       const paths =
         typeof picked === "string"
@@ -403,9 +457,10 @@ export default function LibraryPage() {
           : Array.isArray(picked)
             ? picked
             : [];
+      if (paths.length > 0) recordBreadcrumb("folderImport");
       await importPaths(paths);
     } catch {
-      toast("文件夹选择器不可用，请改用拖拽导入");
+      toast(translate("import.folderPickerUnavailable"));
     }
   }, [importPaths]);
 
@@ -446,7 +501,11 @@ export default function LibraryPage() {
       if (ids.length === 0) return;
       try {
         const result = await api.removeBooks(ids, false);
-        toast(`已移除 ${result.removed} 本：源文件保留，重新导入可续读`);
+        toast(
+          translate("library.removed", {
+            count: formatNumber(result.removed),
+          }),
+        );
         if (selectedBook && ids.includes(selectedBook.id)) {
           setSheetOpen(false);
           setSelectedBook(null);
@@ -454,10 +513,10 @@ export default function LibraryPage() {
         setCheckedIds(new Set());
         await reload(debounced);
       } catch (e) {
-        toastErr("remove_books", e);
+        notifyError("remove_books", e);
       }
     },
-    [debounced, reload, selectedBook],
+    [debounced, formatNumber, reload, selectedBook],
   );
 
   const doDelete = useCallback(
@@ -470,18 +529,29 @@ export default function LibraryPage() {
       const localCount = targets.length - onlineCount;
       try {
         const result = await api.removeBooks(ids, true);
-        if (result.errors.length > 0) toastErr("remove_books", result.errors[0]);
+        if (result.errors.length > 0) {
+          notifyError("remove_books", result.errors[0]);
+        }
         if (onlineCount > 0 && localCount === 0) {
-          toast(`已彻底移除 ${onlineCount} 本在线书，远程源未删除`);
+          toast(
+            translate("library.deletedOnlineOnly", {
+              count: formatNumber(onlineCount),
+            }),
+          );
         } else if (onlineCount > 0) {
           toast(
-            `已删除源文件 ${result.deletedFiles} 个，并彻底移除 ${onlineCount} 本在线书（远程源未删除），全部记录已清理`,
+            translate("library.deletedMixed", {
+              files: formatNumber(result.deletedFiles),
+              count: formatNumber(onlineCount),
+            }),
           );
         } else {
           toast(
             result.deletedFiles > 0
-              ? `已删除源文件 ${result.deletedFiles} 个并清理全部记录`
-              : "没有源文件被删除",
+              ? translate("library.deletedLocal", {
+                  files: formatNumber(result.deletedFiles),
+                })
+              : translate("library.deletedNone"),
           );
         }
         if (selectedBook && ids.includes(selectedBook.id)) {
@@ -491,10 +561,10 @@ export default function LibraryPage() {
         setCheckedIds(new Set());
         await reload(debounced);
       } catch (e) {
-        toastErr("remove_books", e);
+        notifyError("remove_books", e);
       }
     },
-    [debounced, reload, selectedBook],
+    [debounced, formatNumber, reload, selectedBook],
   );
 
   const doDeleteConfirmed = useCallback(async () => {
@@ -519,82 +589,94 @@ export default function LibraryPage() {
     deleteTargets?.filter((book) => book.sourceType !== "local") ?? [];
   const deleteMixed = deleteLocal.length > 0 && deleteOnline.length > 0;
 
-  const totalBooks = dash?.totalBooks ?? allBooks.length;
+  const totalBooks = safeMode
+    ? accessibleAllBooks.length
+    : dash?.totalBooks ?? allBooks.length;
   const readingCount = dash?.reading ?? 0;
   const todayPages = dash?.todayPages ?? 0;
   const emptyMessage =
     debounced.length > 0
-      ? "没有搜到，去换个关键词吧"
+      ? t("library.emptySearch")
       : sourceFilter !== "all"
-        ? "当前来源筛选下还没有书，切换到「全部」看看"
-        : "书架还是空的——拖入 cbz/zip 或文件夹，或点「添加书籍」";
+        ? t("library.emptyFilter")
+        : t("library.emptyLibrary");
 
   return (
-    <div className="mx-auto w-full max-w-[1500px] px-5 pb-24 pt-4 sm:px-8">
-      <header className="flex flex-col gap-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <div className="mx-auto w-full min-w-0 max-w-[1500px] px-5 pb-24 pt-4 sm:px-8">
+      <header className="flex w-full min-w-0 flex-col gap-5">
+        {safeMode ? (
+          <div
+            role="status"
+            className="flex items-start gap-3 rounded-2xl border border-border bg-secondary px-4 py-3 shadow-hard-sm"
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-warning text-background shadow-hard-sm">
+              <ShieldCheck className="size-4" aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-extrabold">{t("safeMode.libraryNoticeTitle")}</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                {t("safeMode.libraryNoticeBody")}
+              </p>
+            </div>
+          </div>
+        ) : null}
+        <div className="flex w-full min-w-0 flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
             <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl">
-              书库
+              {t("nav.library")}
             </h1>
             <p className="mt-1.5 text-sm text-muted-foreground">
-              共{" "}
-              <span className="font-semibold tabular-nums text-foreground">
-                {totalBooks}
-              </span>{" "}
-              本 · 在读{" "}
-              <span className="font-semibold tabular-nums text-foreground">
-                {readingCount}
-              </span>{" "}
-              · 今日{" "}
-              <span className="font-semibold tabular-nums text-foreground">
-                {todayPages}
-              </span>{" "}
-              页
+              {t("library.summary", {
+                total: formatNumber(totalBooks),
+                reading: formatNumber(readingCount),
+                today: formatNumber(todayPages),
+              })}
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             <Button
               variant="pill-primary"
               size="pill"
               onClick={() => void onAddFiles()}
-              title="选择压缩包（zip / cbz）导入"
+              title={t("library.addBooksTitle")}
             >
               <Plus />
-              添加书籍
+              {t("library.addBooks")}
             </Button>
             <Button
               variant="pill"
               size="pill"
               onClick={() => void onAddFolder()}
-              title="选择一个文件夹（其内容 = 一本书）"
+              title={t("library.addFolderTitle")}
             >
               <FolderPlus />
-              添加文件夹
+              {t("library.addFolder")}
             </Button>
             <Button
               variant="pill"
               size="pill"
               onClick={openOnline}
               title={
-                onlineOn
-                  ? "从链接或配对导入在线漫画"
-                  : "请先在设置中开启实验性在线直读"
+                safeMode
+                  ? t("safeMode.onlineDisabled")
+                  : onlineOn
+                    ? t("library.onlineReadTitleOn")
+                    : t("library.onlineReadTitleOff")
               }
             >
               <Link2 />
-              在线直读
+              {t("library.onlineRead")}
             </Button>
             <Button
               variant={selectMode ? "pill-primary" : "pill"}
               size="pill"
               onClick={toggleSelectMode}
               aria-pressed={selectMode}
-              title="多选后可批量移除或删除"
+              title={t("library.manageTitle")}
             >
               {selectMode ? <Check /> : <ListChecks />}
-              {selectMode ? "完成" : "管理"}
+              {selectMode ? t("library.done") : t("library.manage")}
             </Button>
           </div>
         </div>
@@ -617,18 +699,24 @@ export default function LibraryPage() {
           {loading ? (
             <Loader2 className="size-3.5 animate-spin" aria-hidden />
           ) : null}
-          <span className="tabular-nums" aria-live="polite">
+          <span className="whitespace-nowrap tabular-nums" aria-live="polite">
             {groupSeries
-              ? `${displayBooks.length} 组`
-              : `${displayBooks.length} 本`}
+              ? t("library.countGroups", {
+                  count: formatNumber(displayBooks.length),
+                })
+              : t("library.countBooks", {
+                  count: formatNumber(displayBooks.length),
+                })}
           </span>
         </div>
       </div>
 
       <section className="mt-6" aria-busy={loading}>
-        {loadError ? (
+        {loadError !== null ? (
           <ErrorState
-            message={`书库加载失败：${loadError}`}
+            message={t("library.loadFailed", {
+              error: loadError || t("common.error"),
+            })}
             onRetry={() => void reload(debounced)}
           />
         ) : loading && books.length === 0 ? (
@@ -643,7 +731,7 @@ export default function LibraryPage() {
                 onClick={() => void onAddFiles()}
               >
                 <Plus />
-                添加书籍
+                {t("library.addBooks")}
               </Button>
               <Button
                 variant="pill"
@@ -651,11 +739,11 @@ export default function LibraryPage() {
                 onClick={() => void onAddFolder()}
               >
                 <FolderPlus />
-                添加文件夹
+                {t("library.addFolder")}
               </Button>
             </div>
             <p className="mt-4 text-xs text-muted-foreground">
-              也可以直接把 zip / cbz 压缩包或文件夹拖进窗口导入
+              {t("library.dragHint")}
             </p>
           </div>
         ) : (
@@ -681,8 +769,7 @@ export default function LibraryPage() {
             </div>
             {!selectMode && (
               <p className="mt-4 text-xs text-muted-foreground">
-                单击封面查看详情，双击或 Shift+Enter
-                开始阅读；右键封面可移除或删除源文件。
+                {t("library.cardHint")}
               </p>
             )}
           </>
@@ -708,23 +795,25 @@ export default function LibraryPage() {
           onClose={() => setCtxMenu(null)}
           items={[
             {
-              label: "查看详情",
+              label: t("menu.details"),
               icon: <BookOpen />,
               onSelect: () => openDetail(ctxBook),
             },
             {
-              label: "继续阅读",
+              label: t("menu.continue"),
               icon: <BookMarked />,
               onSelect: () => openReader(ctxBook.id),
             },
             {
-              label: "移除记录",
+              label: t("menu.remove"),
               icon: <BookX />,
               onSelect: () => void doRemove([ctxBook.id]),
             },
             {
               label:
-                ctxBook.sourceType === "local" ? "删除源文件…" : "彻底移除…",
+                ctxBook.sourceType === "local"
+                  ? t("menu.deleteLocal")
+                  : t("menu.deleteOnline"),
               danger: true,
               icon: <Trash2 />,
               onSelect: () => setConfirmDelete([ctxBook]),
@@ -736,33 +825,46 @@ export default function LibraryPage() {
       {/* 删除源文件 / 彻底移除：二次确认，路径与文件名均已脱敏。 */}
       {deleteTargets && deleteTargets.length > 0 && (
         <ConfirmDialog
-          title={`${
+          title={t(
             deleteMixed
-              ? "删除本地源文件 / 彻底移除在线书"
+              ? "confirm.titleMixed"
               : deleteOnline.length > 0
-                ? "彻底移除"
-                : "删除源文件"
-          }（${deleteTargets.length} 本 · 共 ${deletePages} 页）？`}
+                ? "confirm.titleOnline"
+                : "confirm.titleLocal",
+            {
+              count: formatNumber(deleteTargets.length),
+              pages: formatNumber(deletePages),
+            },
+          )}
           message={
             deleteMixed
-              ? `将永久删除 ${deleteLocal.length} 本本地书的源文件（从磁盘移除），并彻底移除 ${deleteOnline.length} 本在线书；在线书的远程源不会被删除。以上书籍的进度、缩略图与派生缓存等全部本地记录都会清理。此操作不可逆。`
+              ? t("confirm.messageMixed", {
+                  local: formatNumber(deleteLocal.length),
+                  online: formatNumber(deleteOnline.length),
+                })
               : deleteOnline.length > 0
-                ? "将从书库移除以下在线书，并清理进度、缩略图与派生缓存等全部本地记录；不会删除远程源。此操作不可逆。"
-                : "将从磁盘永久删除以下源文件/文件夹，并清理该书的进度、缩略图与派生缓存等全部本地记录。此操作不可逆。"
+                ? t("confirm.messageOnline")
+                : t("confirm.messageLocal")
           }
           // 隐私：在线清单 URL 可能带临时 query token / hash / userinfo，
           // 复用 sourceDisplay 的脱敏结果，确认框不直出 b.path。
           paths={deleteTargets.map((book) => {
             const source = sourceDisplay(book);
-            return `【${source.badge}】${source.text}（${book.pageCount} 页）`;
+            return t("confirm.pathLine", {
+              source: t(
+                source.kind === "local" ? "source.local" : "source.url",
+              ),
+              name: source.text,
+              pages: formatNumber(book.pageCount),
+            });
           })}
-          confirmText={
+          confirmText={t(
             deleteMixed
-              ? "删除 / 彻底移除"
+              ? "confirm.confirmMixed"
               : deleteOnline.length > 0
-                ? "彻底移除"
-                : "永久删除"
-          }
+                ? "confirm.confirmOnline"
+                : "confirm.confirmLocal",
+          )}
           onConfirm={() => void doDeleteConfirmed()}
           onCancel={() => setConfirmDelete(null)}
         />
@@ -778,9 +880,12 @@ export default function LibraryPage() {
           >
             <div className="flex items-baseline gap-2">
               <span className="text-sm font-semibold">
-                正在导入 {importing.done + 1} / {importing.total}
+                {t("import.progress", {
+                  done: formatNumber(importing.done + 1),
+                  total: formatNumber(importing.total),
+                })}
               </span>
-              <span className="ml-auto text-xs font-semibold tabular-nums text-muted-foreground">
+              <span className="ml-auto shrink-0 text-xs font-semibold tabular-nums text-muted-foreground">
                 {Math.round((importing.done / importing.total) * 100)}%
               </span>
             </div>
@@ -802,7 +907,7 @@ export default function LibraryPage() {
           document.body,
         )}
 
-      {onlineOn && onlineOpen && (
+      {onlineOn && !safeMode && onlineOpen && (
         <OnlineImportDialog
           initialUrl=""
           initialTab="link"
@@ -832,10 +937,10 @@ export default function LibraryPage() {
                 <Upload className="size-6" />
               </span>
               <p className="text-lg font-bold tracking-tight text-foreground">
-                松开即可导入
+                {t("import.dropTitle")}
               </p>
               <p className="text-sm text-muted-foreground">
-                支持 zip / cbz 压缩包与文件夹，可一次拖入多个
+                {t("import.dropHint")}
               </p>
             </div>
           </div>,

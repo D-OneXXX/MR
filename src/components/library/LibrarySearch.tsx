@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { ArrowRight, Search } from "lucide-react";
+import { useI18n } from "@/i18n";
 import { Input } from "@/components/ui/input";
 import { FOCUS_LIBRARY_SEARCH_EVENT } from "@/lib/events";
 
@@ -14,6 +15,7 @@ const INPUT_ID = "library-search-input";
 
 /** 嵌套胶囊搜索框；Ctrl+K（全局事件）聚焦并全选。 */
 export default function LibrarySearch({ value, onChange, onCommit }: Props) {
+  const { t } = useI18n();
   useEffect(() => {
     const focus = () => {
       const input = document.getElementById(INPUT_ID);
@@ -40,18 +42,18 @@ export default function LibrarySearch({ value, onChange, onCommit }: Props) {
         id={INPUT_ID}
         value={value}
         onChange={(e) => onChange(e.currentTarget.value)}
-        placeholder="搜索书名、合集…（Ctrl+K）"
-        aria-label="搜索书名"
+        placeholder={t("library.searchPlaceholder")}
+        aria-label={t("library.searchAria")}
         autoComplete="off"
-        className="h-full flex-1 rounded-none border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0"
+        className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0"
       />
       <button
         type="submit"
-        className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-hard-sm transition-transform hover:-translate-y-px active:translate-y-0 active:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-        aria-label="搜索"
+        className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-hard-sm transition-transform hover:-translate-y-px active:translate-y-0 active:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        aria-label={t("common.search")}
       >
-        搜索
-        <ArrowRight className="size-4" />
+        {t("common.search")}
+        <ArrowRight className="size-4 shrink-0" />
       </button>
     </form>
   );

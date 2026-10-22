@@ -503,6 +503,7 @@ pub fn start_browser_handoff(
     app: AppHandle,
     allow_session_headers: bool,
 ) -> Result<HandoffStatus, String> {
+    crate::resilience::ensure_online_allowed()?;
     let state = app.state::<Arc<AppState>>().inner().clone();
     if !state.settings.lock().experimental_online {
         return Err("在线直读未开启".into());

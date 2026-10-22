@@ -15,6 +15,7 @@ import {
 import { api, type BookInfo, type HeatDay } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { sourceDisplay } from "@/lib/sourceDisplay";
+import { translate, useI18n } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -97,10 +98,15 @@ function BookDetailSheetBody({
   onRemove: (book: BookInfo) => void;
   onDelete: (book: BookInfo) => void;
 }) {
+  const { t } = useI18n();
   const [cover, setCover] = useState<string | null>(null);
 
   const online = book.sourceType !== "local";
   const source = sourceDisplay(book);
+  const sourceKindLabel = t(
+    source.kind === "local" ? "source.local" : "source.online",
+  );
+  const sourceText = source.text || t("source.hiddenAddress");
   const read = Math.max(0, Math.min(book.currentPage, book.pageCount));
   const pct =
     book.pageCount > 0
@@ -139,7 +145,7 @@ function BookDetailSheetBody({
     onDelete(book);
   };
 
-  const deleteLabel = online ? "彻底移除" : "删除源文件";
+  const deleteLabel = online ? t("book.deleteOnline") : t("book.deleteLocal");
 
   return (
     <SheetContent
@@ -152,15 +158,15 @@ function BookDetailSheetBody({
         size="pill-icon-sm"
         className="absolute right-3 top-3 z-10"
         onClick={() => onOpenChange(false)}
-        aria-label="关闭"
-        title="关闭"
+        aria-label={t("common.close")}
+        title={t("common.close")}
       >
         <X />
       </Button>
 
       <SheetHeader className="shrink-0 gap-3 border-b border-border px-5 pb-4 pt-5">
         <SheetDescription className="sr-only">
-          封面、阅读进度、页面目录、章节选集与阅读记录
+          {t("book.metaDescription")}
         </SheetDescription>
 
         <div className="flex items-start gap-3 pr-8">
@@ -189,7 +195,7 @@ function BookDetailSheetBody({
 
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               <Badge variant={online ? "secondary" : "muted"}>
-                {source.badge}
+                {sourceKindLabel}
               </Badge>
               {book.seriesTitle && (
                 <Badge
@@ -202,25 +208,25 @@ function BookDetailSheetBody({
               )}
               {book.chapterIndex != null && (
                 <Badge variant="muted">
-                  第 <span className="font-mono">{book.chapterIndex}</span> 话
+                  {t("book.chapterBadge", { number: book.chapterIndex })}
                 </Badge>
               )}
               <span className="font-mono text-[11px] text-muted-foreground">
-                {book.pageCount} 页
+                {t("book.pageCount", { count: book.pageCount })}
               </span>
             </div>
 
             <div className="mt-1.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
               <MapPin className="size-3 shrink-0" aria-hidden />
-              <span className="shrink-0">来源</span>
-              <span className="truncate font-mono" title={source.text}>
-                {source.text}
+              <span className="shrink-0">{t("common.source")}</span>
+              <span className="truncate font-mono" title={sourceText}>
+                {sourceText}
               </span>
             </div>
 
             <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
               <span>
-                已读{" "}
+                {t("book.readLabel")}{" "}
                 <span className="font-mono text-foreground">{read}</span> /{" "}
                 <span className="font-mono">{book.pageCount}</span>
               </span>
@@ -230,7 +236,7 @@ function BookDetailSheetBody({
             </div>
             <div
               role="progressbar"
-              aria-label="阅读进度"
+              aria-label={t("book.progressAria")}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={pct}
@@ -252,15 +258,16 @@ function BookDetailSheetBody({
             onClick={() => startReading(book.currentPage + 1)}
           >
             <Play className="fill-current" />
-            继续阅读
+            {t("book.continue")}
           </Button>
           <Button
             variant="pill"
             size="pill-sm"
+            className="whitespace-nowrap"
             onClick={() => startReading(1)}
           >
             <RotateCcw />
-            从头开始
+            {t("book.startOver")}
           </Button>
         </div>
       </SheetHeader>
@@ -290,18 +297,30 @@ function BookDetailSheetBody({
 
       <SheetFooter className="shrink-0 gap-1.5 border-t border-border bg-muted/30 px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="pill" size="pill-sm" onClick={removeBook}>
+          <Button
+            variant="pill"
+            size="pill-sm"
+            className="whitespace-nowrap"
+            onClick={removeBook}
+          >
             <Trash2 />
-            移除记录
+            {t("book.removeRecord")}
           </Button>
-          <Button variant="pill-danger" size="pill-sm" onClick={deleteBook}>
+          <Button
+            variant="pill-danger"
+            size="pill-sm"
+            className="whitespace-nowrap"
+            onClick={deleteBook}
+          >
             <Trash2 />
             {deleteLabel}
           </Button>
         </div>
         <p className="text-[10px] leading-relaxed text-muted-foreground">
-          移除记录会保留源文件；{online ? "彻底移除" : "删除源文件"}
-          不可恢复，删除前会再次确认。
+          {t("book.footerKeep")}{" "}
+          {online
+            ? t("book.footerDangerOnline")
+            : t("book.footerDangerLocal")}
         </p>
       </SheetFooter>
     </SheetContent>
@@ -321,6 +340,7 @@ function SeriesSection({
   onOpenChange: (open: boolean) => void;
   onRead: (book: BookInfo, page?: number) => void;
 }) {
+  const { t } = useI18n();
   const [fetched, setFetched] = useState<BookInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -344,7 +364,9 @@ function SeriesSection({
       (e) => {
         if (!alive) return;
         setFetched([]);
-        setError(typeof e === "string" ? e : "章节列表加载失败");
+        setError(
+          typeof e === "string" ? e : translate("book.seriesErrorFallback"),
+        );
         setLoading(false);
       },
     );
@@ -364,32 +386,36 @@ function SeriesSection({
     <section className="flex flex-col gap-2 border-t border-border pt-4">
       <div className="flex items-center gap-2">
         <Layers className="size-4 shrink-0 text-muted-foreground" />
-        <h3 className="text-sm font-bold text-foreground">章节选集</h3>
+        <h3 className="text-sm font-bold text-foreground">
+          {t("book.seriesTitle")}
+        </h3>
         <span className="ml-auto font-mono text-[11px] text-muted-foreground">
-          {list.length > 0 ? `共 ${list.length} 话` : "…"}
+          {list.length > 0
+            ? t("book.seriesCount", { count: list.length })
+            : "…"}
         </span>
       </div>
 
       {loading ? (
         <p className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin" />
-          正在加载章节…
+          {t("book.seriesLoading")}
         </p>
       ) : error ? (
         <div className="flex items-center gap-2">
           <p className="min-w-0 flex-1 truncate text-xs text-destructive" title={error}>
-            章节列表加载失败：{error}
+            {t("book.seriesError", { error })}
           </p>
           <Button
             variant="pill-ghost"
             size="pill-sm"
             onClick={() => setTick((value) => value + 1)}
           >
-            重试
+            {t("common.retry")}
           </Button>
         </div>
       ) : list.length === 0 ? (
-        <p className="text-xs text-muted-foreground">暂无章节数据。</p>
+        <p className="text-xs text-muted-foreground">{t("book.seriesEmpty")}</p>
       ) : (
         <div className="max-h-52 overflow-y-auto overscroll-contain pr-1">
           <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4">
@@ -428,7 +454,7 @@ function SeriesSection({
                             ? "text-primary-foreground"
                             : "text-success",
                         )}
-                        aria-label="已读完"
+                        aria-label={t("book.chapterDone")}
                       />
                     )}
                   </span>
@@ -452,6 +478,7 @@ function ActivitySection({
   book: BookInfo;
   active: boolean;
 }) {
+  const { t } = useI18n();
   const [log, setLog] = useState<HeatDay[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -472,7 +499,9 @@ function ActivitySection({
       (e) => {
         if (!alive) return;
         setLog([]);
-        setError(typeof e === "string" ? e : "阅读记录加载失败");
+        setError(
+          typeof e === "string" ? e : translate("book.activityErrorFallback"),
+        );
         setLoading(false);
       },
     );
@@ -488,28 +517,30 @@ function ActivitySection({
     <section className="flex flex-col gap-2 border-t border-border pt-4">
       <div className="flex items-center gap-2">
         <CalendarDays className="size-4 shrink-0 text-muted-foreground" />
-        <h3 className="text-sm font-bold text-foreground">阅读活动</h3>
+        <h3 className="text-sm font-bold text-foreground">
+          {t("book.activityTitle")}
+        </h3>
         <span className="ml-auto text-[11px] text-muted-foreground">
-          近 30 天
+          {t("book.activityRange")}
         </span>
       </div>
 
       {loading ? (
         <p className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin" />
-          正在读取阅读记录…
+          {t("book.activityLoading")}
         </p>
       ) : error ? (
         <div className="flex items-center gap-2">
           <p className="min-w-0 flex-1 truncate text-xs text-destructive" title={error}>
-            阅读记录暂不可用
+            {t("book.activityError")}
           </p>
           <Button
             variant="pill-ghost"
             size="pill-sm"
             onClick={() => setTick((value) => value + 1)}
           >
-            重试
+            {t("common.retry")}
           </Button>
         </div>
       ) : (
@@ -519,19 +550,23 @@ function ActivitySection({
               <p className="font-mono text-xl font-bold leading-none text-foreground">
                 {total}
               </p>
-              <p className="mt-1 text-[10px] text-muted-foreground">阅读页数</p>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {t("book.pagesRead")}
+              </p>
             </div>
             <div className="rounded-2xl border border-border bg-card px-3 py-2.5 shadow-hard-sm">
               <p className="font-mono text-xl font-bold leading-none text-foreground">
                 {activeDays}
               </p>
-              <p className="mt-1 text-[10px] text-muted-foreground">活跃天数</p>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {t("book.activeDays")}
+              </p>
             </div>
           </div>
           {total === 0 && (
             <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
               <ChevronRight className="size-3" />
-              近 30 天还没有这本书的阅读记录
+              {t("book.activityEmpty")}
             </p>
           )}
         </>

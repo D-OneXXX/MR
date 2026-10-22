@@ -1,5 +1,9 @@
 # 阶段三:框选 OCR + 翻译 实现计划
 
+> **状态（2026-10-21）**：本计划已执行完成；下方复选框未回填，以代码与 [TECHNICAL.md](../../TECHNICAL.md) 为准。
+> 文首“本项目当前不是 git 仓库”是 2026-10-05 的历史状态，现已不适用。
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 阅读器内框选任意区域 → 本地 Windows OCR 或 HTTP OCR → OpenAI 兼容 LLM 翻译,浮层展示可复制,调用统计入库。

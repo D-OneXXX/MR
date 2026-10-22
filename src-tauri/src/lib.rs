@@ -5,16 +5,21 @@ mod browser;
 pub mod cache;
 mod commands;
 pub mod db;
+pub mod diagnostics;
 pub mod logging;
 mod ocr;
 mod online;
+mod resilience;
 pub mod pipeline;
 pub mod render_cache;
+mod security;
 mod sidecar;
 pub mod source;
 mod state;
 mod system_proxy;
 mod translate;
+pub mod update;
+mod versioning;
 mod workbench;
 
 pub mod batch;
@@ -391,30 +396,86 @@ fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
     let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
     db::init_schema(&conn).map_err(|e| e.to_string())?;
     logging::init(dir.join("logs"));
+    let current_version = env!("CARGO_PKG_VERSION");
+    let previous_version = versioning::read_last_run_version(&conn).unwrap_or_else(|err| {
+        logging::log_error("version", &format!("读取 last_run_version 失败：{err}"));
+        None
+    });
+    let migration = versioning::plan(previous_version.as_deref(), current_version);
     let state = app.state::<Arc<AppState>>();
     state.set_db_path(db_path);
+    let repaired_settings;
     {
         let mut s = state.settings.lock().clone();
         hydrate_settings(&conn, &mut s);
+        repaired_settings = versioning::normalize_settings(&conn, &mut s).unwrap_or_else(|err| {
+            logging::log_error("version", &format!("修复旧版配置失败：{err}"));
+            Vec::new()
+        });
         state
             .cache
             .set_budgets((s.cache_budget_mb.max(16) as u64) * 1024 * 1024);
         *state.settings.lock() = s;
     }
     state.db.set(conn);
+    if migration.clear_memory_cache {
+        state.cache.clear_pages();
+        state.cache.clear_thumbs();
+        state.webtoon_layouts.lock().clear();
+        state.invalidate_sources();
+    }
+    if migration.clear_disk_cache {
+        // MAJOR/downgrade/unknown metadata may point at incompatible render
+        // artifacts. Removing the derived directory never touches the library.
+        state.render.clear_all();
+    }
+    if let Err(err) = state.db.with(|conn| {
+        versioning::record_run_version(conn, current_version).map_err(|err| err.to_string())
+    }) {
+        logging::log_error("version", &format!("写入 last_run_version 失败：{err}"));
+    }
+    if migration.change != versioning::VersionChange::Unchanged {
+        logging::log_error(
+            "version",
+            &format!(
+                "本地版本 {} → {}（{}）；清理内存缓存={}，清理磁盘缓存={}，修复配置={}",
+                migration.previous.as_deref().unwrap_or("first-run"),
+                current_version,
+                migration.change.as_str(),
+                migration.clear_memory_cache,
+                migration.clear_disk_cache,
+                if repaired_settings.is_empty() {
+                    "none".to_string()
+                } else {
+                    repaired_settings.join(",")
+                }
+            ),
+        );
+    } else if !repaired_settings.is_empty() {
+        logging::log_error(
+            "version",
+            &format!("版本未变化，但修复了异常配置：{}", repaired_settings.join(",")),
+        );
+    }
     Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = Arc::new(AppState::new());
+    let resilience_state = resilience::new_state();
     let app = tauri::Builder::default()
         .manage(state)
+        .manage(resilience_state.clone())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
+            diagnostics::install_panic_hook();
             if let Err(e) = init_app(app) {
                 eprintln!("[backend] 初始化失败: {e}");
+            }
+            if let Err(e) = resilience::initialize(app.handle(), &resilience_state) {
+                logging::log_error("startup", &format!("韧性守卫初始化失败：{e}"));
             }
             // 批量预翻译队列的常驻 worker(FIFO 取 queued 任务)。
             let st = app.state::<Arc<AppState>>().inner().clone();
@@ -470,6 +531,17 @@ pub fn run() {
             commands::test_online_connection,
             commands::import_resolved_pages,
             commands::resolve_online_batch,
+            commands::resolve_telegram_channel,
+            commands::download_telegram_document,
+            commands::get_online_filter_status,
+            commands::list_online_filter_rules,
+            commands::export_online_filter_rules,
+            commands::import_online_filter_rules,
+            commands::reset_online_filter_rules,
+            commands::get_filtered_pages,
+            commands::get_filtered_preview,
+            commands::mark_online_page_non_content,
+            commands::restore_online_filtered_page,
             commands::set_session_online_headers,
             commands::clear_session_online_headers,
             commands::get_session_online_headers,
@@ -480,7 +552,30 @@ pub fn run() {
             browser::open_browser_window,
             browser::navigate_browser,
             browser::list_browser_downloads,
-            browser::import_browser_download
+            browser::import_browser_download,
+            update::get_app_info,
+            update::check_update,
+            update::download_update,
+            update::install_update,
+            update::cancel_update,
+            update::get_update_snapshot,
+            security::security_audit,
+            security::clear_online_traces,
+            diagnostics::diagnostics_record_frontend_error,
+            diagnostics::diagnostics_record_breadcrumb,
+            diagnostics::diagnostics_update_context,
+            diagnostics::diagnostics_collect,
+            diagnostics::diagnostics_sanitize_description,
+            diagnostics::diagnostics_export,
+            resilience::heartbeat_ping,
+            resilience::resilience_report_rage_click,
+            resilience::get_recovery_context,
+            resilience::resilience_reload_main,
+            resilience::resilience_close_recovery,
+            resilience::get_safe_mode_state,
+            resilience::resilience_enable_safe_mode,
+            resilience::resilience_disable_safe_mode,
+            resilience::resilience_mark_ready
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

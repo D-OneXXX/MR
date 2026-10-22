@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BookOpen, Check, Layers } from "lucide-react";
+import { useI18n } from "@/i18n";
 import { api, type BookInfo } from "@/lib/tauri";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,6 +40,7 @@ export default function BookCard({
   onContextMenu,
   deferSelect,
 }: Props) {
+  const { t, formatNumber } = useI18n();
   const [cover, setCover] = useState<string | null>(null);
   const [coverLoading, setCoverLoading] = useState(true);
   const clickTimer = useRef<number>(0);
@@ -71,10 +73,14 @@ export default function BookCard({
     book.pageCount > 0
       ? Math.min(100, Math.round((book.currentPage / book.pageCount) * 100))
       : 0;
+  const totalPages = formatNumber(book.pageCount);
   const sub =
     book.currentPage > 0
-      ? `已读 ${book.currentPage} / ${book.pageCount} 页`
-      : `${book.pageCount} 页 · 未开始`;
+      ? t("card.readPages", {
+          current: formatNumber(book.currentPage),
+          total: totalPages,
+        })
+      : t("card.notStarted", { total: totalPages });
 
   const clearPendingClick = () => {
     window.clearTimeout(clickTimer.current);
@@ -108,11 +114,24 @@ export default function BookCard({
     else onSelect?.(book.id, null);
   };
 
-  const ariaLabel = `${book.title}，已读 ${book.currentPage}/${book.pageCount} 页${
-    isSeries ? `，合集 ${seriesCount} 话` : ""
-  }${book.sourceType !== "local" ? "，在线直读" : ""}。${
-    selectMode ? "空格切换选择" : "回车查看详情，Shift 加回车阅读"
-  }`;
+  const seriesLabel = isSeries
+    ? t("card.seriesBadge", { count: formatNumber(seriesCount ?? 1) })
+    : "";
+  const ariaLabel = t("card.ariaLabel", {
+    title: book.title,
+    status:
+      book.currentPage > 0
+        ? t("card.ariaStatusRead", {
+            current: formatNumber(book.currentPage),
+            total: totalPages,
+          })
+        : t("card.ariaStatusNotStarted", { total: totalPages }),
+    series: isSeries
+      ? t("card.ariaSeries", { count: formatNumber(seriesCount ?? 1) })
+      : "",
+    online: book.sourceType !== "local" ? t("card.ariaOnline") : "",
+    hint: selectMode ? t("card.ariaHintSelect") : t("card.ariaHintOpen"),
+  });
 
   return (
     <div
@@ -127,8 +146,8 @@ export default function BookCard({
       aria-pressed={selectMode ? !!checked : undefined}
       title={
         selectMode
-          ? `${book.title}（单击勾选）`
-          : `${book.title}（单击查看详情，双击进入阅读）`
+          ? t("card.titleSelect", { title: book.title })
+          : t("card.titleOpen", { title: book.title })
       }
       onClick={handleClick}
       onDoubleClick={() => {
@@ -182,19 +201,19 @@ export default function BookCard({
         {isSeries && (
           <Badge
             variant="outline"
-            className="absolute bottom-2 left-2 z-10 border-border bg-card/90 px-2 py-0.5 text-[10px] font-semibold text-foreground shadow-hard-sm backdrop-blur-sm"
+            className="absolute bottom-2 left-2 z-10 max-w-[calc(100%_-_1rem)] border-border bg-card/90 px-2 py-0.5 text-[10px] font-semibold text-foreground shadow-hard-sm backdrop-blur-sm"
           >
             <Layers />
-            合集 · {seriesCount} 话
+            <span className="min-w-0 truncate">{seriesLabel}</span>
           </Badge>
         )}
 
         {book.sourceType !== "local" && (
           <Badge
             variant="default"
-            className="absolute right-2 top-2 z-10 px-2 py-0.5 text-[10px] font-bold tracking-wide shadow-hard-sm"
+            className="absolute right-2 top-2 z-10 shrink-0 whitespace-nowrap px-2 py-0.5 text-[10px] font-bold tracking-wide shadow-hard-sm"
           >
-            URL
+            {t("source.url")}
           </Badge>
         )}
       </div>
@@ -211,8 +230,8 @@ export default function BookCard({
               style={{ width: `${pct}%` }}
             />
           </div>
-          <span className="text-[10px] font-semibold tabular-nums text-muted-foreground">
-            {pct}%
+          <span className="shrink-0 whitespace-nowrap text-[10px] font-semibold tabular-nums text-muted-foreground">
+            {t("card.progress", { percent: formatNumber(pct) })}
           </span>
         </div>
       </div>

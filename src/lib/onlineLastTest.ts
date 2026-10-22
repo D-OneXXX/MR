@@ -10,17 +10,17 @@ export const ONLINE_LAST_TEST_EVENT = "mr-online-last-test-updated";
 /** 只保留目标主机（含端口）；userinfo、路径、query、hash 全部丢弃。 */
 export function onlineTestTargetHost(raw: string): string {
   const value = raw.trim();
-  if (!value) return "未知目标";
+  if (!value) return "";
   try {
     const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(value)
       ? value
       : `https://${value}`;
     const url = new URL(withScheme);
     const host = `${url.hostname}${url.port ? `:${url.port}` : ""}`;
-    if (!host || /[=?#\s]/.test(host)) return "未知目标";
+    if (!host || /[=?#\s]/.test(host)) return "";
     return host.slice(0, 120);
   } catch {
-    return "未知目标";
+    return "";
   }
 }
 

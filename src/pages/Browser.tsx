@@ -14,6 +14,7 @@ import {
   Loader2,
   RefreshCw,
   Settings2,
+  ShieldCheck,
   Trash2,
   TriangleAlert,
 } from "lucide-react";
@@ -24,7 +25,10 @@ import {
   isOnlineEnabled,
   type BrowserDownload,
   type BrowserDownloadEvent,
+  type TelegramChannel,
+  type TelegramChapter,
 } from "@/lib/tauri";
+import TelegramChannelPanel from "@/components/online/TelegramChannelPanel";
 import { onlineSourceAddress } from "@/lib/sourceDisplay";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +38,9 @@ import { Input } from "@/components/ui/input";
 import ErrorState from "@/components/ErrorState";
 import PixelPet from "@/components/PixelPet";
 import { toast, toastErr } from "@/components/Toast";
+import { translate, useI18n, type MessageKey, type TranslateVars } from "@/i18n";
+import { useSafeMode } from "@/features/safeMode/SafeModeContext";
+import { recordBreadcrumb } from "@/features/resilience";
 
 const RECENTS_KEY = "mr-browser-recents";
 const RECENTS_LIMIT = 20;
@@ -42,7 +49,8 @@ const URL_INPUT_ID = "browser-url-input";
 type BusyKind = "direct" | "embedded" | "external" | null;
 
 interface AddressNotice {
-  message: string;
+  key: MessageKey;
+  vars?: TranslateVars;
   /** 解析失败时提示可改用内嵌浏览器下载导入。 */
   fallback: boolean;
 }
@@ -61,6 +69,21 @@ function normalizeUrl(raw: string): string {
     return url.href;
   } catch {
     return "";
+  }
+}
+
+function isTelegramChannelRoot(raw: string): boolean {
+  const value = raw.trim().toLowerCase();
+  if (value.startsWith("tg://resolve")) return true;
+  try {
+    const url = new URL(raw);
+    if (!["t.me", "telegram.me"].includes(url.hostname.toLowerCase())) {
+      return false;
+    }
+    const segments = url.pathname.split("/").filter(Boolean);
+    return segments.length === 1 || (segments[0] === "s" && segments.length === 2);
+  } catch {
+    return false;
   }
 }
 
@@ -109,12 +132,19 @@ function formatSize(bytes: number): string {
 
 export default function BrowserPage() {
   const nav = useNavigate();
+  const { t } = useI18n();
+  const { active: safeMode } = useSafeMode();
 
   const [url, setUrl] = useState("");
   const [recents, setRecents] = useState<string[]>(readRecents);
   const [onlineOn, setOnlineOn] = useState(isOnlineEnabled);
   const [busy, setBusy] = useState<BusyKind>(null);
   const [notice, setNotice] = useState<AddressNotice | null>(null);
+  const [telegram, setTelegram] = useState<TelegramChannel | null>(null);
+  const [telegramSource, setTelegramSource] = useState("");
+  const [telegramBusyId, setTelegramBusyId] = useState<string | null>(null);
+  const [telegramLoadingMore, setTelegramLoadingMore] = useState(false);
+  const [telegramError, setTelegramError] = useState<string | null>(null);
 
   const [downloads, setDownloads] = useState<BrowserDownload[]>([]);
   const [loadingDownloads, setLoadingDownloads] = useState(true);
@@ -150,15 +180,13 @@ export default function BrowserPage() {
 
   const resolveTarget = useCallback((): string | null => {
     if (!url.trim()) {
-      setNotice({ message: "请输入要打开的页面地址", fallback: false });
+      setNotice({ key: "browser.emptyUrl", fallback: false });
       return null;
     }
+    if (/^tg:\/\//i.test(url.trim())) return url.trim();
     const target = normalizeUrl(url);
     if (!target) {
-      setNotice({
-        message: "地址无效，仅支持 http(s) 链接",
-        fallback: false,
-      });
+      setNotice({ key: "browser.invalidUrl", fallback: false });
       return null;
     }
     return target;
@@ -169,30 +197,117 @@ export default function BrowserPage() {
     const target = resolveTarget();
     if (!target) return;
     if (!onlineOn) {
-      setNotice({
-        message: "在线直读已在设置中关闭，无法解析该地址",
-        fallback: true,
-      });
+      setNotice({ key: "browser.directDisabled", fallback: true });
       return;
     }
+    if (isTelegramChannelRoot(target)) {
+      setBusy("direct");
+      setNotice(null);
+      setTelegramError(null);
+      setTelegram(null);
+      try {
+        const channel = await api.resolveTelegramChannel(target);
+        setTelegram(channel);
+        setTelegramSource(target);
+        remember(target);
+        recordBreadcrumb("onlineRead");
+        toast(translate("online.telegram.channelDetected"));
+      } catch (e) {
+        setTelegramError(typeof e === "string" ? e : String(e));
+        toastErr("resolve_telegram_channel", e);
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+    setTelegram(null);
+    setTelegramError(null);
     setBusy("direct");
     setNotice(null);
     try {
       const book = await api.resolveOnlineUrl(target);
-      toast(`已解析《${book.title}》，正在打开阅读器`);
+      recordBreadcrumb("onlineRead");
+      toast(translate("browser.toastResolved", { title: book.title }));
       remember(target);
       nav(`/reader/${encodeURIComponent(book.id)}`);
     } catch (e) {
-      setNotice({
-        message:
-          typeof e === "string" ? e : "解析失败，请检查地址或网络设置",
-        fallback: true,
-      });
+      setNotice(
+        typeof e === "string"
+          ? {
+              key: "browser.resolveFailedDetail",
+              vars: { error: e },
+              fallback: true,
+            }
+          : { key: "browser.resolveFailed", fallback: true },
+      );
       toastErr("resolve_online_url", e);
     } finally {
       setBusy(null);
     }
   }, [busy, nav, onlineOn, remember, resolveTarget]);
+
+  const importTelegramChapter = useCallback(
+    async (chapter: TelegramChapter) => {
+      if (telegramBusyId !== null) return;
+      setTelegramBusyId(chapter.id);
+      setTelegramError(null);
+      try {
+        const book =
+          chapter.kind === "document" && chapter.document
+            ? await api.downloadTelegramDocument(
+                chapter.document.url,
+                chapter.document.filename,
+              )
+            : await api.resolveOnlineUrl(chapter.url);
+        recordBreadcrumb("onlineRead");
+        toast(translate("browser.toastResolved", { title: book.title }));
+        nav(`/reader/${encodeURIComponent(book.id)}`);
+      } catch (e) {
+        setTelegramError(
+          typeof e === "string"
+            ? e
+            : translate("browser.telegram.downloadFailed"),
+        );
+        toastErr(
+          chapter.kind === "document"
+            ? "download_telegram_document"
+            : "resolve_online_url",
+          e,
+        );
+      } finally {
+        setTelegramBusyId(null);
+      }
+    },
+    [nav, telegramBusyId],
+  );
+
+  const loadMoreTelegram = useCallback(async () => {
+    if (!telegram || telegramLoadingMore) return;
+    setTelegramLoadingMore(true);
+    setTelegramError(null);
+    try {
+      const next = await api.resolveTelegramChannel(
+        telegramSource,
+        telegram.before ?? null,
+      );
+      setTelegram((prev) => {
+        if (!prev) return next;
+        const seen = new Set(prev.chapters.map((chapter) => chapter.id));
+        return {
+          ...next,
+          chapters: [
+            ...prev.chapters,
+            ...next.chapters.filter((chapter) => !seen.has(chapter.id)),
+          ],
+        };
+      });
+    } catch (e) {
+      setTelegramError(typeof e === "string" ? e : String(e));
+      toastErr("resolve_telegram_channel", e);
+    } finally {
+      setTelegramLoadingMore(false);
+    }
+  }, [telegram, telegramLoadingMore, telegramSource]);
 
   const openEmbedded = useCallback(async () => {
     if (busy !== null) return;
@@ -202,14 +317,20 @@ export default function BrowserPage() {
     setNotice(null);
     try {
       await api.openBrowserWindow(target);
+      recordBreadcrumb("onlineRead");
       setUrl(target);
       remember(target);
-      toast("已在内嵌浏览器中打开");
+      toast(translate("browser.toastEmbedded"));
     } catch (e) {
-      setNotice({
-        message: typeof e === "string" ? e : "打开内嵌浏览器失败",
-        fallback: false,
-      });
+      setNotice(
+        typeof e === "string"
+          ? {
+              key: "browser.embeddedFailedDetail",
+              vars: { error: e },
+              fallback: false,
+            }
+          : { key: "browser.embeddedFailed", fallback: false },
+      );
       toastErr("open_browser_window", e);
     } finally {
       setBusy(null);
@@ -226,12 +347,17 @@ export default function BrowserPage() {
       await openUrl(target);
       setUrl(target);
       remember(target);
-      toast("已在系统浏览器中打开");
+      toast(translate("browser.toastExternal"));
     } catch (e) {
-      setNotice({
-        message: typeof e === "string" ? e : "打开系统浏览器失败",
-        fallback: false,
-      });
+      setNotice(
+        typeof e === "string"
+          ? {
+              key: "browser.externalFailedDetail",
+              vars: { error: e },
+              fallback: false,
+            }
+          : { key: "browser.externalFailed", fallback: false },
+      );
       toastErr("open_url", e);
     } finally {
       setBusy(null);
@@ -244,7 +370,7 @@ export default function BrowserPage() {
     try {
       setDownloads(await api.listBrowserDownloads());
     } catch (e) {
-      setDownloadsError(typeof e === "string" ? e : "下载列表加载失败");
+      setDownloadsError(typeof e === "string" ? e : "");
       toastErr("list_browser_downloads", e);
     } finally {
       setLoadingDownloads(false);
@@ -261,7 +387,11 @@ export default function BrowserPage() {
       setImportingPath(item.path);
       try {
         const bookId = await api.importBrowserDownload(item.path);
-        toast(bookId ? `已导入：${item.name}` : `未导入：${item.name}`);
+        toast(
+          bookId
+            ? translate("browser.toastImported", { name: item.name })
+            : translate("browser.toastNotImported", { name: item.name }),
+        );
         await loadDownloads();
       } catch (e) {
         toastErr("import_browser_download", e);
@@ -287,8 +417,8 @@ export default function BrowserPage() {
     listen<BrowserDownloadEvent>("browser-download", (event) => {
       if (disposed) return;
       const payload = event.payload;
-      toast(`已下载：${payload.name}`);
-      if (payload.imported) toast("已加入书库");
+      toast(translate("browser.toastDownloaded", { name: payload.name }));
+      if (payload.imported) toast(translate("browser.toastAddedToLibrary"));
       void loadDownloads();
     })
       .then((off) => {
@@ -306,16 +436,36 @@ export default function BrowserPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl px-5 pb-16 pt-4 sm:px-8">
+      {safeMode ? (
+        <Card className="items-start gap-4 p-6 sm:p-8">
+          <span className="grid size-11 place-items-center rounded-2xl border border-border bg-warning text-background shadow-hard-sm">
+            <ShieldCheck className="size-5" aria-hidden />
+          </span>
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight">
+              {t("safeMode.browserBlockedTitle")}
+            </h1>
+            <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              {t("safeMode.browserBlockedBody")}
+            </p>
+          </div>
+          <Button variant="pill-primary" size="pill" onClick={() => nav("/")}>
+            <ArrowRight className="rotate-180" />
+            {t("reader.backToLibrary")}
+          </Button>
+        </Card>
+      ) : (
+        <>
       <header className="mb-6 sm:mb-8">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em] text-muted-foreground shadow-hard-sm">
           <Globe className="size-3" aria-hidden />
-          ONLINE READER
+          {t("browser.overline")}
         </span>
         <h1 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
-          浏览器
+          {t("browser.title")}
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          把在线漫画的清单或图集地址直接交给阅读器；也可以在独立的内嵌浏览器中打开页面，下载后导入书库。
+          {t("browser.subtitle")}
         </p>
       </header>
 
@@ -323,7 +473,7 @@ export default function BrowserPage() {
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary" className="gap-1.5 px-3 py-1">
             <Globe aria-hidden />
-            在线直读
+            {t("status.onlineRead")}
           </Badge>
           <Badge
             variant={onlineOn ? "success" : "warning"}
@@ -336,10 +486,10 @@ export default function BrowserPage() {
                 onlineOn ? "bg-success" : "bg-warning",
               )}
             />
-            {onlineOn ? "已开启" : "已关闭"}
+            {onlineOn ? t("common.enabled") : t("common.disabled")}
           </Badge>
           <span className="ml-auto hidden text-[11px] font-medium text-muted-foreground sm:block">
-            支持 JSON 清单与单页 HTML 图集
+            {t("browser.capabilities")}
           </span>
         </div>
 
@@ -362,8 +512,8 @@ export default function BrowserPage() {
                 setUrl(e.currentTarget.value);
                 setNotice(null);
               }}
-              placeholder="粘贴清单或图集地址，例如 https://example.com/gallery.html"
-              aria-label="在线直读地址"
+              placeholder={t("browser.urlPlaceholder")}
+              aria-label={t("browser.urlLabel")}
               aria-invalid={notice ? true : undefined}
               autoComplete="off"
               autoCapitalize="off"
@@ -379,17 +529,19 @@ export default function BrowserPage() {
               disabled={busy !== null || !onlineOn}
               title={
                 onlineOn
-                  ? "解析地址并进入阅读器"
-                  : "在线直读已在设置中关闭"
+                  ? t("browser.submitHint")
+                  : t("browser.submitHintOff")
               }
-              className="h-10 rounded-full border border-border bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-hard-sm disabled:translate-y-0"
+              className="h-10 shrink-0 whitespace-nowrap rounded-full border border-border bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-hard-sm disabled:translate-y-0"
             >
               {busy === "direct" ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden />
               ) : (
                 <ArrowRight className="size-4" aria-hidden />
               )}
-              {busy === "direct" ? "解析中" : "直读"}
+              {busy === "direct"
+                ? t("browser.resolving")
+                : t("browser.directRead")}
             </Button>
           </div>
         </form>
@@ -399,6 +551,7 @@ export default function BrowserPage() {
             type="button"
             variant="pill"
             size="pill-sm"
+            className="whitespace-nowrap"
             disabled={busy !== null}
             onClick={() => void openEmbedded()}
           >
@@ -407,12 +560,13 @@ export default function BrowserPage() {
             ) : (
               <AppWindow className="size-3.5" aria-hidden />
             )}
-            内嵌浏览器
+            {t("browser.openEmbedded")}
           </Button>
           <Button
             type="button"
             variant="pill"
             size="pill-sm"
+            className="whitespace-nowrap"
             disabled={busy !== null}
             onClick={() => void openExternal()}
           >
@@ -421,12 +575,32 @@ export default function BrowserPage() {
             ) : (
               <ExternalLink className="size-3.5" aria-hidden />
             )}
-            系统浏览器
+            {t("browser.openExternal")}
           </Button>
           <span className="text-xs text-muted-foreground sm:ml-auto">
-            内嵌窗口下载的 zip / cbz 可在下方导入
+            {t("browser.downloadHint")}
           </span>
         </div>
+
+        {telegramError ? (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-xl border border-border bg-secondary px-3 py-2 text-xs text-muted-foreground"
+          >
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+            <span className="min-w-0 break-words">{telegramError}</span>
+          </div>
+        ) : null}
+
+        {telegram ? (
+          <TelegramChannelPanel
+            channel={telegram}
+            busyId={telegramBusyId}
+            loadingMore={telegramLoadingMore}
+            onImport={(chapter) => void importTelegramChapter(chapter)}
+            onLoadMore={() => void loadMoreTelegram()}
+          />
+        ) : null}
 
         {!onlineOn && (
           <div
@@ -438,22 +612,22 @@ export default function BrowserPage() {
             </span>
             <div className="min-w-0 flex-1">
               <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">
-                在线直读未开启
-                <Badge variant="warning">需在设置中启用</Badge>
+                {t("browser.gateTitle")}
+                <Badge variant="warning">{t("browser.gateBadge")}</Badge>
               </p>
               <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                直读按钮暂不可用；内嵌浏览器与系统浏览器仍可打开页面，下载后可导入书库。
+                {t("browser.gateBody")}
               </p>
             </div>
             <Button
               type="button"
               variant="pill"
               size="pill-sm"
-              className="self-start sm:self-auto"
+              className="self-start whitespace-nowrap sm:self-auto"
               onClick={() => nav("/settings")}
             >
               <Settings2 className="size-3.5" aria-hidden />
-              前往设置
+              {t("browser.goSettings")}
             </Button>
           </div>
         )}
@@ -469,11 +643,11 @@ export default function BrowserPage() {
             />
             <div className="min-w-0">
               <p className="break-words text-sm font-semibold text-destructive">
-                {notice.message}
+                {t(notice.key, notice.vars)}
               </p>
               {notice.fallback && (
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  可在内嵌浏览器中打开该页面后下载导入。
+                  {t("browser.fallbackHint")}
                 </p>
               )}
             </div>
@@ -488,9 +662,11 @@ export default function BrowserPage() {
               <Clock3 className="size-4" strokeWidth={2.2} aria-hidden />
             </span>
             <div className="min-w-0 flex-1">
-              <h2 className="text-base font-bold tracking-tight">最近访问</h2>
+              <h2 className="text-base font-bold tracking-tight">
+                {t("browser.recentsTitle")}
+              </h2>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                点击填入地址栏；仅展示脱敏地址
+                {t("browser.recentsHint")}
               </p>
             </div>
             <Badge variant="muted" className="mono">
@@ -501,19 +677,20 @@ export default function BrowserPage() {
           {recents.length === 0 ? (
             <div className="mt-4 flex items-center gap-2.5 rounded-2xl border border-border bg-secondary px-4 py-3 text-xs leading-relaxed text-muted-foreground">
               <Globe className="size-4 shrink-0" aria-hidden />
-              暂无最近访问，直读或打开成功后会自动记录。
+              {t("browser.recentsEmpty")}
             </div>
           ) : (
             <ul className="mt-4 flex flex-col gap-2">
               {recents.map((item) => {
                 // 复用在线源的脱敏展示：query / hash / userinfo 不进入 DOM。
-                const label = onlineSourceAddress(item);
+                const label =
+                  onlineSourceAddress(item) || t("source.hiddenAddress");
                 return (
                   <li key={item} className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => fillFromRecent(item)}
-                      title="填入地址栏"
+                      title={t("browser.fillAddress")}
                       className="group flex min-w-0 flex-1 items-center gap-2.5 rounded-full border border-border bg-card py-2 pl-2 pr-3 text-left shadow-hard-sm outline-none transition-[transform,box-shadow,background-color] hover:-translate-y-px hover:bg-accent focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background active:translate-y-0 active:shadow-none"
                     >
                       <span className="grid size-7 shrink-0 place-items-center rounded-full border border-border bg-secondary text-muted-foreground">
@@ -534,8 +711,8 @@ export default function BrowserPage() {
                           prev.filter((entry) => entry !== item),
                         )
                       }
-                      title="删除记录"
-                      aria-label={`删除最近访问：${label}`}
+                      title={t("browser.deleteRecent")}
+                      aria-label={t("browser.deleteRecentAria", { name: label })}
                       className="grid size-8 shrink-0 place-items-center rounded-full border border-transparent text-muted-foreground outline-none transition-colors hover:border-border hover:bg-card hover:text-destructive focus-visible:border-border focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                     >
                       <Trash2 className="size-3.5" aria-hidden />
@@ -554,7 +731,7 @@ export default function BrowserPage() {
             </span>
             <div className="min-w-0 flex-1">
               <h2 className="flex items-center gap-2 text-base font-bold tracking-tight">
-                下载
+                {t("browser.downloadsTitle")}
                 {downloads.length > 0 && (
                   <Badge variant="muted" className="mono">
                     {downloads.length}
@@ -562,13 +739,14 @@ export default function BrowserPage() {
                 )}
               </h2>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                内嵌浏览器下载的压缩包，导入后加入书库
+                {t("browser.downloadsDesc")}
               </p>
             </div>
             <Button
               type="button"
               variant="pill"
               size="pill-sm"
+              className="whitespace-nowrap"
               disabled={loadingDownloads}
               onClick={() => void loadDownloads()}
             >
@@ -576,26 +754,31 @@ export default function BrowserPage() {
                 className={cn("size-3.5", loadingDownloads && "animate-spin")}
                 aria-hidden
               />
-              {loadingDownloads ? "刷新中" : "刷新"}
+              {loadingDownloads
+                ? t("browser.refreshing")
+                : t("common.refresh")}
             </Button>
           </div>
 
           <div className="mt-4">
-            {downloadsError && downloads.length === 0 ? (
+            {downloadsError !== null && downloads.length === 0 ? (
               <ErrorState
-                message={`下载列表加载失败：${downloadsError}`}
+                message={
+                  downloadsError
+                    ? t("browser.downloadsLoadError", {
+                        error: downloadsError,
+                      })
+                    : t("browser.downloadsLoadFailed")
+                }
                 onRetry={() => void loadDownloads()}
               />
             ) : loadingDownloads && downloads.length === 0 ? (
-              <PixelPet mode="loading" message="正在读取下载列表" />
+              <PixelPet mode="loading" message={t("browser.downloadsLoading")} />
             ) : downloads.length === 0 ? (
-              <PixelPet
-                mode="empty"
-                message="暂无下载记录，在内嵌浏览器中下载 zip / cbz 后会自动出现在这里"
-              />
+              <PixelPet mode="empty" message={t("browser.downloadsEmpty")} />
             ) : (
               <>
-                {downloadsError && (
+                {downloadsError !== null && (
                   <div
                     role="status"
                     className="mb-3 flex items-start gap-2 rounded-2xl border border-destructive/35 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive"
@@ -605,7 +788,11 @@ export default function BrowserPage() {
                       aria-hidden
                     />
                     <span className="min-w-0 break-words">
-                      刷新失败：{downloadsError}
+                      {downloadsError
+                        ? t("browser.refreshFailedDetail", {
+                            error: downloadsError,
+                          })
+                        : t("browser.refreshFailed")}
                     </span>
                   </div>
                 )}
@@ -631,7 +818,9 @@ export default function BrowserPage() {
                             <Badge
                               variant={item.imported ? "success" : "outline"}
                             >
-                              {item.imported ? "已导入" : "未导入"}
+                              {item.imported
+                                ? t("browser.imported")
+                                : t("browser.notImported")}
                             </Badge>
                           </div>
                           <p className="mono mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
@@ -659,20 +848,23 @@ export default function BrowserPage() {
                               <Download className="size-3.5" aria-hidden />
                             )}
                             {item.imported
-                              ? "已导入"
+                              ? t("browser.imported")
                               : importing
-                                ? "导入中"
-                                : "导入"}
+                                ? t("browser.importing")
+                                : t("browser.importAction")}
                           </Button>
                           <Button
                             type="button"
                             variant="pill"
                             size="pill-sm"
-                            title={`打开所在文件夹：${item.name}`}
+                            className="whitespace-nowrap"
+                            title={t("browser.openFolderTitle", {
+                              name: item.name,
+                            })}
                             onClick={() => void revealDownload(item)}
                           >
                             <FolderOpen className="size-3.5" aria-hidden />
-                            打开文件夹
+                            {t("browser.openFolder")}
                           </Button>
                         </div>
                       </li>
@@ -684,6 +876,8 @@ export default function BrowserPage() {
           </div>
         </Card>
       </div>
+        </>
+      )}
     </div>
   );
 }

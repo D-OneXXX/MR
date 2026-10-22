@@ -1,5 +1,10 @@
 # URL 在线漫画直读（JSON 清单）Implementation Plan
 
+> **状态（2026-10-21）**：第一阶段计划已执行完成；复选框未回填，以代码与 [TECHNICAL.md](../../TECHNICAL.md) 为准。
+> 文中的 2026-10-19 Amendment（HTML 图集 + 手动请求头）优先于 Global Constraints 的旧表述；
+> 第二阶段（合集/系列/下一话/配对桥接/浏览器）不在本计划内。
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 为 MangaReader 增加第一条合规的 URL 在线直读链路：导入 JSON 清单、复用现有阅读器/缓存/OCR/工作台，并保持本地书行为不变。

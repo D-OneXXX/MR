@@ -109,7 +109,12 @@ impl FolderSource {
                         .unwrap_or(false)
             })
             .collect();
-        files.sort();
+        files.sort_by(|a, b| {
+            crate::commands::natural_cmp(
+                &a.to_string_lossy(),
+                &b.to_string_lossy(),
+            )
+        });
         Ok(Self { files })
     }
 }
@@ -162,7 +167,7 @@ impl ZipSource {
             .filter_map(|i| archive.name_for_index(i).map(|s| s.to_string()))
             .filter(|n| !n.ends_with('/') && is_image_name(n))
             .collect();
-        names.sort();
+        names.sort_by(|a, b| crate::commands::natural_cmp(a, b));
         Ok(Self {
             path: path.to_path_buf(),
             names,
@@ -244,8 +249,11 @@ impl ImageSource for AnySource {
 }
 
 /// 在线图片源：页列表来自 meta_json；read_raw 按需下载单页。
+///
+/// Telegram 等 CDN 直链带时效签名：遇到 403/404 时按页锚点静默刷新一次并
+/// 写回本句柄的内存页表；持久化仍只保存 `channel + message_id` 坐标。
 pub struct OnlineSource {
-    pages: Vec<PageRef>,
+    pages: parking_lot::Mutex<Vec<PageRef>>,
     http: Arc<dyn HttpTransport>,
     permits: Arc<BlockingSemaphore>,
     /// 整本规范化 URL：作为单页请求的 Referer/Origin 来源（防盗链站点需要）。
@@ -260,37 +268,34 @@ impl OnlineSource {
         referer: String,
     ) -> Self {
         Self {
-            pages,
+            pages: parking_lot::Mutex::new(pages),
             http,
             permits: Arc::new(BlockingSemaphore::new(concurrency)),
             referer,
         }
     }
-}
 
-impl ImageSource for OnlineSource {
-    fn page_count(&self) -> Result<usize, BackendError> {
-        Ok(self.pages.len())
-    }
-
-    fn entry_names(&self) -> Result<Vec<String>, BackendError> {
-        Ok(self
-            .pages
-            .iter()
-            .enumerate()
-            .map(|(i, p)| crate::online::page_name(p, i))
-            .collect())
-    }
-
-    fn read_raw(&self, index: usize) -> Result<RawPage, BackendError> {
-        let page = self
-            .pages
+    /// 取单页快照；调用方不得持有锁做网络 I/O。
+    fn page_at(&self, index: usize) -> Result<PageRef, BackendError> {
+        self.pages
+            .lock()
             .get(index)
-            .ok_or_else(|| BackendError::Msg(format!("页码越界：{index}")))?;
-        // 每本书独立的并发闸门：限制同时在途的页面下载数。
-        let _guard = self.permits.acquire();
-        let resp = self
-            .http
+            .cloned()
+            .ok_or_else(|| BackendError::Msg(format!("页码越界：{index}")))
+    }
+
+    fn replace_page_url(&self, index: usize, url: String) {
+        if let Some(page) = self.pages.lock().get_mut(index) {
+            page.url = url;
+        }
+    }
+
+    fn get_page(
+        &self,
+        page: &PageRef,
+        index: usize,
+    ) -> Result<crate::online::http::HttpResponse, BackendError> {
+        self.http
             .get(
                 &page.url,
                 PAGE_MAX_BYTES,
@@ -306,7 +311,60 @@ impl ImageSource for OnlineSource {
                 );
                 crate::logging::log_error("online_page", &msg);
                 BackendError::from(e)
-            })?;
+            })
+    }
+}
+
+impl ImageSource for OnlineSource {
+    fn page_count(&self) -> Result<usize, BackendError> {
+        Ok(self.pages.lock().len())
+    }
+
+    fn entry_names(&self) -> Result<Vec<String>, BackendError> {
+        Ok(self
+            .pages
+            .lock()
+            .iter()
+            .enumerate()
+            .map(|(i, p)| crate::online::page_name(p, i))
+            .collect())
+    }
+
+    fn read_raw(&self, index: usize) -> Result<RawPage, BackendError> {
+        let mut page = self.page_at(index)?;
+        // 每本书独立的并发闸门：限制同时在途的页面下载数。
+        let _guard = self.permits.acquire();
+        let mut resp = self.get_page(&page, index)?;
+        // Telegram CDN 直链过期：403/404 时按原消息坐标重新解析一次。
+        if matches!(resp.status, 403 | 404) && page.anchor.is_some() {
+            let anchor = page.anchor.as_ref().expect("checked anchor");
+            match crate::online::telegram::refresh_page_url(&*self.http, anchor) {
+                Ok(Some(fresh)) => {
+                    if let Ok(normalized) = crate::online::normalize_url(&fresh) {
+                        let fresh = normalized.to_string();
+                        if fresh != page.url {
+                            crate::logging::log_error(
+                                "online_page",
+                                &format!(
+                                    "第 {} 页直链失效，已按消息锚点刷新",
+                                    index + 1
+                                ),
+                            );
+                            self.replace_page_url(index, fresh.clone());
+                            page.url = fresh;
+                            resp = self.get_page(&page, index)?;
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    crate::logging::log_error(
+                        "online_page",
+                        &format!("第 {} 页直链刷新失败：{e}", index + 1),
+                    );
+                }
+            }
+        }
         if !(200..300).contains(&resp.status) {
             let msg = format!("第 {} 页 HTTP {}", index + 1, resp.status);
             crate::logging::log_error(
@@ -379,7 +437,7 @@ impl SourceHandle {
                 .filter_map(|i| archive.name_for_index(i).map(|s| s.to_string()))
                 .filter(|n| !n.ends_with('/') && is_image_name(n))
                 .collect();
-            names.sort();
+            names.sort_by(|a, b| crate::commands::natural_cmp(a, b));
             Ok(Self {
                 path: path.to_path_buf(),
                 kind: HandleKind::Zip {
@@ -575,11 +633,13 @@ mod tests {
                 url: "http://x/001.png".into(),
                 width: Some(1),
                 height: Some(1),
+                anchor: None,
             },
             PageRef {
                 url: "http://x/002.png".into(),
                 width: None,
                 height: None,
+                anchor: None,
             },
         ]
     }
@@ -670,6 +730,77 @@ mod tests {
             .expect("非图片应返回错误")
             .to_string();
         assert!(err.contains("不是图片"), "{err}");
+    }
+
+    #[test]
+    fn online_source_refreshes_expired_telegram_cdn_once() {
+        struct RefreshingHttp;
+        impl HttpTransport for RefreshingHttp {
+            fn get(
+                &self,
+                url: &str,
+                _max: usize,
+                _referer: Option<&str>,
+                _scope: Option<&str>,
+            ) -> Result<HttpResponse, OnlineError> {
+                if url.contains("embed=1") {
+                    return Ok(HttpResponse {
+                        status: 200,
+                        final_url: url.into(),
+                        content_type: Some("text/html".into()),
+                        body: br#"<div class="tgme_widget_message" data-post="testchannel/102">
+                            <a class="tgme_widget_message_photo_wrap"
+                               style="background-image:url('http://cdn.test/fresh.png')"></a>
+                        </div>"#
+                            .to_vec(),
+                    });
+                }
+                if url.ends_with("old.png") {
+                    return Ok(HttpResponse {
+                        status: 403,
+                        final_url: url.into(),
+                        content_type: None,
+                        body: b"expired".to_vec(),
+                    });
+                }
+                if url.ends_with("fresh.png") {
+                    return Ok(HttpResponse {
+                        status: 200,
+                        final_url: url.into(),
+                        content_type: Some("image/png".into()),
+                        body: tiny_png(),
+                    });
+                }
+                Ok(HttpResponse {
+                    status: 404,
+                    final_url: url.into(),
+                    content_type: None,
+                    body: Vec::new(),
+                })
+            }
+        }
+
+        let page = PageRef {
+            url: "http://cdn.test/old.png".into(),
+            width: Some(800),
+            height: Some(1200),
+            anchor: Some(crate::online::PageAnchor {
+                channel: "testchannel".into(),
+                message_id: 102,
+                photo_index: 0,
+                refresh_base: Some("https://t.me".into()),
+            }),
+        };
+        let src = super::OnlineSource::new(
+            vec![page],
+            Arc::new(RefreshingHttp),
+            1,
+            "https://t.me/testchannel/102".into(),
+        );
+        let raw = src.read_raw(0).expect("刷新后应读到新 CDN 地址");
+        assert!(!raw.bytes.is_empty());
+        assert_eq!(raw.ext, "png");
+        assert_eq!(src.page_count().unwrap(), 1);
     }
 
     #[test]

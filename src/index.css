@@ -182,7 +182,12 @@
   html,
   body,
   #root {
+    width: 100%;
     height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: var(--sh-background);
   }
 
   html {
@@ -332,6 +337,28 @@
   50% {
     transform: translateY(-5px);
   }
+}
+
+/* Safe mode: prioritize a stable local reading surface over decorative motion. */
+html[data-safe-mode="true"] *,
+html[data-safe-mode="true"] *::before,
+html[data-safe-mode="true"] *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.01ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0ms !important;
+}
+
+html[data-safe-mode="true"] .view-fade,
+html[data-safe-mode="true"] .fade-in {
+  animation: none !important;
+}
+
+html[data-safe-mode="true"] [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

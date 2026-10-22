@@ -51,6 +51,10 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
             k TEXT PRIMARY KEY,
             v TEXT NOT NULL DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS app_meta(
+            k TEXT PRIMARY KEY,
+            v TEXT NOT NULL DEFAULT ''
+        );
         CREATE TABLE IF NOT EXISTS trans_log(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             kind TEXT NOT NULL,
@@ -92,7 +96,45 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
             last_error TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT ''
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS online_filter_profiles(
+            host TEXT PRIMARY KEY,
+            main_selector TEXT,
+            cdn_pattern TEXT,
+            width_min INTEGER,
+            width_max INTEGER,
+            aspect_max REAL,
+            uses INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS online_filter_rules(
+            id TEXT PRIMARY KEY,
+            host TEXT NOT NULL,
+            action TEXT NOT NULL,
+            source TEXT NOT NULL,
+            pattern_json TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT '',
+            hits INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_online_filter_rules_host
+            ON online_filter_rules(host);
+        CREATE TABLE IF NOT EXISTS online_filter_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            host TEXT NOT NULL,
+            book_id TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL,
+            action TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            width INTEGER,
+            height INTEGER,
+            sha256 TEXT,
+            created_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_online_filter_events_book
+            ON online_filter_events(book_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_online_filter_events_unique
+            ON online_filter_events(book_id, url, action);",
     )?;
     migrate_reading_log(conn)?;
     migrate_book_columns(conn)?;
@@ -456,6 +498,23 @@ pub fn set_setting(conn: &Connection, k: &str, v: &str) -> Result<(), BackendErr
     Ok(())
 }
 
+/// Internal app metadata (not user settings): schema/compatibility markers.
+pub fn get_meta(conn: &Connection, k: &str) -> Result<Option<String>, BackendError> {
+    let value: Option<String> = conn
+        .query_row("SELECT v FROM app_meta WHERE k=?1", params![k], |r| r.get(0))
+        .ok();
+    Ok(value)
+}
+
+pub fn set_meta(conn: &Connection, k: &str, v: &str) -> Result<(), BackendError> {
+    conn.execute(
+        "INSERT INTO app_meta(k, v) VALUES (?1, ?2)
+         ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+        params![k, v],
+    )?;
+    Ok(())
+}
+
 /// 记一条 OCR/翻译调用日志(kind: "ocr" | "trans");只保留最近 5000 条。
 pub fn log_trans(conn: &Connection, kind: &str, ok: bool, elapsed_ms: u64) -> Result<(), BackendError> {
     conn.execute(
@@ -783,6 +842,300 @@ pub fn batch_progress(
     Ok(())
 }
 
+// ---------- 在线图片提纯：站点档案 / 用户规则 / 事件 ----------
+
+use crate::online::filter::{
+    FilterAction, FilterRule, FilterStats, RulePattern, RuleSource, SiteProfile,
+};
+
+fn rule_action_str(action: FilterAction) -> &'static str {
+    match action {
+        FilterAction::Block => "block",
+        FilterAction::Allow => "allow",
+    }
+}
+
+fn rule_source_str(source: RuleSource) -> &'static str {
+    match source {
+        RuleSource::User => "user",
+        RuleSource::Learned => "learned",
+        RuleSource::Imported => "imported",
+    }
+}
+
+fn parse_action(value: &str) -> FilterAction {
+    match value {
+        "allow" => FilterAction::Allow,
+        _ => FilterAction::Block,
+    }
+}
+
+fn parse_source(value: &str) -> RuleSource {
+    match value {
+        "user" => RuleSource::User,
+        "imported" => RuleSource::Imported,
+        _ => RuleSource::Learned,
+    }
+}
+
+/// 写入/更新站点档案（按 host 唯一）。
+pub fn upsert_filter_profile(conn: &Connection, profile: &SiteProfile) -> Result<(), BackendError> {
+    let host = profile.host.trim();
+    if host.is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO online_filter_profiles(
+            host, main_selector, cdn_pattern, width_min, width_max, aspect_max, uses, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(host) DO UPDATE SET
+            main_selector=excluded.main_selector,
+            cdn_pattern=excluded.cdn_pattern,
+            width_min=excluded.width_min,
+            width_max=excluded.width_max,
+            aspect_max=excluded.aspect_max,
+            uses=excluded.uses,
+            updated_at=excluded.updated_at",
+        params![
+            host,
+            profile.main_selector,
+            profile.cdn_pattern,
+            profile.width_min.map(|v| v as i64),
+            profile.width_max.map(|v| v as i64),
+            profile.aspect_max.map(|v| v as f64),
+            profile.uses as i64,
+            if profile.updated_at.is_empty() {
+                now_str()
+            } else {
+                profile.updated_at.clone()
+            },
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn get_filter_profile(
+    conn: &Connection,
+    host: &str,
+) -> Result<Option<SiteProfile>, BackendError> {
+    let mut stmt = conn.prepare(
+        "SELECT host, main_selector, cdn_pattern, width_min, width_max, aspect_max, uses, updated_at
+         FROM online_filter_profiles WHERE host=?1",
+    )?;
+    let mut rows = stmt.query(params![host])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    Ok(Some(SiteProfile {
+        host: row.get(0)?,
+        main_selector: row.get(1)?,
+        cdn_pattern: row.get(2)?,
+        width_min: row.get::<_, Option<i64>>(3)?.map(|v| v.max(0) as u32),
+        width_max: row.get::<_, Option<i64>>(4)?.map(|v| v.max(0) as u32),
+        aspect_max: row.get::<_, Option<f64>>(5)?.map(|v| v as f32),
+        uses: row.get::<_, i64>(6)?.max(0) as u64,
+        updated_at: row.get(7)?,
+    }))
+}
+
+pub fn list_filter_profiles(conn: &Connection) -> Result<Vec<SiteProfile>, BackendError> {
+    let mut stmt = conn.prepare(
+        "SELECT host, main_selector, cdn_pattern, width_min, width_max, aspect_max, uses, updated_at
+         FROM online_filter_profiles ORDER BY updated_at DESC, host",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(SiteProfile {
+            host: row.get(0)?,
+            main_selector: row.get(1)?,
+            cdn_pattern: row.get(2)?,
+            width_min: row.get::<_, Option<i64>>(3)?.map(|v| v.max(0) as u32),
+            width_max: row.get::<_, Option<i64>>(4)?.map(|v| v.max(0) as u32),
+            aspect_max: row.get::<_, Option<f64>>(5)?.map(|v| v as f32),
+            uses: row.get::<_, i64>(6)?.max(0) as u64,
+            updated_at: row.get(7)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn row_to_filter_rule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<FilterRule>> {
+    let pattern_json: String = row.get(4)?;
+    let Ok(pattern) = serde_json::from_str::<RulePattern>(&pattern_json) else {
+        return Ok(None);
+    };
+    Ok(Some(FilterRule {
+        id: row.get(0)?,
+        host: row.get(1)?,
+        action: parse_action(&row.get::<_, String>(2)?),
+        source: parse_source(&row.get::<_, String>(3)?),
+        pattern,
+        reason: row.get(5)?,
+        created_at: row.get(6)?,
+        hits: row.get::<_, i64>(7)?.max(0) as u64,
+    }))
+}
+
+pub fn list_filter_rules(conn: &Connection) -> Result<Vec<FilterRule>, BackendError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, host, action, source, pattern_json, reason, created_at, hits
+         FROM online_filter_rules ORDER BY created_at DESC, id",
+    )?;
+    let rows = stmt.query_map([], row_to_filter_rule)?;
+    let mut out = Vec::new();
+    for row in rows {
+        if let Some(rule) = row? {
+            out.push(rule);
+        }
+    }
+    Ok(out)
+}
+
+pub fn rules_for_host(conn: &Connection, host: &str) -> Result<Vec<FilterRule>, BackendError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, host, action, source, pattern_json, reason, created_at, hits
+         FROM online_filter_rules WHERE host=?1 ORDER BY created_at DESC, id",
+    )?;
+    let rows = stmt.query_map(params![host], row_to_filter_rule)?;
+    let mut out = Vec::new();
+    for row in rows {
+        if let Some(rule) = row? {
+            out.push(rule);
+        }
+    }
+    Ok(out)
+}
+
+pub fn upsert_filter_rule(conn: &Connection, rule: &FilterRule) -> Result<(), BackendError> {
+    let pattern = serde_json::to_string(&rule.pattern)
+        .map_err(|e| BackendError::Db(format!("过滤规则序列化失败：{e}")))?;
+    conn.execute(
+        "INSERT INTO online_filter_rules(
+            id, host, action, source, pattern_json, reason, created_at, hits
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(id) DO UPDATE SET
+            host=excluded.host, action=excluded.action, source=excluded.source,
+            pattern_json=excluded.pattern_json, reason=excluded.reason,
+            created_at=excluded.created_at, hits=excluded.hits",
+        params![
+            rule.id,
+            rule.host,
+            rule_action_str(rule.action),
+            rule_source_str(rule.source),
+            pattern,
+            rule.reason,
+            if rule.created_at.is_empty() {
+                now_str()
+            } else {
+                rule.created_at.clone()
+            },
+            rule.hits as i64,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn delete_filter_rule(conn: &Connection, id: &str) -> Result<(), BackendError> {
+    conn.execute("DELETE FROM online_filter_rules WHERE id=?1", params![id])?;
+    Ok(())
+}
+
+pub fn delete_filter_rules(conn: &Connection, ids: &[String]) -> Result<(), BackendError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    for id in ids {
+        delete_filter_rule(conn, id)?;
+    }
+    Ok(())
+}
+
+/// 重置本地自学习：规则、站点档案与事件全部清空（不影响书库/阅读进度）。
+pub fn clear_filter_learning(conn: &Connection) -> Result<(), BackendError> {
+    conn.execute_batch(
+        "DELETE FROM online_filter_rules;
+         DELETE FROM online_filter_profiles;
+         DELETE FROM online_filter_events;",
+    )?;
+    Ok(())
+}
+
+/// 记录一次过滤/恢复事件；URL 必须是已脱敏的 host+path。
+pub fn record_filter_event(
+    conn: &Connection,
+    host: &str,
+    book_id: &str,
+    url: &str,
+    action: &str,
+    reason: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+    sha256: Option<&str>,
+) -> Result<(), BackendError> {
+    conn.execute(
+        "INSERT OR IGNORE INTO online_filter_events(
+            host, book_id, url, action, reason, width, height, sha256, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            host,
+            book_id,
+            url,
+            action,
+            reason,
+            width.map(|v| v as i64),
+            height.map(|v| v as i64),
+            sha256,
+            now_str(),
+        ],
+    )?;
+    conn.execute(
+        "DELETE FROM online_filter_events WHERE id <= (
+            SELECT MAX(id) FROM online_filter_events
+         ) - 10000",
+        [],
+    )?;
+    Ok(())
+}
+
+pub fn filter_stats(conn: &Connection) -> Result<FilterStats, BackendError> {
+    let profiles: i64 =
+        conn.query_row("SELECT COUNT(*) FROM online_filter_profiles", [], |r| r.get(0))?;
+    let rules: i64 =
+        conn.query_row("SELECT COUNT(*) FROM online_filter_rules", [], |r| r.get(0))?;
+    let blocked: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM online_filter_events WHERE action='blocked'",
+        [],
+        |r| r.get(0),
+    )?;
+    let restored: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM online_filter_events WHERE action='restored'",
+        [],
+        |r| r.get(0),
+    )?;
+    let last_updated: Option<String> = conn
+        .query_row(
+            "SELECT MAX(t) FROM (
+                SELECT MAX(updated_at) AS t FROM online_filter_profiles
+                UNION ALL SELECT MAX(created_at) FROM online_filter_rules
+                UNION ALL SELECT MAX(created_at) FROM online_filter_events
+             )",
+            [],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
+    Ok(FilterStats {
+        site_profiles: profiles.max(0) as u32,
+        rules: rules.max(0) as u32,
+        blocked_total: blocked.max(0) as u64,
+        restored_total: restored.max(0) as u64,
+        last_updated,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1048,6 +1401,90 @@ mod tests {
         let id = batch_create(&conn, "o1", "A", 2).unwrap();
         batch_set_state(&conn, id, "running", "").unwrap();
         assert!(has_active_batch(&conn, "o1").unwrap());
+    }
+
+    #[test]
+    fn filter_profiles_rules_and_events_roundtrip() {
+        let conn = mem();
+        let profile = SiteProfile {
+            host: "example.com".into(),
+            main_selector: Some(".reader".into()),
+            cdn_pattern: Some("https://example.com/ch#/#.jpg".into()),
+            width_min: Some(700),
+            width_max: Some(1000),
+            aspect_max: Some(2.8),
+            uses: 2,
+            updated_at: "2026-10-23 10:00:00".into(),
+        };
+        upsert_filter_profile(&conn, &profile).unwrap();
+        let loaded = get_filter_profile(&conn, "example.com").unwrap().unwrap();
+        assert_eq!(loaded, profile);
+        assert_eq!(list_filter_profiles(&conn).unwrap().len(), 1);
+
+        let rule = FilterRule {
+            id: "r1".into(),
+            host: "example.com".into(),
+            action: FilterAction::Block,
+            source: RuleSource::User,
+            pattern: RulePattern::UrlTemplate {
+                template: "https://example.com/extras/#.png".into(),
+            },
+            reason: "user".into(),
+            created_at: "2026-10-23 10:00:00".into(),
+            hits: 0,
+        };
+        upsert_filter_rule(&conn, &rule).unwrap();
+        assert_eq!(rules_for_host(&conn, "example.com").unwrap(), vec![rule]);
+
+        record_filter_event(
+            &conn,
+            "example.com",
+            "book",
+            "https://example.com/extras/1.png",
+            "blocked",
+            "user",
+            Some(800),
+            Some(1200),
+            None,
+        )
+        .unwrap();
+        // 唯一索引：同一本书/URL/动作只计一次。
+        record_filter_event(
+            &conn,
+            "example.com",
+            "book",
+            "https://example.com/extras/1.png",
+            "blocked",
+            "user",
+            Some(800),
+            Some(1200),
+            None,
+        )
+        .unwrap();
+        record_filter_event(
+            &conn,
+            "example.com",
+            "book",
+            "https://example.com/extras/1.png",
+            "restored",
+            "user",
+            Some(800),
+            Some(1200),
+            None,
+        )
+        .unwrap();
+        let stats = filter_stats(&conn).unwrap();
+        assert_eq!(stats.site_profiles, 1);
+        assert_eq!(stats.rules, 1);
+        assert_eq!(stats.blocked_total, 1);
+        assert_eq!(stats.restored_total, 1);
+        assert!(stats.last_updated.is_some());
+
+        clear_filter_learning(&conn).unwrap();
+        let stats = filter_stats(&conn).unwrap();
+        assert_eq!(stats.site_profiles, 0);
+        assert_eq!(stats.rules, 0);
+        assert_eq!(stats.blocked_total, 0);
     }
 }
 

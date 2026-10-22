@@ -1,5 +1,6 @@
 import { BookX, Trash2, X } from "lucide-react";
 import { createPortal } from "react-dom";
+import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 
 interface Props {
@@ -19,21 +20,22 @@ export default function LibrarySelectionBar({
   onDelete,
   onCancel,
 }: Props) {
+  const { t } = useI18n();
   return createPortal(
     <div
       className="pointer-events-none fixed inset-x-0 bottom-6 z-[75] flex justify-center px-4"
       role="toolbar"
-      aria-label="批量操作"
+      aria-label={t("library.bulkAria")}
     >
       <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-2 rounded-full border border-border bg-card px-3 py-2 shadow-hard">
         <span className="inline-flex items-center gap-2 px-1 text-sm font-semibold text-foreground">
           <span
-            className="grid size-6 place-items-center rounded-full bg-primary text-xs font-bold tabular-nums text-primary-foreground"
+            className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-xs font-bold tabular-nums text-primary-foreground"
             aria-live="polite"
           >
             {count}
           </span>
-          已选
+          <span className="whitespace-nowrap">{t("library.selected")}</span>
         </span>
         <Button
           variant="pill"
@@ -42,7 +44,7 @@ export default function LibrarySelectionBar({
           onClick={onRemove}
         >
           <BookX />
-          移除记录
+          {t("library.removeRecords")}
         </Button>
         <Button
           variant="pill-danger"
@@ -57,10 +59,10 @@ export default function LibrarySelectionBar({
           variant="pill-ghost"
           size="pill-sm"
           onClick={onCancel}
-          aria-label="取消多选"
+          aria-label={t("library.exitSelectAria")}
         >
           <X />
-          取消
+          {t("common.cancel")}
         </Button>
       </div>
     </div>,

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { useOnlineHandoffState } from "@/components/OnlineImportDialog";
 import { api, type Settings } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/i18n";
 import {
   ONLINE_LAST_TEST_EVENT,
   readOnlineLastTest,
@@ -23,7 +24,7 @@ interface StatusPillProps {
   onlineOn: boolean;
 }
 
-function proxyHost(raw: string): string {
+function proxyHost(raw: string, fallback: string): string {
   const value = raw.trim();
   if (!value) return "";
   try {
@@ -32,16 +33,8 @@ function proxyHost(raw: string): string {
     );
     return `${url.hostname}${url.port ? `:${url.port}` : ""}`;
   } catch {
-    return "已配置";
+    return fallback;
   }
-}
-
-function formatTime(at: number): string {
-  return new Date(at).toLocaleTimeString("zh-CN", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 export default function StatusPill({
@@ -52,6 +45,7 @@ export default function StatusPill({
 }: StatusPillProps) {
   const nav = useNavigate();
   const loc = useLocation();
+  const { t, formatDateTime } = useI18n();
   const { status: handoff } = useOnlineHandoffState();
   const [liveSettings, setLiveSettings] = useState<Settings | null>(null);
   const [open, setOpen] = useState(false);
@@ -96,14 +90,23 @@ export default function StatusPill({
   const ready = liveSettings !== null || (settingsReady && !settingsError);
 
   const modeLabel = !ready
-    ? "读取中"
+    ? t("status.reading")
     : settingsError && liveSettings === null
-      ? "网络状态不可用"
+      ? t("status.unavailable")
       : effectiveProxy.trim()
-        ? `代理 ${proxyHost(effectiveProxy)}`
-        : "直连";
+        ? t("status.proxy", {
+            host: proxyHost(effectiveProxy, t("status.configured")),
+          })
+        : t("status.direct");
 
-  const testLabel = lastTest ? `${formatTime(lastTest.at)}` : "未测试";
+  const testLabel = lastTest
+    ? formatDateTime(lastTest.at, {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+    : t("status.notTested");
+  const testHost = lastTest?.urlHost || t("common.unknown");
   const dotClass = !ready
     ? "bg-muted-foreground"
     : lastTest?.ok === true
@@ -115,21 +118,25 @@ export default function StatusPill({
           : "bg-muted-foreground";
 
   const handoffLabel = handoff?.active
-    ? `127.0.0.1:${handoff.port} · 已接收 ${handoff.receivedChapters} 话`
+    ? `127.0.0.1:${handoff.port} · ${t("status.receivedChapters", {
+        count: handoff.receivedChapters,
+      })}`
     : "";
 
   const ariaLabel = useMemo(
     () =>
       [
-        `网络：${modeLabel}`,
+        `${t("status.title")}: ${modeLabel}`,
         lastTest
-          ? `最近测试：${lastTest.ok ? "成功" : "失败"} ${testLabel} · ${lastTest.urlHost}`
+          ? `${t("status.lastTest")}: ${
+              lastTest.ok ? t("status.testOk") : t("status.testFail")
+            } ${testLabel} · ${testHost}`
           : "",
-        handoffLabel ? `配对中：${handoffLabel}` : "",
+        handoffLabel ? `${t("status.pairing")}: ${handoffLabel}` : "",
       ]
         .filter(Boolean)
-        .join("；"),
-    [modeLabel, lastTest, testLabel, handoffLabel],
+        .join("; "),
+    [modeLabel, lastTest, testLabel, testHost, handoffLabel, t],
   );
 
   return (
@@ -140,12 +147,12 @@ export default function StatusPill({
         title={ariaLabel}
       >
         <span className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
-        <span className="mono hidden max-w-[120px] truncate text-muted-foreground md:inline">
+        <span className="mono hidden max-w-[120px] truncate text-muted-foreground lg:inline">
           {modeLabel}
         </span>
         {handoff?.active && (
-          <span className="hidden rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-bold text-primary-foreground sm:inline">
-            配对
+          <span className="hidden whitespace-nowrap rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-bold text-primary-foreground sm:inline">
+            {t("status.pairing")}
           </span>
         )}
       </PopoverTrigger>
@@ -156,45 +163,57 @@ export default function StatusPill({
       >
         <div className="p-4">
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-bold">网络与连接</p>
+            <div className="min-w-0">
+              <p className="text-sm font-bold">{t("status.title")}</p>
               <p className="mt-0.5 text-[11px] text-muted-foreground">
-                状态来自已保存设置与最近一次测试
+                {t("status.hint")}
               </p>
             </div>
-            <span className="grid size-8 place-items-center rounded-full border border-border bg-secondary text-secondary-foreground">
+            <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-secondary text-secondary-foreground">
               <Activity className="size-4" />
             </span>
           </div>
 
           <dl className="mt-4 space-y-2 text-[12px]">
             <div className="flex items-center justify-between gap-3">
-              <dt className="text-muted-foreground">连接方式</dt>
-              <dd className="font-semibold">{modeLabel}</dd>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-muted-foreground">在线直读</dt>
-              <dd className="font-semibold">
-                {effectiveOnlineOn ? "已开启" : "未开启"}
+              <dt className="shrink-0 text-muted-foreground">
+                {t("status.connectionMethod")}
+              </dt>
+              <dd className="min-w-0 break-words text-right font-semibold">
+                {modeLabel}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <dt className="text-muted-foreground">最近测试</dt>
+              <dt className="shrink-0 text-muted-foreground">
+                {t("status.onlineRead")}
+              </dt>
+              <dd className="min-w-0 text-right font-semibold">
+                {effectiveOnlineOn ? t("common.enabled") : t("common.disabled")}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <dt className="shrink-0 text-muted-foreground">
+                {t("status.lastTest")}
+              </dt>
               <dd
                 className={cn(
-                  "mono",
+                  "mono min-w-0 break-words text-right",
                   lastTest?.ok === false && "text-destructive",
                 )}
               >
                 {lastTest
-                  ? `${lastTest.ok ? "成功" : "失败"} ${testLabel}`
-                  : "未测试"}
+                  ? `${lastTest.ok ? t("status.testOk") : t("status.testFail")} ${testLabel}`
+                  : t("status.notTested")}
               </dd>
             </div>
             {handoff?.active && (
               <div className="flex items-center justify-between gap-3">
-                <dt className="text-muted-foreground">配对桥接</dt>
-                <dd className="mono text-right text-[11px]">{handoffLabel}</dd>
+                <dt className="shrink-0 text-muted-foreground">
+                  {t("status.pairingBridge")}
+                </dt>
+                <dd className="mono min-w-0 break-words text-right text-[11px]">
+                  {handoffLabel}
+                </dd>
               </div>
             )}
           </dl>
@@ -208,7 +227,7 @@ export default function StatusPill({
               nav("/settings");
             }}
           >
-            打开网络设置
+            {t("status.openSettings")}
             <ChevronRight className="size-3.5" />
           </Button>
         </div>

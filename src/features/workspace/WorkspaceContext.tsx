@@ -11,6 +11,7 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import type { Direction, PageMode } from "@/components/Reader/spread";
 import { toast } from "@/components/Toast";
+import { useI18n } from "@/i18n";
 import { api } from "@/lib/tauri";
 
 /** 最多同时打开的漫画阅读页签（固定「书库」页签不计入）。 */
@@ -67,7 +68,7 @@ const WorkspaceContext = createContext<WorkspaceValue | null>(null);
 
 export function useWorkspace(): WorkspaceValue {
   const value = useContext(WorkspaceContext);
-  if (!value) throw new Error("useWorkspace 必须在 WorkspaceProvider 内使用");
+  if (!value) throw new Error("useWorkspace must be used inside WorkspaceProvider");
   return value;
 }
 
@@ -81,6 +82,7 @@ export function useWorkspace(): WorkspaceValue {
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const nav = useNavigate();
   const loc = useLocation();
+  const { t } = useI18n();
   const [tabs, setTabs] = useState<ReaderTab[]>([]);
   const snapshots = useRef(new Map<string, TabSnapshot>());
   const tabsRef = useRef(tabs);
@@ -100,30 +102,31 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const ensureTab = useCallback((bookId: string): boolean => {
     const list = tabsRef.current;
     if (list.some((t) => t.bookId === bookId)) return true;
+    const loadingTitle = t("common.loading");
     if (!TABS_ENABLED) {
       // 回退模式：始终只保留当前一本书。
-      setTabs([{ bookId, title: "载入中…" }]);
+      setTabs([{ bookId, title: loadingTitle }]);
       return true;
     }
     if (list.length >= MAX_READER_TABS) return false;
     setTabs((prev) =>
       prev.some((t) => t.bookId === bookId)
         ? prev
-        : [...prev, { bookId, title: "载入中…" }],
+        : [...prev, { bookId, title: loadingTitle }],
     );
     return true;
-  }, []);
+  }, [t]);
 
   // 进入 /reader/:id（含深链）时登记页签；超限则退回上一个页签或书库。
   useEffect(() => {
     if (!activeId) return;
     if (ensureTab(activeId)) return;
-    toast(`最多同时打开 ${MAX_READER_TABS} 个阅读页签，请先关闭一个`);
+    toast(t("reader.tabs.limit", { count: MAX_READER_TABS }));
     const fallback = tabsRef.current[tabsRef.current.length - 1];
     nav(fallback ? `/reader/${encodeURIComponent(fallback.bookId)}` : "/", {
       replace: true,
     });
-  }, [activeId, ensureTab, nav]);
+  }, [activeId, ensureTab, nav, t]);
 
   const activateTab = useCallback(
     (bookId: string) => {
@@ -183,19 +186,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const replaceTab = useCallback((fromId: string, toId: string) => {
     if (!fromId || !toId || fromId === toId) return;
     snapshots.current.delete(fromId);
+    const loadingTitle = t("common.loading");
     setTabs((prev) => {
       const without = prev.filter((t) => t.bookId !== toId);
       const idx = without.findIndex((t) => t.bookId === fromId);
       if (idx < 0) {
         if (prev.some((t) => t.bookId === toId)) return without;
         if (prev.length >= MAX_READER_TABS) return prev;
-        return [...without, { bookId: toId, title: "载入中…" }];
+        return [...without, { bookId: toId, title: loadingTitle }];
       }
       const next = [...without];
-      next[idx] = { bookId: toId, title: "载入中…" };
+      next[idx] = { bookId: toId, title: loadingTitle };
       return next;
     });
-  }, []);
+  }, [t]);
 
   const goLibrary = useCallback(() => {
     if (activeId !== null) nav("/");

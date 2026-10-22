@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
+import { translate, useI18n } from "@/i18n";
 
 /** 错误 toast：直接展示后端 Err(String) 中文信息 */
 export function toastErr(cmd: string, e: unknown): void {
-  const msg = typeof e === "string" ? e : `调用 ${cmd} 失败`;
+  const msg =
+    typeof e === "string" ? e : translate("error.requestFailed", { cmd });
   toast(msg);
 }
 
@@ -28,6 +30,7 @@ interface ToastItem {
 }
 
 export function Toaster() {
+  const { t } = useI18n();
   const [items, setItems] = useState<ToastItem[]>([]);
 
   useEffect(() => {
@@ -69,7 +72,7 @@ export function Toaster() {
             onClick={() =>
               setItems((prev) => prev.filter((entry) => entry.id !== item.id))
             }
-            aria-label="关闭提示"
+            aria-label={t("toast.close")}
           >
             <X className="size-3.5" />
           </button>

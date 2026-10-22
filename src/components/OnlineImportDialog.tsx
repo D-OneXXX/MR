@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { api, type BookInfo, type HandoffStatus } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { translate, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -36,6 +37,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { toast, toastErr } from "@/components/Toast";
+import { recordBreadcrumb } from "@/features/resilience";
 
 interface Props {
   onClose: () => void;
@@ -43,6 +45,19 @@ interface Props {
   onRead: (book: BookInfo) => void;
   initialTab?: "link" | "pair";
   initialUrl?: string;
+}
+
+function isTelegramChannelRoot(raw: string): boolean {
+  const value = raw.trim().toLowerCase();
+  if (value.startsWith("tg://resolve")) return true;
+  try {
+    const url = new URL(value);
+    if (!["t.me", "telegram.me"].includes(url.hostname)) return false;
+    const segments = url.pathname.split("/").filter(Boolean);
+    return segments.length === 1 || (segments[0] === "s" && segments.length === 2);
+  } catch {
+    return false;
+  }
 }
 
 function parsePastedPageUrls(raw: string): string[] {
@@ -53,10 +68,10 @@ function parsePastedPageUrls(raw: string): string[] {
     try {
       parsed = JSON.parse(text);
     } catch {
-      throw new Error("JSON 格式不正确，请检查数组");
+      throw new Error(translate("online.parseJsonError"));
     }
     if (!Array.isArray(parsed)) {
-      throw new Error("请粘贴图片 URL 数组（pages 数组），而不是整个 JSON 对象");
+      throw new Error(translate("online.parseArrayOnly"));
     }
     const urls = parsed.map((item) => {
       if (typeof item === "string") return item.trim();
@@ -70,7 +85,7 @@ function parsePastedPageUrls(raw: string): string[] {
       return "";
     });
     if (urls.some((u) => !u)) {
-      throw new Error("数组只能包含 URL 字符串或带 url 的对象");
+      throw new Error(translate("online.parseItemShape"));
     }
     return urls;
   }
@@ -82,17 +97,20 @@ function parsePastedPageUrls(raw: string): string[] {
 
 async function copyHandoffText(label: string, value: string): Promise<boolean> {
   if (!value) {
-    toast(`${label}为空，无法复制`);
+    toast(translate("online.copyEmpty", { label }));
     return false;
   }
   try {
     await navigator.clipboard.writeText(value);
-    toast(`已复制${label}`);
+    toast(translate("online.copiedLabel", { label }));
     return true;
   } catch {
-    toastErr("clipboard", `复制失败，请在弹窗中手动复制${label}`);
+    toastErr(
+      "clipboard",
+      translate("online.copyManual", { label }),
+    );
     try {
-      window.prompt(`复制${label}（手动全选复制）`, value);
+      window.prompt(translate("online.copyPrompt", { label }), value);
     } catch {
       /* 忽略 */
     }
@@ -125,17 +143,19 @@ function CopyAction({
   toastLabel: string;
   value: string;
 }) {
+  const { t } = useI18n();
   const { copied, copy } = useCopyFeedback();
   return (
     <Button
       type="button"
       variant="pill"
       size="pill-sm"
+      className="whitespace-nowrap"
       disabled={!value}
       onClick={() => void copy(toastLabel, value)}
     >
       {copied ? <Check /> : <Copy />}
-      {copied ? "已复制" : label}
+      {copied ? t("common.copied") : label}
     </Button>
   );
 }
@@ -236,7 +256,7 @@ function clearHandoffStatus(showToast: boolean) {
   const wasActive = handoffStatus?.active ?? false;
   handoffStatus = null;
   notifyHandoffState();
-  if (showToast && wasActive) toast("配对已停止");
+  if (showToast && wasActive) toast(translate("pair.toastStopped"));
 }
 
 export function useOnlineHandoffState(): OnlineHandoffState {
@@ -325,6 +345,7 @@ export default function OnlineImportDialog({
   initialTab = "link",
   initialUrl = "",
 }: Props) {
+  const { t } = useI18n();
   const { status } = useOnlineHandoffState();
   const [tab, setTab] = useState<"link" | "pair">(initialTab);
   const [url, setUrl] = useState(initialUrl);
@@ -378,7 +399,11 @@ export default function OnlineImportDialog({
   const run = async (mode: "test" | "add" | "read") => {
     if (busy !== null) return;
     if (!url.trim()) {
-      setErr("请输入 JSON 清单或单页 HTML 图集 URL");
+      setErr(t("online.errorMissingUrl"));
+      return;
+    }
+    if (isTelegramChannelRoot(url.trim())) {
+      setErr(t("online.telegram.useBrowserHint"));
       return;
     }
     setBusy(mode);
@@ -389,21 +414,31 @@ export default function OnlineImportDialog({
         const p = await api.testOnlineConnection(url.trim());
         if (!aliveRef.current) return;
         setProbe({
-          text: `${p.title} · ${p.pageCount} 页 · ${p.elapsedMs} ms`,
+          text: t("online.probe", {
+            title: p.title,
+            pages: p.pageCount,
+            ms: p.elapsedMs,
+          }),
           ok: p.ok,
         });
-        if (!p.ok) setErr(p.message || "清单没有可读页面，无法入库");
+        if (!p.ok) setErr(p.message || t("online.errorNoPages"));
       } else {
         const b = await api.resolveOnlineUrl(url.trim());
         if (!aliveRef.current) return;
-        toast(`已加入：${b.title} · ${b.pageCount} 页`);
+        recordBreadcrumb("onlineRead");
+        toast(
+          t("online.toastAdded", {
+            title: b.title,
+            pages: b.pageCount,
+          }),
+        );
         onImported();
         if (mode === "read") onRead(b);
         close();
       }
     } catch (e) {
       if (!aliveRef.current) return;
-      const msg = typeof e === "string" ? e : "操作失败";
+      const msg = typeof e === "string" ? e : t("online.errorAction");
       setErr(msg);
       toastErr("online", e);
     } finally {
@@ -414,12 +449,13 @@ export default function OnlineImportDialog({
   const openAuxBrowser = async () => {
     if (busy !== null || openingBrowser) return;
     if (!url.trim()) {
-      setErr("请输入要打开的 URL");
+      setErr(t("online.errorOpenUrlMissing"));
       return;
     }
     setOpeningBrowser(true);
     try {
       await api.openBrowserWindow(url.trim());
+      recordBreadcrumb("onlineRead");
     } catch (e) {
       toastErr("open_browser_window", e);
     } finally {
@@ -430,18 +466,20 @@ export default function OnlineImportDialog({
   const importPasted = async () => {
     if (busy !== null) return;
     if (!url.trim()) {
-      setPasteErr("请先在上方填写页面 URL");
+      setPasteErr(t("online.errorPasteNoPageUrl"));
       return;
     }
     let pageUrls: string[];
     try {
       pageUrls = parsePastedPageUrls(pasteText);
     } catch (e) {
-      setPasteErr(e instanceof Error ? e.message : "图片列表解析失败");
+      setPasteErr(
+        e instanceof Error ? e.message : t("online.errorPasteParse"),
+      );
       return;
     }
     if (pageUrls.length === 0) {
-      setPasteErr("请至少提供一张图片 URL");
+      setPasteErr(t("online.errorPasteNoImages"));
       return;
     }
     setBusy("paste");
@@ -451,14 +489,15 @@ export default function OnlineImportDialog({
     try {
       await api.importResolvedPages(url.trim(), pasteTitle.trim(), pageUrls);
       if (!aliveRef.current) return;
-      toast("已加入书库");
+      recordBreadcrumb("onlineRead");
+      toast(t("online.toastLibraryAdded"));
       setPasteOpen(false);
       setPasteText("");
       setPasteTitle("");
       onImported();
     } catch (e) {
       if (!aliveRef.current) return;
-      const msg = typeof e === "string" ? e : "导入失败";
+      const msg = typeof e === "string" ? e : t("online.errorImport");
       setPasteErr(msg);
       toastErr("import_resolved_pages", e);
     } finally {
@@ -469,7 +508,7 @@ export default function OnlineImportDialog({
   const importBatch = async () => {
     if (busy !== null) return;
     if (!batchText.trim()) {
-      setBatchErr("请粘贴多话合集 JSON");
+      setBatchErr(t("online.errorBatchEmpty"));
       return;
     }
     setBusy("batch");
@@ -480,12 +519,13 @@ export default function OnlineImportDialog({
     try {
       const books = await api.resolveOnlineBatch(batchText);
       if (!aliveRef.current) return;
-      toast(`合集已导入：${books.length} 本`);
+      recordBreadcrumb("onlineRead");
+      toast(t("online.toastBatch", { count: books.length }));
       setBatchText("");
       onImported();
     } catch (e) {
       if (!aliveRef.current) return;
-      const msg = typeof e === "string" ? e : "导入失败";
+      const msg = typeof e === "string" ? e : t("online.errorImport");
       setBatchErr(msg);
       toastErr("resolve_online_batch", e);
     } finally {
@@ -498,6 +538,7 @@ export default function OnlineImportDialog({
     setStartingHandoff(true);
     try {
       const next = await api.startBrowserHandoff(allowSessionHeaders);
+      recordBreadcrumb("onlinePairing");
       applyHandoffStatus(next);
     } catch (e) {
       toastErr("start_browser_handoff", e);
@@ -533,7 +574,7 @@ export default function OnlineImportDialog({
     if (openingCurrentUrl) return;
     const target = url.trim();
     if (!target) {
-      toast("请先在「链接 / 清单导入」填写 URL");
+      toast(t("online.toastNeedUrl"));
       return;
     }
     setOpeningCurrentUrl(true);
@@ -547,7 +588,7 @@ export default function OnlineImportDialog({
   };
 
   const interfaceInfo = status?.active
-    ? `Callback URL: ${status.callbackUrl}\nPairing Token: ${status.pairingToken}`
+    ? `${t("online.callbackLabel")}: ${status.callbackUrl}\n${t("online.tokenLabel")}: ${status.pairingToken}`
     : "";
 
   return (
@@ -563,10 +604,10 @@ export default function OnlineImportDialog({
           </span>
           <div className="min-w-0 flex-1">
             <DialogTitle className="text-base font-bold text-foreground">
-              URL 在线直读
+              {t("online.title")}
             </DialogTitle>
             <DialogDescription className="mt-0.5 text-xs text-muted-foreground">
-              JSON 清单、单页图集与外部浏览器配对导入
+              {t("online.description")}
             </DialogDescription>
           </div>
           <Button
@@ -575,8 +616,12 @@ export default function OnlineImportDialog({
             size="pill-icon-sm"
             onClick={close}
             disabled={busy !== null}
-            title={busy !== null ? "处理进行中，完成前无法关闭" : "关闭"}
-            aria-label="关闭"
+            title={
+              busy !== null
+                ? t("online.busyCloseTitle")
+                : t("common.close")
+            }
+            aria-label={t("common.close")}
           >
             <X />
           </Button>
@@ -592,21 +637,21 @@ export default function OnlineImportDialog({
           <div className="shrink-0 px-5 pt-3">
             <TabsList
               className="h-auto w-full! flex-wrap justify-start gap-1 rounded-full border border-border bg-card p-1.5 shadow-hard-sm group-data-horizontal/tabs:h-auto"
-              aria-label="导入方式"
+              aria-label={t("online.tabsAria")}
             >
               <TabsTrigger
                 value="link"
                 disabled={busy !== null}
                 className="h-9 flex-none gap-2 rounded-full border border-transparent px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
               >
-                链接 / 清单导入
+                {t("online.tabLink")}
               </TabsTrigger>
               <TabsTrigger
                 value="pair"
                 disabled={busy !== null}
                 className="h-9 flex-none gap-2 rounded-full border border-transparent px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
               >
-                外部浏览器配对
+                {t("online.tabPair")}
               </TabsTrigger>
             </TabsList>
           </div>
@@ -614,12 +659,11 @@ export default function OnlineImportDialog({
           <div className="min-h-0 overflow-y-auto overscroll-contain px-5 py-4">
             <TabsContent
               value="link"
-              aria-label="链接 / 清单导入"
+              aria-label={t("online.tabLink")}
               className="flex flex-col gap-4"
             >
               <p className="text-xs leading-relaxed text-muted-foreground">
-                粘贴 JSON 清单或单页 HTML 图集的 URL。可在设置中手动填写 Cookie /
-                Authorization / 自定义请求头；不支持自动登录或需要脚本渲染的网页。
+                {t("online.linkIntro")}
               </p>
 
               <Card className="gap-3 rounded-2xl border-border bg-muted/20 p-4 shadow-none">
@@ -628,9 +672,9 @@ export default function OnlineImportDialog({
                     htmlFor="online-import-url"
                     className="text-xs text-muted-foreground"
                   >
-                    清单 / 图集 URL
+                    {t("online.urlLabel")}
                   </Label>
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <Input
                       id="online-import-url"
                       autoFocus
@@ -643,9 +687,9 @@ export default function OnlineImportDialog({
                         setPasteErr(null);
                         setBatchErr(null);
                       }}
-                      placeholder="https://example.com/manifest.json 或 https://example.com/gallery.html"
-                      aria-label="JSON 清单或单页 HTML 图集 URL"
-                      className="h-10 font-mono text-xs"
+                      placeholder={t("online.urlPlaceholder")}
+                      aria-label={t("online.urlAria")}
+                      className="h-10 min-w-0 font-mono text-xs"
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
@@ -657,14 +701,14 @@ export default function OnlineImportDialog({
                       type="button"
                       variant="pill"
                       size="pill"
-                      className="shrink-0"
+                      className="shrink-0 whitespace-nowrap"
                       onClick={() => void run("test")}
                       disabled={busy !== null}
                     >
                       {busy === "test" ? (
                         <Loader2 className="animate-spin" />
                       ) : null}
-                      测试
+                      {t("common.test")}
                     </Button>
                   </div>
                 </div>
@@ -678,7 +722,7 @@ export default function OnlineImportDialog({
                 {busy !== null && (
                   <p className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Loader2 className="size-3.5 animate-spin" />
-                    正在处理，完成前无法关闭…
+                    {t("online.busyHint")}
                   </p>
                 )}
 
@@ -695,7 +739,9 @@ export default function OnlineImportDialog({
                     ) : (
                       <AppWindow />
                     )}
-                    打开辅助浏览窗口
+                    <span className="whitespace-nowrap">
+                      {t("online.openAuxBrowser")}
+                    </span>
                   </Button>
                   <Button
                     type="button"
@@ -709,11 +755,13 @@ export default function OnlineImportDialog({
                     ) : (
                       <Globe />
                     )}
-                    系统浏览器
+                    <span className="whitespace-nowrap">
+                      {t("online.systemBrowser")}
+                    </span>
                   </Button>
                 </div>
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  在窗口内自行完成登录与浏览；文件下载完成后会自动导入书库。
+                  {t("online.auxHint")}
                 </p>
               </Card>
 
@@ -730,22 +778,25 @@ export default function OnlineImportDialog({
                   ) : (
                     <BookOpen />
                   )}
-                  仅加入书库
+                  <span className="whitespace-nowrap">
+                    {t("online.addOnly")}
+                  </span>
                 </Button>
                 <Button
                   type="button"
                   variant="pill-primary"
                   size="pill"
+                  className="whitespace-nowrap"
                   onClick={() => void run("read")}
                   disabled={busy !== null}
-                  title="解析并直接阅读"
+                  title={t("online.addAndReadTitle")}
                 >
                   {busy === "read" ? (
                     <Loader2 className="animate-spin" />
                   ) : (
                     <BookOpen />
                   )}
-                  加入并阅读
+                  {t("online.addAndRead")}
                 </Button>
               </div>
 
@@ -763,7 +814,9 @@ export default function OnlineImportDialog({
                   disabled={busy !== null}
                 >
                   <Images />
-                  粘贴图片 URL 列表导入
+                  <span className="whitespace-nowrap">
+                    {t("online.pasteToggle")}
+                  </span>
                   <ChevronDown
                     className={cn(
                       "transition-transform",
@@ -779,16 +832,16 @@ export default function OnlineImportDialog({
                         htmlFor="online-paste-title"
                         className="text-xs text-muted-foreground"
                       >
-                        标题
+                        {t("online.pasteTitleLabel")}
                       </Label>
                       <Input
                         id="online-paste-title"
                         value={pasteTitle}
                         onChange={(e) => setPasteTitle(e.currentTarget.value)}
-                        placeholder="标题（可留空，由后端按 URL 回退命名）"
-                        aria-label="图片清单标题"
+                        placeholder={t("online.pasteTitlePlaceholder")}
+                        aria-label={t("online.pasteTitleAria")}
                         disabled={busy !== null}
-                        className="h-9 text-xs"
+                        className="h-9 min-w-0 text-xs"
                       />
                     </div>
                     <Textarea
@@ -798,15 +851,13 @@ export default function OnlineImportDialog({
                         setPasteText(e.currentTarget.value);
                         setPasteErr(null);
                       }}
-                      placeholder={
-                        '每行一个图片 URL\n或 JSON 数组：["https://example.com/1.jpg", ...]'
-                      }
-                      aria-label="图片 URL 列表"
+                      placeholder={t("online.pastePlaceholder")}
+                      aria-label={t("online.pasteAria")}
                       disabled={busy !== null}
-                      className="font-mono text-xs"
+                      className="min-w-0 font-mono text-xs"
                     />
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      页面 URL 使用上方输入框；仅提交你手动提供的图片地址，不读取网页内容。
+                      {t("online.pasteNote")}
                     </p>
                     {pasteErr && (
                       <InlineNotice tone="error">{pasteErr}</InlineNotice>
@@ -822,19 +873,20 @@ export default function OnlineImportDialog({
                         }}
                         disabled={busy !== null}
                       >
-                        取消
+                        {t("common.cancel")}
                       </Button>
                       <Button
                         type="button"
                         variant="pill-primary"
                         size="pill-sm"
+                        className="whitespace-nowrap"
                         onClick={() => void importPasted()}
                         disabled={busy !== null || !pasteText.trim()}
                       >
                         {busy === "paste" ? (
                           <Loader2 className="animate-spin" />
                         ) : null}
-                        导入
+                        {t("online.import")}
                       </Button>
                     </div>
                   </Card>
@@ -848,10 +900,10 @@ export default function OnlineImportDialog({
                     htmlFor="online-batch"
                     className="text-sm font-semibold text-foreground"
                   >
-                    多话合集 JSON
+                    {t("online.batchTitle")}
                   </Label>
                   <Badge variant="muted" className="ml-auto">
-                    合集
+                    {t("common.series")}
                   </Badge>
                 </div>
                 <Textarea
@@ -862,13 +914,13 @@ export default function OnlineImportDialog({
                     setBatchText(e.currentTarget.value);
                     setBatchErr(null);
                   }}
-                  placeholder={'{"version":1,"seriesTitle":"...","chapters":[...]}'}
-                  aria-label="多话合集 JSON"
+                  placeholder={t("online.batchPlaceholder")}
+                  aria-label={t("online.batchAria")}
                   disabled={busy !== null}
-                  className="font-mono text-xs"
+                  className="min-w-0 font-mono text-xs"
                 />
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  粘贴包含 chapters 的合集结构；导入成功后刷新书库。
+                  {t("online.batchNote")}
                 </p>
                 {batchErr && <InlineNotice tone="error">{batchErr}</InlineNotice>}
                 <div className="flex flex-wrap justify-end gap-2">
@@ -876,13 +928,14 @@ export default function OnlineImportDialog({
                     type="button"
                     variant="pill-primary"
                     size="pill-sm"
+                    className="whitespace-nowrap"
                     onClick={() => void importBatch()}
                     disabled={busy !== null || !batchText.trim()}
                   >
                     {busy === "batch" ? (
                       <Loader2 className="animate-spin" />
                     ) : null}
-                    导入合集
+                    {t("online.importBatch")}
                   </Button>
                 </div>
               </Card>
@@ -890,7 +943,7 @@ export default function OnlineImportDialog({
 
             <TabsContent
               value="pair"
-              aria-label="外部浏览器配对"
+              aria-label={t("online.tabPair")}
               className="flex flex-col gap-3"
             >
               <Card className="gap-3 rounded-2xl border-border bg-muted/20 p-4 shadow-none">
@@ -906,16 +959,21 @@ export default function OnlineImportDialog({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-semibold text-foreground">
-                        {status?.active ? "配对监听中" : "配对未启动"}
+                        {status?.active ? t("pair.active") : t("pair.inactive")}
                       </span>
                       <Badge variant={status?.active ? "success" : "muted"}>
-                        {status?.active ? "在线" : "空闲"}
+                        {status?.active
+                          ? t("pair.stateOnline")
+                          : t("pair.stateIdle")}
                       </Badge>
                     </div>
                     <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                       {status?.active
-                        ? `127.0.0.1:${status.port} · 已接收 ${status.receivedChapters} 话`
-                        : "本地回环桥接未启动"}
+                        ? t("pair.statusLine", {
+                            port: status.port,
+                            count: status.receivedChapters,
+                          })
+                        : t("pair.inactiveHint")}
                     </p>
                   </div>
                   <Button
@@ -924,8 +982,8 @@ export default function OnlineImportDialog({
                     size="pill-icon-sm"
                     onClick={() => void refreshStatus()}
                     disabled={refreshing}
-                    aria-label="刷新配对状态"
-                    title="刷新配对状态"
+                    aria-label={t("pair.refresh")}
+                    title={t("pair.refresh")}
                   >
                     <RefreshCw
                       className={cn(refreshing && "animate-spin")}
@@ -939,24 +997,26 @@ export default function OnlineImportDialog({
                       type="button"
                       variant="pill-danger"
                       size="pill-sm"
+                      className="whitespace-nowrap"
                       onClick={() => void stopPairing()}
                       disabled={stoppingHandoff}
                     >
-                      {stoppingHandoff ? "停止中…" : "停止监听"}
+                      {stoppingHandoff ? t("pair.stopping") : t("pair.stop")}
                     </Button>
                   ) : (
                     <Button
                       type="button"
                       variant="pill-primary"
                       size="pill-sm"
+                      className="whitespace-nowrap"
                       onClick={() => void startPairing()}
                       disabled={startingHandoff}
                     >
-                      {startingHandoff ? "启动中…" : "启动配对监听"}
+                      {startingHandoff ? t("pair.starting") : t("pair.start")}
                     </Button>
                   )}
                   <span className="text-[11px] text-muted-foreground">
-                    接收的章节会自动加入书库
+                    {t("pair.autoImportHint")}
                   </span>
                 </div>
               </Card>
@@ -967,20 +1027,20 @@ export default function OnlineImportDialog({
                     htmlFor="handoff-callback"
                     className="text-xs text-muted-foreground"
                   >
-                    Callback URL
+                    {t("online.callbackLabel")}
                   </Label>
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <Input
                       id="handoff-callback"
                       readOnly
                       value={status?.callbackUrl ?? ""}
-                      placeholder="启动配对后生成"
-                      aria-label="Callback URL"
-                      className="h-9 font-mono text-xs"
+                      placeholder={t("pair.generatedAfterStart")}
+                      aria-label={t("online.callbackLabel")}
+                      className="h-9 min-w-0 font-mono text-xs"
                     />
                     <CopyIconButton
-                      label="复制 Callback URL"
-                      toastLabel="Callback URL"
+                      label={t("pair.copyCallback")}
+                      toastLabel={t("online.callbackLabel")}
                       value={status?.callbackUrl ?? ""}
                     />
                   </div>
@@ -991,20 +1051,20 @@ export default function OnlineImportDialog({
                     htmlFor="handoff-token"
                     className="text-xs text-muted-foreground"
                   >
-                    Pairing Token
+                    {t("online.tokenLabel")}
                   </Label>
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <Input
                       id="handoff-token"
                       readOnly
                       value={status?.pairingToken ?? ""}
-                      placeholder="启动配对后生成"
-                      aria-label="Pairing Token"
-                      className="h-9 font-mono text-xs"
+                      placeholder={t("pair.generatedAfterStart")}
+                      aria-label={t("online.tokenLabel")}
+                      className="h-9 min-w-0 font-mono text-xs"
                     />
                     <CopyIconButton
-                      label="复制 Pairing Token"
-                      toastLabel="Pairing Token"
+                      label={t("pair.copyToken")}
+                      toastLabel={t("online.tokenLabel")}
                       value={status?.pairingToken ?? ""}
                     />
                   </div>
@@ -1013,13 +1073,13 @@ export default function OnlineImportDialog({
 
               <div className="flex flex-wrap gap-2">
                 <CopyAction
-                  label="复制接口信息"
-                  toastLabel="接口信息"
+                  label={t("pair.copyInterface")}
+                  toastLabel={t("pair.interfaceInfo")}
                   value={interfaceInfo}
                 />
                 <CopyAction
-                  label="复制推送模板（Fetch JSON）"
-                  toastLabel="推送模板"
+                  label={t("pair.copyTemplate")}
+                  toastLabel={t("pair.pushTemplate")}
                   value={status?.script ?? ""}
                 />
               </div>
@@ -1028,21 +1088,19 @@ export default function OnlineImportDialog({
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="size-4 text-success" />
                   <span className="text-xs font-semibold text-foreground">
-                    隐私说明
+                    {t("pair.privacyTitle")}
                   </span>
                 </div>
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  脚本由你在自己的浏览器中手动执行，只读取当前页面已渲染的图片地址；不读取
-                  Cookie、不做翻页爬取。脚本会用 localStorage
-                  累积多话并一次推送整段合集；如需携带自己的请求头，编辑脚本里的{" "}
+                  {t("pair.privacyP1")}{" "}
                   <code className="font-mono text-foreground">
                     MR_SESSION_HEADERS
                   </code>{" "}
-                  常量（应用只在内存使用，不落盘、不记日志）。控制台可用{" "}
+                  {t("pair.privacyP2")}{" "}
                   <code className="font-mono text-foreground">
                     MR_BRIDGE.reset()
                   </code>{" "}
-                  清空收集。
+                  {t("pair.privacyP3")}
                 </p>
               </Card>
 
@@ -1052,14 +1110,14 @@ export default function OnlineImportDialog({
                     htmlFor="handoff-session-headers"
                     className="text-sm font-semibold text-foreground"
                   >
-                    允许接收临时请求头至内存
+                    {t("pair.sessionHeadersLabel")}
                   </Label>
                   <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                    退出应用即焚，不写入数据库，也不会写入日志。
+                    {t("pair.sessionHeadersHint")}
                   </p>
                   {status?.active && (
                     <p className="mt-1 text-[11px] text-warning">
-                      修改此开关需先停止监听，再重新启动配对。
+                      {t("pair.sessionHeadersLocked")}
                     </p>
                   )}
                 </div>
@@ -1070,7 +1128,7 @@ export default function OnlineImportDialog({
                   disabled={
                     status?.active || startingHandoff || stoppingHandoff
                   }
-                  aria-label="允许接收临时请求头至内存"
+                  aria-label={t("pair.sessionHeadersLabel")}
                 />
               </div>
 
@@ -1087,10 +1145,12 @@ export default function OnlineImportDialog({
                   ) : (
                     <Globe />
                   )}
-                  在系统浏览器打开当前 URL
+                  <span className="whitespace-nowrap">
+                    {t("pair.openCurrent")}
+                  </span>
                 </Button>
                 <span className="text-[11px] text-muted-foreground">
-                  当前 URL 取自「链接 / 清单导入」标签页
+                  {t("pair.currentUrlHint")}
                 </span>
               </div>
             </TabsContent>

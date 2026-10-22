@@ -29,3 +29,8 @@ __pycache__/
 
 # Isolated worktrees
 .worktrees/
+
+# QA generated data (fixtures, screenshots, isolated profiles, reports are rebuilt per run)
+tests/qa/artifacts/
+tests/qa/fixtures/
+tests/qa/reports/

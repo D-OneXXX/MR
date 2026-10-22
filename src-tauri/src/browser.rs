@@ -253,6 +253,7 @@ fn handle_download_event(app: &AppHandle, event: DownloadEvent<'_>) -> bool {
 
 #[tauri::command]
 pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
+    crate::resilience::ensure_online_allowed()?;
     let url = validate_browser_url(&url)?;
     if let Some(window) = app.get_webview_window(BROWSER_LABEL) {
         window.show().map_err(|e| e.to_string())?;
@@ -273,6 +274,7 @@ pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn navigate_browser(app: AppHandle, url: String) -> Result<(), String> {
+    crate::resilience::ensure_online_allowed()?;
     let url = validate_browser_url(&url)?;
     let window = app
         .get_webview_window(BROWSER_LABEL)

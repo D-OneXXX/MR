@@ -8,6 +8,7 @@ import {
   type BookInfo,
 } from "@/lib/tauri";
 import { toast, Toaster } from "@/components/Toast";
+import { translate } from "@/i18n";
 import Library from "@/pages/Library";
 import SettingsPage from "@/pages/Settings";
 import Browser from "@/pages/Browser";
@@ -17,19 +18,29 @@ import {
   LIBRARY_REFRESH_EVENT,
 } from "@/lib/events";
 import TopBar from "./TopBar";
+import PrivacyDialog from "@/components/privacy/PrivacyDialog";
+import { useSafeMode } from "@/features/safeMode/SafeModeContext";
 
 export default function AppShell() {
   const nav = useNavigate();
   const loc = useLocation();
   const ws = useWorkspace();
+  const { active: safeMode } = useSafeMode();
   const [lastRead, setLastRead] = useState<BookInfo | null>(null);
   const [onlineOn, setOnlineOn] = useState(isOnlineEnabled());
   const [onlineProxy, setOnlineProxy] = useState<string | null>(null);
   const [settingsReady, setSettingsReady] = useState(false);
   const [settingsError, setSettingsError] = useState(false);
   const [libraryBadge, setLibraryBadge] = useState(0);
+  const mainRef = useRef<HTMLElement | null>(null);
   const pathRef = useRef(loc.pathname);
   pathRef.current = loc.pathname;
+
+  // Page transitions must start at the top: the shell owns the scroll container,
+  // so without this a previous page's scroll position can clip the next header.
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [loc.pathname]);
 
   useEffect(() => {
     let alive = true;
@@ -70,7 +81,9 @@ export default function AppShell() {
           setLastRead(
             list.find(
               (book) =>
-                book.currentPage > 0 && book.currentPage + 1 < book.pageCount,
+                (book.sourceType === "local" || !safeMode) &&
+                book.currentPage > 0 &&
+                book.currentPage + 1 < book.pageCount,
             ) ?? null,
           );
         },
@@ -81,20 +94,23 @@ export default function AppShell() {
     return () => {
       alive = false;
     };
-  }, [loc.pathname]);
+  }, [loc.pathname, safeMode]);
 
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     listen<BookInfo[]>("online-handoff-imported", (event) => {
-      if (disposed) return;
+      if (disposed || safeMode) return;
       const books = Array.isArray(event.payload) ? event.payload : [];
       if (books.length === 0) return;
-      const title = books[0]?.title ?? "未命名";
+      const title = books[0]?.title?.trim() || translate("common.unknown");
       toast(
         books.length > 1
-          ? `已接收《${title}》等 ${books.length} 话`
-          : `已接收《${title}》`,
+          ? translate("toast.receivedMany", {
+              title,
+              count: books.length,
+            })
+          : translate("toast.receivedOne", { title }),
       );
       if (pathRef.current !== "/") {
         setLibraryBadge((count) => count + books.length);
@@ -111,7 +127,7 @@ export default function AppShell() {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [safeMode]);
 
   useEffect(() => {
     if (loc.pathname === "/") setLibraryBadge(0);
@@ -161,7 +177,7 @@ export default function AppShell() {
   }, [loc.pathname, nav, ws]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+    <div className="flex h-screen w-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <TopBar
         lastRead={lastRead}
         onlineProxy={onlineProxy}
@@ -171,7 +187,10 @@ export default function AppShell() {
         libraryBadge={libraryBadge}
         onClearLibraryBadge={() => setLibraryBadge(0)}
       />
-      <main className="relative min-h-0 flex-1 overflow-y-auto">
+      <main
+        ref={mainRef}
+        className="relative w-full min-w-0 min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+      >
         <div key={loc.pathname} className="view-fade min-h-full">
           <Routes location={loc}>
             <Route path="/" element={<Library />} />
@@ -182,6 +201,7 @@ export default function AppShell() {
         </div>
       </main>
       <Toaster />
+      <PrivacyDialog />
     </div>
   );
 }

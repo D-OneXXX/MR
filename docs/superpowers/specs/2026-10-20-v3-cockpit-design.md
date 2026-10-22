@@ -26,7 +26,7 @@
 ### 阅读态（Reader）
 
 - 全视口、无固定侧栏、无固定壳；画布恒为不透明 `#09090b`（亮色主题同样）。
-- 顶部 HUD：返回、标题、页签切换器、缩放组、窗口控制；非交互区兼任拖拽带，另保留 2px 常驻顶部拖拽带。
+- 顶部 HUD：返回、标题、页签切换器、缩放组、窗口控制；非交互区兼任拖拽带，另保留 8px 常驻顶部拖拽带（`h-2`）。
 - 底部 Dock：上一页、页目录、单页/双页/条漫分段、进度 Slider、页码、下一页、更多。
 - 显隐：空闲 1500ms 渐隐；条漫开始滚动立即隐藏；指针移动/按键/顶部边缘唤醒；悬停或焦点在 HUD 内不隐藏；隐藏时 `inert`（不可聚焦）但不卸载 DOM。
 - 进度 Slider：拖拽只做本地预览（缩略图仅用已缓存图，不发请求），提交在松手时；键盘 Home/End/方向键不与全局翻页重复触发。
@@ -53,7 +53,7 @@
 
 - Tailwind v4（Vite 插件）+ shadcn/Base UI；`@/*` 别名；旧 `theme.css` token 作为兼容桥。
 - 目录：
-  - `src/components/shell/`：AppShell、TitleBar、NavRail、OmniBar、StatusPill；
+  - `src/components/shell/`：AppShell、TitleBarV3、NavRail、OmniBar、StatusPill；
   - `src/components/library/`：BookInspector（含页目录）；
   - `src/components/Reader/`：ReaderHudTop、ReaderDock、ProgressScrubber、TabSwitcher（复用既有 Webtoon/spread/region/shortcuts）；
   - `src/features/workspace/`：页签模型与轻量会话快照；
@@ -92,12 +92,21 @@
 ## 8. 验证与未验证
 
 - 自动检查：`tsc --noEmit`、`npm run build`、`verify-spread.mjs`、`verify-region.mjs` 全通过。
-- 组件级验收（Playwright + IPC mock）：Phase 2 38 项、Phase 3 36 项、Phase 4 29 项、回退模式 8 项，全 PASS。
+- 组件级验收（Playwright + IPC mock，**当时验证记录**）：Phase 2 38 项、Phase 3 36 项、Phase 4 29 项、回退模式 8 项。
 - 真机：应用可启动、窗口响应正常；**真实 WebView2 内 DOM/滚动帧率/DPI/Mica 未测**（本机 CDP 端点零字节返回）。
 - 未验证项需真机手测：原生拖放、真实导入/删除、鼠标中键、长时间多页签内存、125%/150% DPI、窗口拖动/最大化。
 
 ## 9. 已知限制
 
-- 打包 chunk 591KB 警告未处理（可后续 manualChunks）。
+- 打包 chunk 约 700KB（2026-10-21 构建）警告未处理（可后续 manualChunks）。
 - 页签不跨重启恢复（有意为之，避免陈旧 bookId 与后端“一书一个 currentPage”语义冲突）。
 - 阅读态 HUD 在亮色主题下为白色实色（token 行为），若需“阅读 HUD 恒暗”需单独确认。
+
+## 2026-10-21 补充：与 /browser、配对桥接的边界
+
+- v0.6.0 已包含独立的 `/browser` 路由与内嵌浏览器窗口（label `browser`）、下载 zip/cbz 自动导入，
+  以及“外部系统浏览器协同导入”的长驻回环桥接。
+- 这些能力**不**注入第三方页面脚本、**不**采集或持久化 Cookie、**不**做站点适配；
+  浏览器窗口没有任何 Tauri IPC 权限（`capabilities/default.json` 仅授权 `windows: ["main"]`）。
+- 因此本文第 12 行“无 WebView 验证接管、无下载队列”应理解为：不做站点登录态接管、
+  不做应用内下载队列页面；内嵌浏览器与配对导入属于已交付的独立能力。

@@ -24,6 +24,76 @@ export interface BookInfo {
   nextUrl?: string | null;
 }
 
+/** 在线图片提纯：被剔除的页面（保留原顺序，恢复时插回）。 */
+export interface FilteredPage {
+  url: string;
+  width?: number | null;
+  height?: number | null;
+  reason: string;
+  score: number;
+  order: number;
+  anchor?: {
+    channel: string;
+    messageId: number;
+    photoIndex: number;
+    refreshBase?: string | null;
+  } | null;
+  sha256?: string | null;
+}
+
+export interface OnlineFilterStats {
+  siteProfiles: number;
+  rules: number;
+  blockedTotal: number;
+  restoredTotal: number;
+  lastUpdated?: string | null;
+}
+
+export type OnlineFilterRulePattern =
+  | { kind: "urlTemplate"; template: string }
+  | { kind: "exactUrl"; url: string }
+  | { kind: "sha256"; hash: string }
+  | { kind: "domClass"; value: string }
+  | { kind: "size"; width: number; height: number };
+
+export interface OnlineFilterRule {
+  id: string;
+  host: string;
+  action: "block" | "allow";
+  source: "user" | "learned" | "imported";
+  pattern: OnlineFilterRulePattern;
+  reason: string;
+  createdAt: string;
+  hits: number;
+}
+
+export type TelegramChapterKind = "telegraph" | "photos" | "document";
+
+export interface TelegramDocument {
+  url: string;
+  filename: string;
+  size?: number | null;
+}
+
+export interface TelegramChapter {
+  id: string;
+  title: string;
+  url: string;
+  messageId: number;
+  pageCount?: number | null;
+  kind: TelegramChapterKind;
+  document?: TelegramDocument | null;
+  grouped: boolean;
+}
+
+export interface TelegramChannel {
+  channel: string;
+  title: string;
+  chapters: TelegramChapter[];
+  before?: number | null;
+  hasMore: boolean;
+}
+
 export interface PageEntry {
   index: number;
   name: string;
@@ -419,6 +489,35 @@ export const api = {
   // 多话合集 / 系列 / 下一话。
   resolveOnlineBatch: (payloadJson: string) =>
     invoke<BookInfo[]>("resolve_online_batch", { payloadJson }),
+  // Telegram 公开频道/消息/Telegraph 直读（免登录，仅公开预览页）。
+  resolveTelegramChannel: (url: string, before?: number | null) =>
+    invoke<TelegramChannel>("resolve_telegram_channel", {
+      url,
+      before: before ?? null,
+    }),
+  downloadTelegramDocument: (url: string, filename: string) =>
+    invoke<BookInfo>("download_telegram_document", { url, filename }),
+  // 自学习提纯：统计、规则库、当前书被过滤页。
+  getOnlineFilterStatus: () =>
+    invoke<OnlineFilterStats>("get_online_filter_status"),
+  listOnlineFilterRules: () =>
+    invoke<OnlineFilterRule[]>("list_online_filter_rules"),
+  exportOnlineFilterRules: () =>
+    invoke<string>("export_online_filter_rules"),
+  importOnlineFilterRules: (json: string) =>
+    invoke<number>("import_online_filter_rules", { json }),
+  resetOnlineFilterRules: () => invoke<void>("reset_online_filter_rules"),
+  getFilteredPages: (bookId: string) =>
+    invoke<FilteredPage[]>("get_filtered_pages", { bookId }),
+  getFilteredPreview: (bookId: string, filteredIndex: number) =>
+    invoke<PageImage>("get_filtered_preview", { bookId, filteredIndex }),
+  markOnlinePageNonContent: (bookId: string, pageIndex: number) =>
+    invoke<BookInfo>("mark_online_page_non_content", { bookId, pageIndex }),
+  restoreOnlineFilteredPage: (bookId: string, filteredIndex: number) =>
+    invoke<BookInfo>("restore_online_filtered_page", {
+      bookId,
+      filteredIndex,
+    }),
   getSeriesBooks: (seriesId: string) =>
     invoke<BookInfo[]>("get_series_books", { seriesId }),
   getNextBook: (bookId: string) =>

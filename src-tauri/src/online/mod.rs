@@ -3,9 +3,11 @@
 //! 统一解析入口见 [`resolve`]：一次拉取后先试 JSON 清单，再试单页 HTML 图集。
 
 pub mod direct;
+pub mod filter;
 pub mod handoff;
 pub mod html;
 pub mod http;
+pub mod telegram;
 
 use std::collections::HashSet;
 use std::sync::{Condvar, Mutex};
@@ -21,7 +23,20 @@ pub const MAX_PAGES: usize = 5000;
 /// 在线请求使用的 User-Agent。
 pub const ONLINE_UA: &str = "MangaReader/0.1 online-direct";
 
-/// 单个页面引用（URL + 可选尺寸提示）。
+/// Telegram 等会过期的图片源坐标；图片直链失效时按此重新解析。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PageAnchor {
+    pub channel: String,
+    pub message_id: i64,
+    #[serde(default)]
+    pub photo_index: u32,
+    /// 刷新消息页的 origin（生产为 https://t.me；本地夹具可指向隔离服务）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_base: Option<String>,
+}
+
+/// 单个页面引用（URL + 可选尺寸提示 + 过期源锚点）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct PageRef {
     pub url: String,
@@ -29,6 +44,8 @@ pub struct PageRef {
     pub width: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<PageAnchor>,
 }
 
 /// 在线书缓存元数据（camelCase 落盘，与前端契约一致）。
@@ -51,6 +68,12 @@ pub struct StoredMeta {
     /// 下一话的规范化 URL；旧 meta_json 缺省为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_url: Option<String>,
+    /// 被提纯引擎剔除的页面，供“已过滤杂图抽屉”展示与恢复。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filtered: Vec<filter::FilteredPage>,
+    /// 上次解析学到的站点档案（只读展示/调试用）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter_profile: Option<filter::SiteProfile>,
 }
 
 /// 在线源内部错误（最终统一映射为 [`BackendError::Network`]）。
@@ -103,6 +126,7 @@ pub fn normalize_page_urls(page_urls: &[String]) -> Result<Vec<PageRef>, Backend
                 url: page,
                 width: None,
                 height: None,
+                anchor: None,
             });
         }
     }
@@ -145,11 +169,35 @@ pub fn page_name(p: &PageRef, index: usize) -> String {
         .unwrap_or_else(|| format!("第 {} 页", index + 1))
 }
 
-/// 统一在线解析入口：只拉取一次，先按 JSON 清单解析，失败后尝试单页 HTML 图集。
+/// 统一在线解析入口：Telegram/Telegraph 走专用 Provider；其余只拉取一次，
+/// 先按 JSON 清单解析，失败后尝试单页 HTML 图集。
 pub fn resolve(
     http: &dyn http::HttpTransport,
     raw_url: &str,
 ) -> Result<direct::OnlineBookMeta, BackendError> {
+    resolve_with(
+        http,
+        raw_url,
+        &filter::FilterMemory::default(),
+        &filter::FilterThresholds {
+            // 兼容入口不做额外图片探测；生产命令层使用默认 true。
+            probe_missing_dimensions: false,
+            ..filter::FilterThresholds::default()
+        },
+    )
+}
+
+/// 带站点学习记忆的解析入口；命令层负责从 SQLite 读取/写回档案与规则。
+pub fn resolve_with(
+    http: &dyn http::HttpTransport,
+    raw_url: &str,
+    memory: &filter::FilterMemory,
+    thresholds: &filter::FilterThresholds,
+) -> Result<direct::OnlineBookMeta, BackendError> {
+    // `tg://` 不是 http(s)，必须在 normalize_url 之前识别。
+    if telegram::is_telegram_url(raw_url) {
+        return telegram::resolve_book(http, raw_url.trim(), memory, thresholds);
+    }
     let url = normalize_url(raw_url)?;
     let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None, Some(url.as_str()))?;
     if !(200..300).contains(&resp.status) {
@@ -165,10 +213,21 @@ pub fn resolve(
     // 只有正文根本不是 JSON 时才回退 HTML；合法 JSON 但清单语义错误
     // （版本、页数、页 URL 非法等）必须原样返回清单错误，避免误当图集导入。
     let body_is_json = serde_json::from_slice::<serde_json::Value>(&resp.body).is_ok();
-    match direct::parse_manifest(&resp.body, &url) {
+    let mut effective_memory = memory.clone();
+    if effective_memory.host.is_empty() {
+        effective_memory.host = filter::url_host(url.as_str());
+    }
+    match direct::parse_manifest_with(&resp.body, &url, http, &effective_memory, thresholds) {
         Ok(meta) => Ok(meta),
         Err(json_err) if body_is_json => Err(json_err),
-        Err(json_err) => match html::parse_gallery(&resp.body, &base_url, &url) {
+        Err(json_err) => match html::parse_gallery_with(
+            &resp.body,
+            &base_url,
+            &url,
+            http,
+            &effective_memory,
+            thresholds,
+        ) {
             Ok(meta) => Ok(meta),
             Err(html_err) => Err(BackendError::Msg(format!(
                 "无法解析为 JSON 或 HTML 图集：JSON={json_err}; HTML={html_err}"
@@ -342,12 +401,14 @@ mod tests {
             url: "https://x/a/001.jpg".into(),
             width: None,
             height: None,
+            anchor: None,
         };
         assert_eq!(page_name(&p, 0), "001.jpg");
         let p = PageRef {
             url: "https://x/".into(),
             width: None,
             height: None,
+            anchor: None,
         };
         assert_eq!(page_name(&p, 2), "第 3 页");
     }

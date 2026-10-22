@@ -15,12 +15,29 @@ import {
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "@/components/Toast";
+import { useI18n, type MessageKey } from "@/i18n";
 import type { Direction, PageMode } from "@/components/Reader/spread";
 
-const MODES: { key: PageMode; label: string; short: string }[] = [
-  { key: "single", label: "单页", short: "单" },
-  { key: "double", label: "双页", short: "双" },
-  { key: "webtoon", label: "条漫", short: "条" },
+const MODES: {
+  key: PageMode;
+  labelKey: MessageKey;
+  shortKey: MessageKey;
+}[] = [
+  {
+    key: "single",
+    labelKey: "reader.mode.single",
+    shortKey: "reader.mode.singleShort",
+  },
+  {
+    key: "double",
+    labelKey: "reader.mode.double",
+    shortKey: "reader.mode.doubleShort",
+  },
+  {
+    key: "webtoon",
+    labelKey: "reader.mode.webtoon",
+    shortKey: "reader.mode.webtoonShort",
+  },
 ];
 
 const MENU_ITEM =
@@ -36,6 +53,7 @@ interface Props {
   mode: PageMode;
   webtoonAllowed: boolean;
   webtoonReason: string;
+  modeLocked?: boolean;
   onMode: (mode: PageMode) => void;
   tocOpen: boolean;
   onToc: () => void;
@@ -64,6 +82,7 @@ export default function ReaderDock({
   mode,
   webtoonAllowed,
   webtoonReason,
+  modeLocked = false,
   onMode,
   tocOpen,
   onToc,
@@ -76,6 +95,7 @@ export default function ReaderDock({
   slider,
   pageLabel,
 }: Props) {
+  const { t } = useI18n();
   const PrevIcon = dir === "rtl" ? ChevronRight : ChevronLeft;
   const NextIcon = dir === "rtl" ? ChevronLeft : ChevronRight;
 
@@ -94,8 +114,8 @@ export default function ReaderDock({
           size="icon"
           onClick={onPrev}
           disabled={!canPrev}
-          aria-label="上一页"
-          title="上一页"
+          aria-label={t("reader.nav.prev")}
+          title={t("reader.nav.prev")}
         >
           <PrevIcon className="size-4.5" />
         </Button>
@@ -103,9 +123,9 @@ export default function ReaderDock({
           variant="pill-ghost"
           size="icon"
           onClick={onToc}
-          aria-label="页目录"
+          aria-label={t("reader.toc.title")}
           aria-expanded={tocOpen}
-          title="页目录"
+          title={t("reader.toc.title")}
           className={cn(tocOpen && "bg-accent text-accent-foreground")}
         >
           <List className="size-4" />
@@ -116,15 +136,21 @@ export default function ReaderDock({
         <div
           className="flex shrink-0 items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
           role="group"
-          aria-label="版式"
+          aria-label={t("reader.mode.group")}
         >
           {!webtoonAllowed && (
             <span id="reader-webtoon-disabled-reason" className="sr-only">
               {webtoonReason}
             </span>
           )}
-          {MODES.map(({ key, label, short }) => {
-            const disabled = key === "webtoon" && !webtoonAllowed;
+          {MODES.map(({ key, labelKey, shortKey }) => {
+            const disabled =
+              (modeLocked && key !== "single") ||
+              (key === "webtoon" && !webtoonAllowed);
+            const label = t(labelKey);
+            const disabledReason = modeLocked
+              ? t("safeMode.readerLocked")
+              : webtoonReason;
             return (
               <Button
                 key={key}
@@ -133,7 +159,7 @@ export default function ReaderDock({
                 size="pill-sm"
                 onClick={() => {
                   if (disabled) {
-                    toast(webtoonReason);
+                    toast(disabledReason);
                     return;
                   }
                   onMode(key);
@@ -143,15 +169,19 @@ export default function ReaderDock({
                   disabled ? "reader-webtoon-disabled-reason" : undefined
                 }
                 aria-pressed={mode === key}
-                title={disabled ? webtoonReason : `切换到${label}`}
+                title={
+                  disabled
+                    ? disabledReason
+                    : t("reader.mode.switch", { mode: label })
+                }
                 className={cn(
-                  "h-8 px-2 text-[11px]",
+                  "h-8 px-2 text-[11px] whitespace-nowrap",
                   disabled &&
                     "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground",
                 )}
               >
-                <span className="hidden sm:inline">{label}</span>
-                <span className="sm:hidden">{short}</span>
+                <span className="hidden lg:inline">{label}</span>
+                <span className="lg:hidden">{t(shortKey)}</span>
               </Button>
             );
           })}
@@ -170,8 +200,8 @@ export default function ReaderDock({
           size="icon"
           onClick={onNext}
           disabled={!canNext}
-          aria-label="下一页"
-          title="下一页"
+          aria-label={t("reader.nav.next")}
+          title={t("reader.nav.next")}
         >
           <NextIcon className="size-4.5" />
         </Button>
@@ -184,8 +214,8 @@ export default function ReaderDock({
               buttonVariants({ variant: "pill-ghost", size: "icon" }),
               moreOpen && "bg-accent text-accent-foreground",
             )}
-            aria-label="更多"
-            title="更多"
+            aria-label={t("reader.more")}
+            title={t("reader.more")}
           >
             <MoreHorizontal className="size-4" />
           </PopoverTrigger>
@@ -202,7 +232,7 @@ export default function ReaderDock({
               onClick={onSettings}
             >
               <Settings className="size-4 text-muted-foreground" />
-              阅读设置
+              {t("reader.settings.title")}
             </button>
             <button
               type="button"
@@ -210,7 +240,7 @@ export default function ReaderDock({
               onClick={onShortcuts}
             >
               <Keyboard className="size-4 text-muted-foreground" />
-              快捷键速查
+              {t("reader.shortcuts.title")}
             </button>
           </PopoverContent>
         </Popover>

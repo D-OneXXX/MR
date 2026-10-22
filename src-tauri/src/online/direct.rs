@@ -6,6 +6,9 @@
 
 use sha2::{Digest, Sha256};
 
+use crate::online::filter::{
+    filter_candidates, CandidateImage, CandidateSource, FilterMemory, FilterThresholds, ProbeInfo,
+};
 use crate::online::http::HttpTransport;
 use crate::online::{
     normalize_page_urls, normalize_url, redact_url_for_log, title_from_url, truncate_chars,
@@ -25,6 +28,10 @@ pub struct OnlineBookMeta {
     pub series_title: Option<String>,
     pub chapter_index: Option<u32>,
     pub next_url: Option<String>,
+    /// 被提纯引擎剔除的页面（写入 meta_json 供抽屉展示/恢复）。
+    pub filtered: Vec<super::filter::FilteredPage>,
+    /// 本次解析学到的站点档案（命令层决定是否落库）。
+    pub filter_profile: Option<super::filter::SiteProfile>,
 }
 
 /// 链路字段的可选集合；manifestHash 不包含这些字段。
@@ -146,7 +153,105 @@ impl DirectImageProvider {
 }
 
 /// 解析 JSON 清单正文；标题缺失时退回 URL 推导名。
+///
+/// 这是保留给离线测试/兼容调用的入口：不做网络尺寸探测，但仍执行 URL/尺寸
+/// 静态过滤。生产入口见 [`parse_manifest_with`]。
 pub fn parse_manifest(body: &[u8], url: &url::Url) -> Result<OnlineBookMeta, BackendError> {
+    let parsed = parse_raw_manifest(body, url)?;
+    let mut memory = FilterMemory {
+        host: crate::online::filter::url_host(url.as_str()),
+        ..FilterMemory::default()
+    };
+    if memory.host.is_empty() {
+        memory.host = url.host_str().unwrap_or("").to_string();
+    }
+    let candidates: Vec<CandidateImage> = parsed
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| CandidateImage {
+            url: page.url.clone(),
+            width: page.width,
+            height: page.height,
+            order: index,
+            in_chrome: false,
+            container: None,
+            class_id: None,
+            alt: None,
+            source: CandidateSource::Json,
+            anchor: page.anchor.clone(),
+        })
+        .collect();
+    let mut probe = |_c: &CandidateImage| None;
+    let outcome = filter_candidates(
+        candidates,
+        &memory,
+        &FilterThresholds {
+            probe_missing_dimensions: false,
+            ..FilterThresholds::default()
+        },
+        &mut probe,
+    );
+    if outcome.pages.is_empty() && !parsed.pages.is_empty() {
+        return Err(BackendError::Msg(format!(
+            "清单图片均被判定为非正文图（已过滤 {} 张）",
+            outcome.blocked.len()
+        )));
+    }
+    make_filtered_meta(url, &parsed.title, outcome, parsed.links)
+}
+
+/// 带网络尺寸探测的清单解析入口。
+pub fn parse_manifest_with(
+    body: &[u8],
+    url: &url::Url,
+    http: &dyn HttpTransport,
+    memory: &FilterMemory,
+    thresholds: &FilterThresholds,
+) -> Result<OnlineBookMeta, BackendError> {
+    let parsed = parse_raw_manifest(body, url)?;
+    let candidates: Vec<CandidateImage> = parsed
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| CandidateImage {
+            url: page.url.clone(),
+            width: page.width,
+            height: page.height,
+            order: index,
+            in_chrome: false,
+            container: None,
+            class_id: None,
+            alt: None,
+            source: CandidateSource::Json,
+            anchor: page.anchor.clone(),
+        })
+        .collect();
+    let mut memory = memory.clone();
+    if memory.host.is_empty() {
+        memory.host = crate::online::filter::url_host(url.as_str());
+    }
+    let referer = url.as_str().to_string();
+    let mut probe = |candidate: &CandidateImage| {
+        probe_image(http, &referer, candidate)
+    };
+    let outcome = filter_candidates(candidates, &memory, thresholds, &mut probe);
+    if outcome.pages.is_empty() && !parsed.pages.is_empty() {
+        return Err(BackendError::Msg(format!(
+            "清单图片均被判定为非正文图（已过滤 {} 张）",
+            outcome.blocked.len()
+        )));
+    }
+    make_filtered_meta(url, &parsed.title, outcome, parsed.links)
+}
+
+struct RawParsedManifest {
+    title: String,
+    pages: Vec<PageRef>,
+    links: MetaLinks,
+}
+
+fn parse_raw_manifest(body: &[u8], url: &url::Url) -> Result<RawParsedManifest, BackendError> {
     let raw: RawManifest = serde_json::from_slice(body)
         .map_err(|e| BackendError::Msg(format!("清单格式不符：{e}")))?;
     if let Some(v) = raw.version {
@@ -180,6 +285,7 @@ pub fn parse_manifest(body: &[u8], url: &url::Url) -> Result<OnlineBookMeta, Bac
             url: page_url.to_string(),
             width,
             height,
+            anchor: None,
         });
     }
     let title = raw
@@ -192,17 +298,71 @@ pub fn parse_manifest(body: &[u8], url: &url::Url) -> Result<OnlineBookMeta, Bac
     let series_id = non_empty(raw.series_id.as_deref());
     let series_title = non_empty(raw.series_title.as_deref());
     let next_url = normalized_optional_url(raw.next_url.as_deref())?;
-    make_meta_with_links(
-        url,
-        &title,
+    Ok(RawParsedManifest {
+        title,
         pages,
-        MetaLinks {
+        links: MetaLinks {
             series_id,
             series_title,
             next_url,
             chapter_index: None,
         },
-    )
+    })
+}
+
+pub(crate) fn probe_image(
+    http: &dyn HttpTransport,
+    referer: &str,
+    candidate: &CandidateImage,
+) -> Option<ProbeInfo> {
+    // 4 MiB 足够覆盖绝大多数图片头；超限时放弃探测，交给声明尺寸/规则。
+    let resp = http
+        .get(
+            &candidate.url,
+            4 * 1024 * 1024,
+            Some(referer),
+            Some(referer),
+        )
+        .ok()?;
+    if !(200..300).contains(&resp.status) {
+        return None;
+    }
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(&resp.body))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(ProbeInfo {
+        width,
+        height,
+        sha256: Some(hex::encode(Sha256::digest(&resp.body))),
+    })
+}
+
+/// 用过滤结果构建带 filtered/profile 的 meta_json。
+pub fn make_filtered_meta(
+    canonical_url: &url::Url,
+    title: &str,
+    outcome: crate::online::filter::FilterOutcome,
+    links: MetaLinks,
+) -> Result<OnlineBookMeta, BackendError> {
+    let blocked = outcome.blocked.clone();
+    let profile = outcome.profile.clone();
+    let mut meta = make_meta_with_links(canonical_url, title, outcome.pages, links)?;
+    let mut stored: StoredMeta = serde_json::from_str(&meta.meta_json)
+        .map_err(|e| BackendError::Msg(format!("内部元数据错误：{e}")))?;
+    stored.schema = 2;
+    stored.filtered = blocked.clone();
+    stored.filter_profile = Some(profile.clone());
+    meta.meta_json = serde_json::to_string(&stored)
+        .map_err(|e| BackendError::Msg(format!("清单元数据序列化失败：{e}")))?;
+    meta.filtered = blocked;
+    meta.filter_profile = Some(profile);
+    meta.page_count = stored.pages.len();
+    Ok(meta)
 }
 
 /// 将最终标题与页面列表封装为 [`OnlineBookMeta`]（计算 manifestHash）。
@@ -235,7 +395,7 @@ pub fn make_meta_with_links(
         hex::encode(h.finalize())
     };
     let stored = StoredMeta {
-        schema: 1,
+        schema: 2,
         manifest_hash: hash,
         fetched_at: crate::db::now_str(),
         pages,
@@ -243,6 +403,8 @@ pub fn make_meta_with_links(
         series_title: links.series_title.clone(),
         chapter_index: links.chapter_index,
         next_url: links.next_url.clone(),
+        filtered: Vec::new(),
+        filter_profile: None,
     };
     let meta_json = serde_json::to_string(&stored)
         .map_err(|e| BackendError::Msg(format!("清单元数据序列化失败：{e}")))?;
@@ -256,6 +418,8 @@ pub fn make_meta_with_links(
         series_title: links.series_title,
         chapter_index: links.chapter_index,
         next_url: links.next_url,
+        filtered: Vec::new(),
+        filter_profile: None,
     })
 }
 
@@ -383,6 +547,68 @@ pub fn parse_batch_payload(body: &[u8]) -> Result<Vec<OnlineBookMeta>, BackendEr
             },
         )?])
     }
+}
+
+/// 批量清单：先按原格式解析，再逐章应用提纯（保留系列/下一话链路）。
+pub fn parse_batch_payload_with(
+    body: &[u8],
+    http: &dyn HttpTransport,
+    memory: &FilterMemory,
+    thresholds: &FilterThresholds,
+) -> Result<Vec<OnlineBookMeta>, BackendError> {
+    let metas = parse_batch_payload(body)?;
+    let mut out = Vec::with_capacity(metas.len());
+    for meta in metas {
+        let stored: StoredMeta = serde_json::from_str(&meta.meta_json)
+            .map_err(|e| BackendError::Msg(format!("内部元数据错误：{e}")))?;
+        let canonical = normalize_url(&meta.canonical_url)?;
+        let mut memory = memory.clone();
+        if memory.host.is_empty() {
+            memory.host = crate::online::filter::url_host(canonical.as_str());
+        }
+        let referer = canonical.as_str().to_string();
+        let candidates: Vec<CandidateImage> = stored
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| CandidateImage {
+                url: page.url.clone(),
+                width: page.width,
+                height: page.height,
+                order: index,
+                in_chrome: false,
+                container: None,
+                class_id: None,
+                alt: None,
+                source: CandidateSource::Json,
+                anchor: page.anchor.clone(),
+            })
+            .collect();
+        let mut probe = |candidate: &CandidateImage| {
+            probe_image(http, &referer, candidate)
+        };
+        let outcome = filter_candidates(candidates, &memory, thresholds, &mut probe);
+        if outcome.pages.is_empty() && !stored.pages.is_empty() {
+            return Err(BackendError::Msg(format!(
+                "章节「{}」的图片均被判定为非正文图（已过滤 {} 张）",
+                meta.title,
+                outcome.blocked.len()
+            )));
+        }
+        let links = MetaLinks {
+            series_id: stored.series_id,
+            series_title: stored.series_title,
+            next_url: stored.next_url,
+            chapter_index: stored.chapter_index,
+        };
+        out.push(make_filtered_meta(
+            &canonical,
+            &meta.title,
+            outcome,
+            links,
+        )?);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -533,6 +759,7 @@ mod tests {
             url: "http://x/1.jpg".into(),
             width: None,
             height: None,
+            anchor: None,
         }];
         let plain = make_meta(&url, "T", pages.clone()).unwrap();
         let linked = make_meta_with_links(

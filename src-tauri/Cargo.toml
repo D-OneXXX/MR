@@ -1,6 +1,6 @@
 [package]
 name = "manga-reader-tauri"
-version = "0.6.0"
+version = "0.12.1"
 description = "Local-first manga reader (Tauri 2 + React)"
 authors = ["manga-reader"]
 edition = "2021"
@@ -35,6 +35,8 @@ sysinfo = "0.31"
 dirs = "5"
 thiserror = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# 更新包签名校验（minisign / Ed25519，Tauri 更新器同款格式）。
+minisign-verify = "0.2"
 # 在线源：同步阻塞 HTTP + URL 规范化 + 文件名解码
 url = "2"
 percent-encoding = "2"

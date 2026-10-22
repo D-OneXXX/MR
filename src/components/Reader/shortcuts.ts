@@ -1,15 +1,21 @@
-/** 阅读器快捷键一览（设置页表格与阅读器 ? 弹层共用同一份数据源）。 */
-export const READER_SHORTCUTS: { keys: string; action: string }[] = [
-  { keys: "← / →", action: "翻页（方向随日式右开/西式左开）" },
-  { keys: "Space", action: "下一页" },
-  { keys: "Shift + Space", action: "上一页" },
-  { keys: "f", action: "切换版式（单页 / 双页 / 条漫）" },
-  { keys: "Ctrl + 1…9", action: "切换到书库 / 阅读页签" },
-  { keys: "Ctrl + W", action: "关闭当前阅读页签" },
-  { keys: "Ctrl + 滚轮 / 双指", action: "缩放" },
-  { keys: "拖拽", action: "平移（放大后）" },
-  { keys: "双击", action: "重置视图" },
-  { keys: "Home / End", action: "第一页 / 最后一页" },
-  { keys: "Esc", action: "关弹层 → 返回书库" },
-  { keys: "?", action: "本速查表" },
+import type { MessageKey } from "@/i18n";
+
+/** 阅读器快捷键一览（阅读器 ? 弹层使用；键位保持原样，说明走 i18n）。 */
+export const READER_SHORTCUTS: {
+  keys?: string;
+  keysKey?: MessageKey;
+  actionKey: MessageKey;
+}[] = [
+  { keys: "← / →", actionKey: "reader.shortcut.pageTurn" },
+  { keys: "Space", actionKey: "reader.nav.next" },
+  { keys: "Shift + Space", actionKey: "reader.nav.prev" },
+  { keys: "f", actionKey: "reader.shortcut.mode" },
+  { keys: "Ctrl + 1…9", actionKey: "reader.shortcut.tabs" },
+  { keys: "Ctrl + W", actionKey: "reader.shortcut.closeTab" },
+  { keysKey: "reader.shortcut.keys.zoom", actionKey: "reader.shortcut.zoom" },
+  { keysKey: "reader.shortcut.keys.pan", actionKey: "reader.shortcut.pan" },
+  { keysKey: "reader.shortcut.keys.reset", actionKey: "reader.shortcut.reset" },
+  { keys: "Home / End", actionKey: "reader.shortcut.homeEnd" },
+  { keys: "Esc", actionKey: "reader.shortcut.escape" },
+  { keys: "?", actionKey: "reader.shortcut.help" },
 ];

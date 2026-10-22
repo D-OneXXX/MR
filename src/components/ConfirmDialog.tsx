@@ -1,4 +1,5 @@
 import { AlertTriangle } from "lucide-react";
+import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,10 +28,11 @@ export default function ConfirmDialog({
   title,
   message,
   paths,
-  confirmText = "确认",
+  confirmText,
   onConfirm,
   onCancel,
 }: Props) {
+  const { t } = useI18n();
   return (
     <Dialog
       open
@@ -74,10 +76,10 @@ export default function ConfirmDialog({
 
         <DialogFooter className="mx-0 mb-0 flex-row justify-end rounded-b-2xl border-t border-border bg-muted/40 px-6 py-4">
           <Button variant="pill" size="pill-sm" onClick={onCancel}>
-            取消
+            {t("common.cancel")}
           </Button>
           <Button variant="pill-danger" size="pill-sm" onClick={onConfirm}>
-            {confirmText}
+            {confirmText ?? t("common.confirm")}
           </Button>
         </DialogFooter>
       </DialogContent>

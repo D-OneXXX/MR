@@ -2379,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "manga-reader-tauri"
-version = "0.6.0"
+version = "0.12.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2388,6 +2388,7 @@ dependencies = [
  "image",
  "jpeg-decoder",
  "lru",
+ "minisign-verify",
  "parking_lot",
  "percent-encoding",
  "regex",
@@ -2440,6 +2441,12 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "minisign-verify"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22f9645cb765ea72b8111f36c522475d2daa0d22c957a9826437e97534bc4e9e"
 
 [[package]]
 name = "miniz_oxide"

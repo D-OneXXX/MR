@@ -434,17 +434,21 @@ mod tests {
                     url: "http://example.test/001.png".into(),
                     width: Some(1),
                     height: Some(1),
+                    anchor: None,
                 },
                 crate::online::PageRef {
                     url: "http://example.test/002.png".into(),
                     width: None,
                     height: None,
+                    anchor: None,
                 },
             ],
             series_id: None,
             series_title: None,
             chapter_index: None,
             next_url: None,
+            filtered: Vec::new(),
+            filter_profile: None,
         };
         let meta_json = serde_json::to_string(&meta).expect("序列化 StoredMeta");
         state

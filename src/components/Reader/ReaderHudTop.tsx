@@ -7,6 +7,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { WindowControls } from "@/components/shell/WindowControls";
+import SafeModePill from "@/components/shell/SafeModePill";
+import { useI18n } from "@/i18n";
+import { useSafeMode } from "@/features/safeMode/SafeModeContext";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -18,6 +21,8 @@ interface Props {
   hidden: boolean;
   /** 页签切换器等可选插槽（渲染在标题之后）。 */
   tabsSlot?: ReactNode;
+  /** 在线提纯：过滤抽屉与“标记本页”操作（渲染在页签之后）。 */
+  filterSlot?: ReactNode;
   onBack: () => void;
   onZoom: (factor: number) => void;
   onReset: () => void;
@@ -31,17 +36,23 @@ export default function ReaderHudTop({
   maxZoom,
   hidden,
   tabsSlot,
+  filterSlot,
   onBack,
   onZoom,
   onReset,
 }: Props) {
+  const { t } = useI18n();
+  const { active: safeMode } = useSafeMode();
+  // In safe mode the status capsule is a persistent safety affordance, not
+  // decorative chrome, so the top capsule never auto-hides.
+  const concealed = hidden && !safeMode;
   return (
     <div
       data-reader-hud
-      inert={hidden}
+      inert={concealed}
       className={cn(
         "pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-center gap-2 px-3 pt-3 transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
-        hidden && "-translate-y-2 opacity-0",
+        concealed && "-translate-y-2 opacity-0",
       )}
     >
       <div className="pointer-events-auto flex h-11 min-w-0 max-w-[min(760px,calc(100vw-9rem))] flex-1 items-center gap-0.5 rounded-full border border-border/70 bg-card/95 pl-1.5 pr-1 text-foreground shadow-hard-sm backdrop-blur-md">
@@ -49,8 +60,8 @@ export default function ReaderHudTop({
           variant="pill-ghost"
           size="icon"
           onClick={onBack}
-          aria-label="返回书库"
-          title="返回书库 (Esc)"
+          aria-label={t("reader.hud.back")}
+          title={t("reader.hud.backTitle")}
         >
           <ArrowLeft className="size-4" />
         </Button>
@@ -62,6 +73,10 @@ export default function ReaderHudTop({
         </span>
 
         {tabsSlot}
+
+        {filterSlot}
+
+        <SafeModePill compact />
 
         {/* 非交互拖拽区：双击最大化由 Tauri 处理 */}
         <span
@@ -78,8 +93,8 @@ export default function ReaderHudTop({
           size="icon"
           onClick={() => onZoom(1 / 1.25)}
           disabled={zoom <= minZoom + 1e-6}
-          aria-label="缩小"
-          title="缩小"
+          aria-label={t("reader.hud.zoomOut")}
+          title={t("reader.hud.zoomOut")}
         >
           <ZoomOut className="size-4" />
         </Button>
@@ -88,8 +103,8 @@ export default function ReaderHudTop({
           size="icon"
           onClick={() => onZoom(1.25)}
           disabled={zoom >= maxZoom - 1e-6}
-          aria-label="放大"
-          title="放大"
+          aria-label={t("reader.hud.zoomIn")}
+          title={t("reader.hud.zoomIn")}
         >
           <ZoomIn className="size-4" />
         </Button>
@@ -97,8 +112,8 @@ export default function ReaderHudTop({
           variant="pill-ghost"
           size="icon"
           onClick={onReset}
-          aria-label="重置视图"
-          title="重置视图（双击画布）"
+          aria-label={t("reader.hud.reset")}
+          title={t("reader.hud.resetTitle")}
         >
           <RotateCcw className="size-3.5" />
         </Button>

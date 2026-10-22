@@ -1,5 +1,7 @@
+export type SourceKind = "local" | "online";
+
 export interface SourceDisplay {
-  badge: string;
+  kind: SourceKind;
   text: string;
 }
 
@@ -20,7 +22,7 @@ export function onlineSourceAddress(path: string): string {
   try {
     const url = new URL(path);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return "在线源地址（已脱敏）";
+      return "";
     }
     const segments = url.pathname
       .split("/")
@@ -36,7 +38,7 @@ export function onlineSourceAddress(path: string): string {
     const label = clip(last, 28);
     return `${url.protocol}//${url.host}/${label ? `…/${label}` : ""}`;
   } catch {
-    return "在线源地址（已脱敏）";
+    return "";
   }
 }
 
@@ -45,7 +47,7 @@ export function sourceDisplay(book: {
   path: string;
 }): SourceDisplay {
   if (book.sourceType === "local") {
-    return { badge: "本地", text: clip(localSourceName(book.path), 40) };
+    return { kind: "local", text: clip(localSourceName(book.path), 40) };
   }
-  return { badge: "在线 URL", text: onlineSourceAddress(book.path) };
+  return { kind: "online", text: onlineSourceAddress(book.path) };
 }

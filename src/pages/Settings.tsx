@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   BookOpen,
   CalendarDays,
@@ -11,15 +12,16 @@ import {
   HardDrive,
   ImageOff,
   Info,
+  LifeBuoy,
   Loader2,
   Monitor,
   Moon,
+  PackageOpen,
   Palette,
   RefreshCw,
   Save,
   ScanLine,
   ShieldCheck,
-  Sparkles,
   Sun,
   Trash2,
   TrendingUp,
@@ -34,6 +36,13 @@ import {
   type MemoryStats,
   type Settings,
 } from "@/lib/tauri";
+import {
+  LOCALE_OPTIONS,
+  translate,
+  useI18n,
+  type MessageKey,
+} from "@/i18n";
+import { isLocale } from "@/i18n/config";
 import {
   useTheme,
   type ThemeMode,
@@ -66,11 +75,16 @@ import {
   SettingRow,
   SettingsSection,
 } from "@/components/settings/SettingsSection";
+import UpdatesPanel from "@/components/settings/UpdatesPanel";
+import PrivacyPanel from "@/components/settings/PrivacyPanel";
+import SupportPanel from "@/components/settings/SupportPanel";
+import OnlineFilterPanel from "@/components/settings/OnlineFilterPanel";
+import { useSafeMode } from "@/features/safeMode/SafeModeContext";
+import { recordBreadcrumb } from "@/features/resilience";
 import ErrorState from "@/components/ErrorState";
+import { APP_VERSION, BUILD_COMMIT } from "@/lib/version";
 import PixelPet from "@/components/PixelPet";
 import { toast, toastErr } from "@/components/Toast";
-
-const APP_VERSION = "v0.6.0";
 
 const DEFAULT_FORM: Settings = {
   theme: "system",
@@ -100,19 +114,29 @@ const DEFAULT_FORM: Settings = {
 
 const THEME_OPTIONS: ReadonlyArray<{
   value: ThemeMode;
-  label: string;
-  hint: string;
+  labelKey: MessageKey;
+  hintKey: MessageKey;
   icon: LucideIcon;
 }> = [
-  { value: "system", label: "跟随系统", hint: "随系统深浅色切换", icon: Monitor },
-  { value: "light", label: "浅色", hint: "冰蓝画布", icon: Sun },
-  { value: "dark", label: "深色", hint: "深夜座舱", icon: Moon },
+  {
+    value: "system",
+    labelKey: "theme.system",
+    hintKey: "settings.theme.systemHint",
+    icon: Monitor,
+  },
+  {
+    value: "light",
+    labelKey: "theme.light",
+    hintKey: "settings.theme.lightHint",
+    icon: Sun,
+  },
+  {
+    value: "dark",
+    labelKey: "theme.dark",
+    hintKey: "settings.theme.darkHint",
+    icon: Moon,
+  },
 ];
-
-const CONCURRENCY_ITEMS = Array.from({ length: 8 }, (_, index) => {
-  const value = String(index + 1);
-  return { value, label: `${value} 并发` };
-});
 
 function normalizeTheme(value: string): ThemeMode {
   return value === "light" || value === "dark" || value === "system"
@@ -155,6 +179,7 @@ function MetricCard({
   value: number;
   unit: string;
 }) {
+  const { formatNumber } = useI18n();
   return (
     <Card className="gap-3 p-5">
       <div className="flex items-center justify-between gap-3">
@@ -167,7 +192,7 @@ function MetricCard({
       </div>
       <div className="flex items-end gap-1.5">
         <span className="text-3xl font-extrabold leading-none tracking-tight tabular-nums">
-          {value.toLocaleString("zh-CN")}
+          {formatNumber(value)}
         </span>
         <span className="pb-0.5 text-xs font-medium text-muted-foreground">
           {unit}
@@ -193,6 +218,17 @@ function MemoryTile({ label, value }: { label: string; value: string }) {
  */
 export default function SettingsPage() {
   const { mode, setMode } = useTheme();
+  const { locale, setLocale, t, formatNumber } = useI18n();
+  const { active: safeMode } = useSafeMode();
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState(() => {
+    const requested = searchParams.get("tab");
+    return requested === "updates" ||
+      requested === "privacy" ||
+      requested === "support"
+      ? requested
+      : "general";
+  });
   const [form, setForm] = useState<Settings>(DEFAULT_FORM);
   const [mem, setMem] = useState<MemoryStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -200,7 +236,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [experimentalBusy, setExperimentalBusy] = useState<
-    "experimentalWebtoon" | "experimentalOnline" | null
+    "experimentalOnline" | null
   >(null);
   const [scanning, setScanning] = useState(false);
   const [detectingProxy, setDetectingProxy] = useState(false);
@@ -223,6 +259,16 @@ export default function SettingsPage() {
   const loadSeqRef = useRef(0);
   const dashSeqRef = useRef(0);
 
+  const concurrencyItems = Array.from({ length: 8 }, (_, index) => {
+    const value = String(index + 1);
+    return {
+      value,
+      label: t("settings.online.concurrencyItem", {
+        count: formatNumber(index + 1),
+      }),
+    };
+  });
+
   function set<K extends keyof Settings>(key: K, value: Settings[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
     setDirty(true);
@@ -233,12 +279,21 @@ export default function SettingsPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [settings, memory, session] = await Promise.all([
+      const [settings, session] = await Promise.all([
         api.getSettings(),
-        api.getMemoryStats().catch(() => null),
         api.getSessionOnlineHeaders().catch(() => null),
       ]);
       if (seq !== loadSeqRef.current) return;
+      // Cache metrics are supplementary: never let a slow sysinfo query keep
+      // the whole settings page in its loading state.
+      void api.getMemoryStats().then(
+        (memory) => {
+          if (seq === loadSeqRef.current) setMem(memory);
+        },
+        () => {
+          if (seq === loadSeqRef.current) setMem(null);
+        },
+      );
       // localStorage 中的模式优先：首次启动没有偏好时跟随系统，
       // 不让历史数据库里的 dark 默认值覆盖「跟随系统」。
       let storedMode: string | null = null;
@@ -257,13 +312,14 @@ export default function SettingsPage() {
         theme,
         ...(sessionValue ? { onlineHeaders: sessionValue } : {}),
       });
-      setMem(memory);
       setSessionActive(sessionValue.length > 0);
       setSessionHeaders(sessionValue.length > 0);
       setDirty(false);
     } catch (e) {
       if (seq !== loadSeqRef.current) return;
-      setLoadError(typeof e === "string" ? e : "读取设置失败");
+      setLoadError(
+        typeof e === "string" ? e : translate("settings.errors.loadSettings"),
+      );
       toastErr("get_settings", e);
     } finally {
       if (seq === loadSeqRef.current) setLoading(false);
@@ -276,6 +332,25 @@ export default function SettingsPage() {
       loadSeqRef.current += 1;
     };
   }, [load]);
+
+  useEffect(() => {
+    const requested = searchParams.get("tab");
+    if (
+      requested === "updates" ||
+      requested === "privacy" ||
+      requested === "support"
+    ) {
+      setTab(requested);
+    }
+  }, [searchParams]);
+
+  // Each settings tab is a separate page-length surface; always start at the
+  // top instead of inheriting the previous tab's scroll offset.
+  useEffect(() => {
+    document
+      .querySelector("main")
+      ?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [tab]);
 
   // 顶栏也可切换主题；保证表单里的 theme 始终与 ThemeProvider 当前模式一致。
   useEffect(() => {
@@ -297,7 +372,9 @@ export default function SettingsPage() {
       setDash(next);
     } catch (e) {
       if (seq !== dashSeqRef.current) return;
-      setDashError(typeof e === "string" ? e : "统计读取失败");
+      setDashError(
+        typeof e === "string" ? e : translate("settings.errors.loadStats"),
+      );
     } finally {
       if (seq === dashSeqRef.current) setDashLoading(false);
     }
@@ -347,6 +424,7 @@ export default function SettingsPage() {
   const onThemeChange = (next: ThemeMode) => {
     // setMode 立即改 <html data-theme> 并写入 localStorage 与数据库。
     setMode(next);
+    recordBreadcrumb("themeChange");
     setForm((prev) => ({ ...prev, theme: next }));
     if (loadedRef.current) {
       loadedRef.current = { ...loadedRef.current, theme: next };
@@ -356,12 +434,12 @@ export default function SettingsPage() {
   // 实验开关立即持久化，但只写「数据库最新值 + 本开关」，
   // 不会把表单里尚未保存的代理、请求头、目录等一起写库。
   const toggleExperimental = async (
-    key: "experimentalWebtoon" | "experimentalOnline",
+    key: "experimentalOnline",
     value: boolean,
   ) => {
     if (experimentalBusy !== null || saving || loading) return;
     const previous = form[key];
-    const label = key === "experimentalWebtoon" ? "条漫模式" : "在线 URL 直读";
+    const feature = t("settings.online.urlTitle");
     setExperimentalBusy(key);
     setForm((prev) => ({ ...prev, [key]: value }));
     try {
@@ -370,7 +448,12 @@ export default function SettingsPage() {
       await api.setSettings(next);
       loadedRef.current = next;
       setForm((prev) => ({ ...prev, [key]: value }));
-      toast(`${label}${value ? "已开启" : "已关闭"}`);
+      toast(
+        t(
+          value ? "settings.toast.featureOn" : "settings.toast.featureOff",
+          { feature },
+        ),
+      );
     } catch (e) {
       setForm((prev) => ({ ...prev, [key]: previous }));
       toastErr("set_settings", e);
@@ -384,7 +467,7 @@ export default function SettingsPage() {
       const picked = await openDialog({
         directory: true,
         multiple: false,
-        title: "选择漫画目录",
+        title: t("settings.library.pickTitle"),
         defaultPath: form.libraryDir.trim() || undefined,
       });
       if (typeof picked === "string") set("libraryDir", picked);
@@ -399,7 +482,11 @@ export default function SettingsPage() {
     setScanning(true);
     try {
       const result = await api.scanLibrary(dir);
-      toast(`扫描完成，书库共 ${result.books.length} 本`);
+      toast(
+        t("settings.toast.scanDone", {
+          count: formatNumber(result.books.length),
+        }),
+      );
     } catch (e) {
       toastErr("scan_library", e);
     } finally {
@@ -414,9 +501,9 @@ export default function SettingsPage() {
       const proxy = (await api.detectSystemProxy())?.trim() ?? "";
       if (proxy) {
         set("onlineProxy", proxy);
-        toast("已填入系统代理，保存后生效");
+        toast(t("settings.toast.proxyFilled"));
       } else {
-        toast("未检测到开启的系统代理");
+        toast(t("settings.toast.proxyNotFound"));
       }
     } catch (e) {
       toastErr("detect_system_proxy", e);
@@ -431,7 +518,7 @@ export default function SettingsPage() {
       setForm((prev) => ({ ...prev, onlineHeaders: "" }));
       setSessionActive(false);
       setDirty(true);
-      toast("已清空内存凭据");
+      toast(t("settings.toast.sessionCleared"));
     } catch (e) {
       toastErr("clear_session_online_headers", e);
     }
@@ -440,7 +527,7 @@ export default function SettingsPage() {
   const onTestOnline = async () => {
     const target = onlineTestUrl.trim();
     if (!target) {
-      toast("请填写清单或图集 URL");
+      toast(t("settings.toast.urlRequired"));
       return;
     }
     setTestingOnline(true);
@@ -448,17 +535,24 @@ export default function SettingsPage() {
     try {
       const probe = await api.testOnlineConnection(target);
       writeOnlineLastTest({ ok: probe.ok, url: target });
-      const summary = `${probe.title} · ${probe.pageCount} 页 · ${probe.elapsedMs} ms`;
+      const summary = t("settings.online.testSummary", {
+        title: probe.title,
+        pages: formatNumber(probe.pageCount),
+        ms: formatNumber(probe.elapsedMs),
+      });
       setOnlineTestResult({
         ok: probe.ok,
         message: probe.ok ? summary : probe.message || summary,
       });
-      if (!probe.ok) toast(probe.message || "清单没有可读页面");
+      if (!probe.ok) {
+        toast(probe.message || t("settings.toast.noReadablePages"));
+      }
     } catch (e) {
       writeOnlineLastTest({ ok: false, url: target });
       setOnlineTestResult({
         ok: false,
-        message: typeof e === "string" ? e : "连接测试失败",
+        message:
+          typeof e === "string" ? e : t("settings.errors.connectTest"),
       });
       toastErr("test_online_connection", e);
     } finally {
@@ -470,7 +564,11 @@ export default function SettingsPage() {
     setClearingThumbs(true);
     try {
       const count = await api.clearThumbCache();
-      toast(`已清除 ${count} 个封面缓存，重新进入书库将自动重建`);
+      toast(
+        t("settings.toast.thumbsCleared", {
+          count: formatNumber(count),
+        }),
+      );
       await refreshMemory();
     } catch (e) {
       toastErr("clear_thumbnail_cache", e);
@@ -483,7 +581,7 @@ export default function SettingsPage() {
     setClearingPages(true);
     try {
       await api.clearPages();
-      toast("页面缓存已清空");
+      toast(t("settings.toast.pagesCleared"));
       await refreshMemory();
     } catch (e) {
       toastErr("clear_pages", e);
@@ -515,8 +613,9 @@ export default function SettingsPage() {
         loadedRef.current = base;
       }
       setDirty(false);
+      recordBreadcrumb("settingsChange");
       window.dispatchEvent(new Event("mr-settings-updated"));
-      toast("设置已保存");
+      toast(t("settings.toast.saved"));
       void api
         .getMemoryStats()
         .then(setMem)
@@ -535,14 +634,14 @@ export default function SettingsPage() {
       : 0;
   const last7Pages = dash ? sumLast7Days(dash.heatmap) : 0;
   const statusText = loading
-    ? "正在加载设置…"
+    ? t("settings.status.loading")
     : loadError
-      ? "设置未加载"
+      ? t("settings.status.loadFailed")
       : saving
-        ? "正在保存设置…"
+        ? t("settings.status.saving")
         : dirty
-          ? "有未保存的更改"
-          : "所有更改已保存";
+          ? t("settings.status.dirty")
+          : t("settings.status.saved");
   const statusDot = loading || loadError
     ? "bg-muted-foreground"
     : saving
@@ -556,77 +655,141 @@ export default function SettingsPage() {
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-            Preferences
+            {t("settings.page.eyebrow")}
           </p>
           <h1 className="mt-1 text-3xl font-extrabold tracking-tight sm:text-4xl">
-            设置
+            {t("nav.settings")}
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            外观、在线源、阅读统计与缓存都在这台设备上管理。
+            {t("settings.page.description")}
           </p>
         </div>
         <Badge variant="secondary" className="gap-1.5 px-3 py-1">
           <ShieldCheck className="size-3.5" />
-          本地优先
+          {t("settings.page.localFirst")}
         </Badge>
       </header>
 
       {loadError ? (
         <Card className="items-start gap-3 p-2">
           <ErrorState
-            message={`设置加载失败：${loadError}`}
+            message={t("settings.errors.loadSettingsDetail", {
+              detail: loadError,
+            })}
             onRetry={() => void load()}
           />
         </Card>
       ) : loading ? (
         <Card className="p-2" aria-busy="true">
-          <PixelPet mode="loading" message="正在加载设置" />
+          <PixelPet mode="loading" message={t("settings.page.loading")} />
         </Card>
       ) : (
-        <Tabs defaultValue="general" className="gap-4">
+        <Tabs
+          value={tab}
+          onValueChange={setTab}
+          className="gap-4"
+        >
           <TabsList
-            aria-label="设置分区"
-            className="h-auto w-full flex-wrap justify-start gap-1 rounded-full border border-border bg-card p-1.5 shadow-hard group-data-horizontal/tabs:h-auto"
+            aria-label={t("settings.tabs.label")}
+            className="h-auto w-full flex-wrap justify-start gap-0.5 rounded-full border border-border bg-card p-1.5 shadow-hard group-data-horizontal/tabs:h-auto"
           >
             <TabsTrigger
               value="general"
-              className="h-9 flex-none gap-2 rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
             >
               <Palette className="size-4" />
-              常规与主题
+              {t("settings.tabs.general")}
+            </TabsTrigger>
+            <TabsTrigger
+              value="updates"
+              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+            >
+              <PackageOpen className="size-4" />
+              {t("updates.tab")}
+            </TabsTrigger>
+            <TabsTrigger
+              value="privacy"
+              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+            >
+              <ShieldCheck className="size-4" />
+              {t("privacy.tab")}
             </TabsTrigger>
             <TabsTrigger
               value="online"
-              className="h-9 flex-none gap-2 rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
             >
               <Wifi className="size-4" />
-              在线源网络
+              {t("settings.tabs.online")}
             </TabsTrigger>
             <TabsTrigger
               value="reading"
-              className="h-9 flex-none gap-2 rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
             >
               <TrendingUp className="size-4" />
-              阅读统计
+              {t("settings.tabs.reading")}
             </TabsTrigger>
             <TabsTrigger
               value="cache"
-              className="h-9 flex-none gap-2 rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
             >
               <HardDrive className="size-4" />
-              缓存
+              {t("settings.tabs.cache")}
+            </TabsTrigger>
+            <TabsTrigger
+              value="support"
+              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+            >
+              <LifeBuoy className="size-4" />
+              {t("support.tab")}
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="general" className="mt-2 space-y-4">
             <SettingsSection
+              icon={Globe2}
+              title={t("settings.language.title")}
+              description={t("settings.language.description")}
+            >
+              <div className="flex min-w-0 flex-col gap-2 sm:max-w-md">
+                <Label htmlFor="ui-language">
+                  {t("settings.language.label")}
+                </Label>
+                <Select
+                  items={LOCALE_OPTIONS}
+                  value={locale}
+                  onValueChange={(value) => {
+                    if (isLocale(value)) {
+                      setLocale(value);
+                      recordBreadcrumb("localeChange");
+                    }
+                  }}
+                >
+                  <SelectTrigger
+                    id="ui-language"
+                    aria-label={t("settings.language.label")}
+                    className="w-full"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LOCALE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </SettingsSection>
+
+            <SettingsSection
               icon={Palette}
-              title="外观主题"
-              description="选择界面配色；切换会立即生效，并同步到本地偏好与数据库。"
+              title={t("settings.theme.title")}
+              description={t("settings.theme.description")}
             >
               <div
                 role="group"
-                aria-label="主题模式"
+                aria-label={t("settings.theme.groupLabel")}
                 className="grid gap-2 sm:grid-cols-3"
               >
                 {THEME_OPTIONS.map((option) => {
@@ -639,14 +802,18 @@ export default function SettingsPage() {
                       aria-pressed={active}
                       variant={active ? "pill-primary" : "pill"}
                       size="pill"
-                      className="h-auto w-full flex-col items-start gap-1 rounded-2xl px-4 py-3 text-left"
+                      className="h-auto w-full min-w-0 flex-col items-start gap-1 rounded-2xl px-4 py-3 text-left"
                       onClick={() => onThemeChange(option.value)}
                       disabled={saving}
                     >
-                      <span className="flex w-full items-center gap-2">
-                        <Icon className="size-4" />
-                        <span className="font-semibold">{option.label}</span>
-                        {active ? <Check className="ml-auto size-4" /> : null}
+                      <span className="flex w-full min-w-0 items-center gap-2">
+                        <Icon className="size-4 shrink-0" />
+                        <span className="min-w-0 font-semibold">
+                          {t(option.labelKey)}
+                        </span>
+                        {active ? (
+                          <Check className="ml-auto size-4 shrink-0" />
+                        ) : null}
                       </span>
                       <span
                         className={cn(
@@ -656,54 +823,26 @@ export default function SettingsPage() {
                             : "text-muted-foreground",
                         )}
                       >
-                        {option.hint}
+                        {t(option.hintKey)}
                       </span>
                     </Button>
                   );
                 })}
               </div>
               <p className="text-xs text-muted-foreground">
-                「跟随系统」会随操作系统的深浅色自动切换。
-              </p>
-            </SettingsSection>
-
-            <SettingsSection
-              icon={Sparkles}
-              title="实验性功能"
-              description="默认关闭。开关切换会立即写入设置，不需要再点保存。"
-            >
-              <SettingRow
-                title="条漫模式"
-                description="韩漫长条纵向连续滚动，在单页 / 双页之外提供第三版式。"
-                badge={
-                  <Badge
-                    variant={form.experimentalWebtoon ? "success" : "muted"}
-                  >
-                    {form.experimentalWebtoon ? "已开启" : "未开启"}
-                  </Badge>
-                }
-              >
-                <Switch
-                  aria-label="条漫模式"
-                  checked={form.experimentalWebtoon}
-                  disabled={experimentalBusy !== null || saving}
-                  onCheckedChange={(checked) =>
-                    void toggleExperimental("experimentalWebtoon", checked)
-                  }
-                />
-              </SettingRow>
-              <p className="text-xs text-muted-foreground">
-                切换只更新这个开关，不会顺带保存本页其他未保存的修改。
+                {t("settings.theme.systemNote")}
               </p>
             </SettingsSection>
 
             <SettingsSection
               icon={FolderOpen}
-              title="书库目录"
-              description="指定漫画所在目录；扫描会把新书加入本机书库。"
+              title={t("settings.library.title")}
+              description={t("settings.library.description")}
             >
               <div className="space-y-2">
-                <Label htmlFor="library-dir">扫描目录</Label>
+                <Label htmlFor="library-dir">
+                  {t("settings.library.dirLabel")}
+                </Label>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Input
                     id="library-dir"
@@ -711,28 +850,29 @@ export default function SettingsPage() {
                     onChange={(event) =>
                       set("libraryDir", event.currentTarget.value)
                     }
-                    placeholder="D:\Manga 或 /path/to/manga"
-                    className="font-mono text-xs sm:flex-1"
+                    placeholder={t("settings.library.dirPlaceholder")}
+                    className="min-w-0 font-mono text-xs sm:flex-1"
                     spellCheck={false}
                     disabled={saving}
                   />
-                  <div className="flex gap-2">
+                  <div className="flex shrink-0 gap-2">
                     <Button
                       type="button"
                       variant="pill"
                       size="pill"
+                      className="whitespace-nowrap"
                       onClick={() => void onPickDir()}
                       disabled={scanning || saving}
                     >
                       <FolderOpen />
-                      选择
+                      {t("settings.library.pick")}
                     </Button>
                     <Button
                       type="button"
                       variant="pill"
                       size="pill-icon"
-                      aria-label="清空目录"
-                      title="清空目录"
+                      aria-label={t("settings.library.clearDir")}
+                      title={t("settings.library.clearDir")}
                       onClick={() => set("libraryDir", "")}
                       disabled={!form.libraryDir || saving}
                     >
@@ -746,6 +886,7 @@ export default function SettingsPage() {
                   type="button"
                   variant="pill-primary"
                   size="pill"
+                  className="whitespace-nowrap"
                   onClick={() => void onScanLibrary()}
                   disabled={scanning || saving || !form.libraryDir.trim()}
                 >
@@ -754,66 +895,106 @@ export default function SettingsPage() {
                   ) : (
                     <ScanLine />
                   )}
-                  {scanning ? "扫描中…" : "立即扫描"}
+                  {scanning
+                    ? t("settings.library.scanning")
+                    : t("settings.library.scanNow")}
                 </Button>
                 <span className="text-xs text-muted-foreground">
-                  扫描使用上方目录，无需先保存；结果会以提示显示。
+                  {t("settings.library.scanHint")}
                 </span>
               </div>
             </SettingsSection>
 
             <SettingsSection
               icon={Info}
-              title="关于"
-              description="MangaReader 是一个本地优先的漫画阅读器。"
+              title={t("settings.about.title")}
+              description={t("settings.about.description")}
             >
-              <dl className="grid gap-2 sm:grid-cols-3">
+              <dl className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-xl border border-border bg-background/60 px-3 py-2.5">
                   <dt className="text-[11px] font-medium text-muted-foreground">
-                    版本
+                    {t("settings.about.version")}
                   </dt>
                   <dd className="font-mono mt-1 text-sm font-semibold">
-                    {APP_VERSION}
+                    v{APP_VERSION}
                   </dd>
                 </div>
                 <div className="rounded-xl border border-border bg-background/60 px-3 py-2.5">
                   <dt className="text-[11px] font-medium text-muted-foreground">
-                    设置存储
+                    {t("settings.about.commit")}
                   </dt>
-                  <dd className="mt-1 text-sm font-semibold">本机 SQLite</dd>
+                  <dd className="font-mono mt-1 truncate text-sm font-semibold" title={BUILD_COMMIT}>
+                    {BUILD_COMMIT}
+                  </dd>
                 </div>
                 <div className="rounded-xl border border-border bg-background/60 px-3 py-2.5">
                   <dt className="text-[11px] font-medium text-muted-foreground">
-                    数据去向
+                    {t("settings.about.storage")}
                   </dt>
-                  <dd className="mt-1 text-sm font-semibold">不离开设备</dd>
+                  <dd className="mt-1 text-sm font-semibold">
+                    {t("settings.about.storageValue")}
+                  </dd>
+                </div>
+                <div className="rounded-xl border border-border bg-background/60 px-3 py-2.5">
+                  <dt className="text-[11px] font-medium text-muted-foreground">
+                    {t("settings.about.dataFlow")}
+                  </dt>
+                  <dd className="mt-1 text-sm font-semibold">
+                    {t("settings.about.dataFlowValue")}
+                  </dd>
                 </div>
               </dl>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                设置与阅读记录保存在本机；扫描、在线请求与阅读都不会上传个人数据。
+                {t("settings.about.note")}
               </p>
             </SettingsSection>
           </TabsContent>
 
+          <TabsContent value="updates" className="mt-2 space-y-4">
+            <UpdatesPanel />
+          </TabsContent>
+
+          <TabsContent value="privacy" className="mt-2 space-y-4">
+            <PrivacyPanel />
+          </TabsContent>
+
           <TabsContent value="online" className="mt-2 space-y-4">
+            {safeMode ? (
+              <Card className="items-start gap-3 p-5">
+                <span className="grid size-10 shrink-0 place-items-center rounded-2xl border border-border bg-warning text-background shadow-hard-sm">
+                  <ShieldCheck className="size-4.5" aria-hidden />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="text-base font-extrabold">
+                    {t("safeMode.settingsOnlinePausedTitle")}
+                  </h2>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    {t("safeMode.settingsOnlinePausedBody")}
+                  </p>
+                </div>
+              </Card>
+            ) : (
+              <>
             <SettingsSection
               icon={Wifi}
-              title="在线 URL 直读"
-              description="支持 JSON 清单与单页 HTML 图集；关闭时书库与浏览器会提示先开启。"
+              title={t("settings.online.urlTitle")}
+              description={t("settings.online.urlDescription")}
             >
               <SettingRow
-                title="启用在线源"
-                description="允许从在线清单 / 图集导入并阅读，导入的章节会进入本机书库。"
+                title={t("settings.online.enableTitle")}
+                description={t("settings.online.enableDescription")}
                 badge={
                   <Badge
                     variant={form.experimentalOnline ? "success" : "muted"}
                   >
-                    {form.experimentalOnline ? "已开启" : "未开启"}
+                    {form.experimentalOnline
+                      ? t("common.enabled")
+                      : t("common.disabled")}
                   </Badge>
                 }
               >
                 <Switch
-                  aria-label="启用在线源"
+                  aria-label={t("settings.online.enableTitle")}
                   checked={form.experimentalOnline}
                   disabled={experimentalBusy !== null || saving}
                   onCheckedChange={(checked) =>
@@ -822,18 +1003,20 @@ export default function SettingsPage() {
                 />
               </SettingRow>
               <p className="text-xs text-muted-foreground">
-                切换会立即持久化；下方网络参数需点击底部「保存设置」后生效。
+                {t("settings.online.enableNote")}
               </p>
             </SettingsSection>
 
             <SettingsSection
               icon={Globe2}
-              title="网络与请求"
-              description="代理、并发与请求头会随在线请求发送；请只填写你信任的源或网关。"
+              title={t("settings.online.networkTitle")}
+              description={t("settings.online.networkDescription")}
             >
               <div className="grid gap-4 lg:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="online-proxy">代理地址</Label>
+                <div className="min-w-0 space-y-2">
+                  <Label htmlFor="online-proxy">
+                    {t("settings.online.proxyLabel")}
+                  </Label>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Input
                       id="online-proxy"
@@ -841,8 +1024,8 @@ export default function SettingsPage() {
                       onChange={(event) =>
                         set("onlineProxy", event.currentTarget.value)
                       }
-                      placeholder="留空直连，或 http://127.0.0.1:7890"
-                      className="font-mono text-xs sm:flex-1"
+                      placeholder={t("settings.online.proxyPlaceholder")}
+                      className="min-w-0 font-mono text-xs sm:flex-1"
                       spellCheck={false}
                       disabled={saving}
                     />
@@ -850,27 +1033,31 @@ export default function SettingsPage() {
                       type="button"
                       variant="pill"
                       size="pill"
+                      className="shrink-0 whitespace-nowrap"
                       onClick={() => void onDetectProxy()}
                       disabled={detectingProxy || saving}
-                      title="读取 Windows 系统代理并填入代理地址，不会自动保存"
+                      title={t("settings.online.detectProxyTitle")}
+                      aria-label={t("settings.online.detectProxyTitle")}
                     >
                       {detectingProxy ? (
                         <Loader2 className="animate-spin" />
                       ) : (
                         <Globe2 />
                       )}
-                      {detectingProxy ? "检测中…" : "系统代理"}
+                      {detectingProxy
+                        ? t("settings.online.detecting")
+                        : t("settings.online.detectProxy")}
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    支持 http / https / socks5；留空为直连。
+                    {t("settings.online.proxyHint")}
                   </p>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>页面并发</Label>
+                <div className="min-w-0 space-y-2">
+                  <Label>{t("settings.online.concurrencyLabel")}</Label>
                   <Select
-                    items={CONCURRENCY_ITEMS}
+                    items={concurrencyItems}
                     value={String(form.onlineConcurrency)}
                     disabled={saving}
                     onValueChange={(value) => {
@@ -883,11 +1070,17 @@ export default function SettingsPage() {
                       }
                     }}
                   >
-                    <SelectTrigger aria-label="页面并发">
-                      <SelectValue placeholder="选择并发数" />
+                    <SelectTrigger
+                      aria-label={t("settings.online.concurrencyLabel")}
+                    >
+                      <SelectValue
+                        placeholder={t(
+                          "settings.online.concurrencyPlaceholder",
+                        )}
+                      />
                     </SelectTrigger>
                     <SelectContent>
-                      {CONCURRENCY_ITEMS.map((item) => (
+                      {concurrencyItems.map((item) => (
                         <SelectItem key={item.value} value={item.value}>
                           {item.label}
                         </SelectItem>
@@ -895,16 +1088,20 @@ export default function SettingsPage() {
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    1–8；并发越高越快，也更容易被源限流。
+                    {t("settings.online.concurrencyHint")}
                   </p>
                 </div>
               </div>
 
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Label htmlFor="online-headers">自定义请求头</Label>
+                  <Label htmlFor="online-headers">
+                    {t("settings.online.headersLabel")}
+                  </Label>
                   {sessionActive ? (
-                    <Badge variant="success">会话凭据生效中</Badge>
+                    <Badge variant="success">
+                      {t("settings.online.sessionActive")}
+                    </Badge>
                   ) : null}
                 </div>
                 <Textarea
@@ -914,34 +1111,37 @@ export default function SettingsPage() {
                     set("onlineHeaders", event.currentTarget.value)
                   }
                   rows={3}
-                  placeholder='{"Authorization":"Bearer ..."} 或 session=...; token=...'
+                  placeholder={t("settings.online.headersPlaceholder")}
                   className="min-h-28 font-mono text-xs"
                   spellCheck={false}
                   autoComplete="off"
                   disabled={saving}
                 />
                 <p className="text-xs leading-relaxed text-muted-foreground">
-                  请求头以明文保存在本机设置中，并会随请求发送到你配置的源或网关。
+                  {t("settings.online.headersHint")}
                 </p>
               </div>
 
               <div className="space-y-3 rounded-2xl border border-border bg-background/60 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold">存储模式</p>
+                    <p className="text-sm font-semibold">
+                      {t("settings.online.storageMode")}
+                    </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      会话模式不写入数据库，退出应用即清除。
+                      {t("settings.online.storageModeDescription")}
                     </p>
                   </div>
                   <div
                     className="flex flex-wrap gap-2"
                     role="group"
-                    aria-label="请求头存储模式"
+                    aria-label={t("settings.online.storageModeGroup")}
                   >
                     <Button
                       type="button"
                       variant={sessionHeaders ? "pill-primary" : "pill"}
                       size="pill-sm"
+                      className="whitespace-nowrap"
                       aria-pressed={sessionHeaders}
                       disabled={saving}
                       onClick={() => {
@@ -949,12 +1149,13 @@ export default function SettingsPage() {
                         setDirty(true);
                       }}
                     >
-                      仅驻留内存
+                      {t("settings.online.memoryOnly")}
                     </Button>
                     <Button
                       type="button"
                       variant={!sessionHeaders ? "pill-primary" : "pill"}
                       size="pill-sm"
+                      className="whitespace-nowrap"
                       aria-pressed={!sessionHeaders}
                       disabled={saving}
                       onClick={() => {
@@ -962,7 +1163,7 @@ export default function SettingsPage() {
                         setDirty(true);
                       }}
                     >
-                      持久化到本地库
+                      {t("settings.online.persistLocal")}
                     </Button>
                   </div>
                 </div>
@@ -971,28 +1172,29 @@ export default function SettingsPage() {
                     type="button"
                     variant="pill"
                     size="pill-sm"
+                    className="whitespace-nowrap"
                     onClick={() => void onClearSessionHeaders()}
                     disabled={!sessionActive || saving}
                   >
                     <Trash2 />
-                    清空内存凭据
+                    {t("settings.online.clearSession")}
                   </Button>
                   <span className="text-xs text-muted-foreground">
                     {sessionActive
-                      ? "当前有请求头保存在进程内存中。"
-                      : "当前没有会话请求头。"}
+                      ? t("settings.online.sessionPresent")
+                      : t("settings.online.sessionAbsent")}
                   </span>
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                存储模式切换后需点击底部「保存设置」生效。
+                {t("settings.online.storageModeNote")}
               </p>
             </SettingsSection>
 
             <SettingsSection
               icon={Activity}
-              title="连通性测试"
-              description="解析目标清单或图集，只做探测，不写入书库。"
+              title={t("settings.online.testTitle")}
+              description={t("settings.online.testDescription")}
             >
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Input
@@ -1000,15 +1202,16 @@ export default function SettingsPage() {
                   onChange={(event) =>
                     setOnlineTestUrl(event.currentTarget.value)
                   }
-                  placeholder="https://example.com/manifest.json"
-                  aria-label="在线清单或图集测试 URL"
-                  className="font-mono text-xs sm:flex-1"
+                  placeholder={t("settings.online.testUrlPlaceholder")}
+                  aria-label={t("settings.online.testUrlAria")}
+                  className="min-w-0 font-mono text-xs sm:flex-1"
                   spellCheck={false}
                 />
                 <Button
                   type="button"
                   variant="pill"
                   size="pill"
+                  className="shrink-0 whitespace-nowrap"
                   onClick={() => void onTestOnline()}
                   disabled={testingOnline || saving}
                 >
@@ -1017,7 +1220,9 @@ export default function SettingsPage() {
                   ) : (
                     <RefreshCw />
                   )}
-                  {testingOnline ? "测试中…" : "测试连接"}
+                  {testingOnline
+                    ? t("settings.online.testing")
+                    : t("settings.online.testConnection")}
                 </Button>
               </div>
               {onlineTestResult ? (
@@ -1032,7 +1237,9 @@ export default function SettingsPage() {
                       onlineTestResult.ok ? "success" : "destructive"
                     }
                   >
-                    {onlineTestResult.ok ? "可连接" : "失败"}
+                    {onlineTestResult.ok
+                      ? t("settings.online.reachable")
+                      : t("status.testFail")}
                   </Badge>
                   <span className="min-w-0 flex-1 break-words text-xs leading-relaxed">
                     {onlineTestResult.message}
@@ -1040,9 +1247,13 @@ export default function SettingsPage() {
                 </div>
               ) : null}
               <p className="text-xs text-muted-foreground">
-                测试使用已保存的代理与请求头；修改后请先保存设置。
+                {t("settings.online.testHint")}
               </p>
             </SettingsSection>
+
+            <OnlineFilterPanel />
+              </>
+            )}
           </TabsContent>
 
           <TabsContent value="reading" className="mt-2 space-y-4">
@@ -1051,7 +1262,7 @@ export default function SettingsPage() {
                 <div className="flex items-start gap-2.5">
                   <Info className="mt-0.5 size-4 shrink-0 text-destructive" />
                   <p className="text-sm text-muted-foreground">
-                    阅读统计加载失败：{dashError}
+                    {t("settings.stats.loadError", { detail: dashError })}
                   </p>
                 </div>
                 <Button
@@ -1061,47 +1272,47 @@ export default function SettingsPage() {
                   onClick={() => void loadDashboard()}
                 >
                   <RefreshCw />
-                  重试
+                  {t("common.retry")}
                 </Button>
               </Card>
             ) : dashLoading || !dash ? (
               <Card className="p-6" aria-busy="true">
                 <p className="text-sm text-muted-foreground">
-                  正在汇总本机阅读记录…
+                  {t("settings.stats.loading")}
                 </p>
               </Card>
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <MetricCard
                   icon={BookOpen}
-                  label="总藏书"
+                  label={t("settings.stats.totalBooks")}
                   value={dash.totalBooks}
-                  unit="本"
+                  unit={t("settings.stats.unitBooks")}
                 />
                 <MetricCard
                   icon={TrendingUp}
-                  label="在读"
+                  label={t("settings.stats.reading")}
                   value={dash.reading}
-                  unit="本"
+                  unit={t("settings.stats.unitBooks")}
                 />
                 <MetricCard
                   icon={CalendarDays}
-                  label="今日阅读"
+                  label={t("settings.stats.todayPages")}
                   value={dash.todayPages}
-                  unit="页"
+                  unit={t("common.pages")}
                 />
                 <MetricCard
                   icon={Gauge}
-                  label="近 7 天"
+                  label={t("settings.stats.last7Pages")}
                   value={last7Pages}
-                  unit="页"
+                  unit={t("common.pages")}
                 />
               </div>
             )}
             <Card className="flex-row items-start gap-2.5 p-4">
               <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
               <p className="text-xs leading-relaxed text-muted-foreground">
-                只统计本机阅读记录中实际翻过的页面；未打开的书与未记录进度不计入。
+                {t("settings.stats.note")}
               </p>
             </Card>
           </TabsContent>
@@ -1109,16 +1320,16 @@ export default function SettingsPage() {
           <TabsContent value="cache" className="mt-2 space-y-4">
             <SettingsSection
               icon={Gauge}
-              title="缓存预算"
-              description="预算越高，翻页越顺滑，但进程内存占用也越高。"
+              title={t("settings.cache.budgetTitle")}
+              description={t("settings.cache.budgetDescription")}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <Label>内存缓存预算</Label>
+                <Label>{t("settings.cache.budgetLabel")}</Label>
                 <Badge
                   variant="secondary"
                   className="font-mono px-3 py-1 tabular-nums"
                 >
-                  {form.cacheBudgetMb} MB
+                  {formatNumber(form.cacheBudgetMb)} MB
                 </Badge>
               </div>
               <Slider
@@ -1134,21 +1345,21 @@ export default function SettingsPage() {
                     typeof value === "number" ? value : (value[0] ?? 64),
                   )
                 }
-                getAriaLabel={() => "缓存预算（MB）"}
+                getAriaLabel={() => t("settings.cache.budgetAria")}
               />
               <div className="flex justify-between text-[11px] text-muted-foreground">
-                <span>64 MB</span>
-                <span>2048 MB</span>
+                <span>{formatNumber(64)} MB</span>
+                <span>{formatNumber(2048)} MB</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                保存后立即套用到页面与缩略图缓存。
+                {t("settings.cache.budgetHint")}
               </p>
             </SettingsSection>
 
             <SettingsSection
               icon={Cpu}
-              title="内存使用"
-              description="本次运行的内存与缓存快照。"
+              title={t("settings.cache.memoryTitle")}
+              description={t("settings.cache.memoryDescription")}
               action={
                 <Button
                   type="button"
@@ -1157,7 +1368,7 @@ export default function SettingsPage() {
                   onClick={() => void refreshMemory()}
                 >
                   <RefreshCw />
-                  刷新
+                  {t("common.refresh")}
                 </Button>
               }
             >
@@ -1165,55 +1376,65 @@ export default function SettingsPage() {
                 <>
                   <div className="flex items-center justify-between gap-2 text-xs">
                     <span className="font-medium text-muted-foreground">
-                      预算使用
+                      {t("settings.cache.budgetUsage")}
                     </span>
                     <span className="font-mono font-semibold tabular-nums">
-                      {cachePct}%
+                      {formatNumber(cachePct)}%
                     </span>
                   </div>
                   <Progress value={cachePct} />
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     <MemoryTile
-                      label="进程占用"
+                      label={t("settings.cache.process")}
                       value={`${mem.processMb.toFixed(1)} MB`}
                     />
                     <MemoryTile
-                      label="图片缓存"
+                      label={t("settings.cache.imageCache")}
                       value={`${formatMb(mem.cacheBytes)} / ${formatMb(mem.cacheLimitBytes)}`}
                     />
                     <MemoryTile
-                      label="缓存页面"
-                      value={`${mem.cachedPages} 页`}
+                      label={t("settings.cache.cachedPages")}
+                      value={t("settings.cache.pagesValue", {
+                        count: formatNumber(mem.cachedPages),
+                      })}
                     />
                     <MemoryTile
-                      label="封面缩略图"
-                      value={`${mem.cachedThumbs} 张`}
+                      label={t("settings.cache.cachedThumbs")}
+                      value={t("settings.cache.thumbsValue", {
+                        count: formatNumber(mem.cachedThumbs),
+                      })}
                     />
                     <MemoryTile
-                      label="条漫缓存"
-                      value={`${formatMb(mem.webtoonBytes)} · ${mem.webtoonTiles} 片`}
+                      label={t("settings.cache.webtoonCache")}
+                      value={t("settings.cache.webtoonValue", {
+                        size: formatMb(mem.webtoonBytes),
+                        count: formatNumber(mem.webtoonTiles),
+                      })}
                     />
                     <MemoryTile
-                      label="预算上限"
+                      label={t("settings.cache.limit")}
                       value={formatMb(mem.cacheLimitBytes)}
                     />
                   </div>
                 </>
               ) : (
-                <p className="text-sm text-muted-foreground">暂无内存统计。</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.cache.empty")}
+                </p>
               )}
             </SettingsSection>
 
             <SettingsSection
               icon={Database}
-              title="缓存维护"
-              description="清理后按需重建，不影响书库与阅读进度。"
+              title={t("settings.cache.maintenanceTitle")}
+              description={t("settings.cache.maintenanceDescription")}
             >
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
                   variant="pill"
                   size="pill"
+                  className="whitespace-nowrap"
                   onClick={() => void onClearThumbs()}
                   disabled={clearingThumbs || clearingPages || saving}
                 >
@@ -1222,12 +1443,15 @@ export default function SettingsPage() {
                   ) : (
                     <ImageOff />
                   )}
-                  {clearingThumbs ? "清除中…" : "清除封面缓存"}
+                  {clearingThumbs
+                    ? t("settings.cache.clearing")
+                    : t("settings.cache.clearThumbs")}
                 </Button>
                 <Button
                   type="button"
                   variant="pill"
                   size="pill"
+                  className="whitespace-nowrap"
                   onClick={() => void onClearPages()}
                   disabled={clearingPages || clearingThumbs || saving}
                 >
@@ -1236,37 +1460,44 @@ export default function SettingsPage() {
                   ) : (
                     <Trash2 />
                   )}
-                  {clearingPages ? "清理中…" : "清空页面缓存"}
+                  {clearingPages
+                    ? t("settings.cache.purging")
+                    : t("settings.cache.clearPages")}
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                封面缓存清空后，重新进入书库会自动生成。
+                {t("settings.cache.clearHint")}
               </p>
             </SettingsSection>
+          </TabsContent>
+
+          <TabsContent value="support" className="mt-2 space-y-4">
+            <SupportPanel />
           </TabsContent>
         </Tabs>
       )}
 
+      {tab !== "updates" && tab !== "privacy" && tab !== "support" ? (
       <div className="sticky bottom-4 z-30 mt-6">
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-hard">
-          <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-muted-foreground">
+          <div className="flex min-w-0 flex-1 items-center gap-2 text-xs font-medium text-muted-foreground">
             <span
               className={cn("size-2 shrink-0 rounded-full", statusDot)}
               aria-hidden
             />
             <span className="truncate">{statusText}</span>
           </div>
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex shrink-0 items-center gap-3">
             {dirty && !saving ? (
-              <span className="hidden text-xs text-muted-foreground sm:inline">
-                保存后写入本机设置
+              <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline">
+                {t("settings.status.saveHint")}
               </span>
             ) : null}
             <Button
               type="button"
               variant="pill-primary"
               size="pill"
-              className="min-w-32"
+              className="min-w-32 whitespace-nowrap"
               onClick={() => void onSave()}
               disabled={!ready || saving || experimentalBusy !== null}
             >
@@ -1275,11 +1506,14 @@ export default function SettingsPage() {
               ) : (
                 <Save />
               )}
-              {saving ? "保存中…" : "保存设置"}
+              {saving
+                ? t("common.saving")
+                : t("settings.saveButton")}
             </Button>
           </div>
         </div>
       </div>
+      ) : null}
     </div>
   );
 }

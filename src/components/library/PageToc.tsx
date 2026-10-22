@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { api, type PageEntry } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { translate, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import ErrorState from "@/components/ErrorState";
@@ -33,6 +34,7 @@ export default function PageToc({
   currentPage,
   onSelect,
 }: PageTocProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [entries, setEntries] = useState<PageEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +62,9 @@ export default function PageToc({
       (e) => {
         if (!alive) return;
         setEntries([]);
-        setError(typeof e === "string" ? e : "页面目录加载失败");
+        setError(
+          typeof e === "string" ? e : translate("toc.errorFallback"),
+        );
       },
     );
     return () => {
@@ -98,9 +102,9 @@ export default function PageToc({
         className="flex h-10 w-full items-center gap-2 rounded-full border border-border bg-card px-4 text-left text-sm font-semibold text-foreground shadow-hard-sm outline-none transition-transform hover:-translate-y-px hover:bg-accent focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background active:translate-y-0 active:shadow-none"
       >
         <ListTree className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">页面目录</span>
+        <span className="min-w-0 flex-1">{t("toc.title")}</span>
         <span className="font-mono text-[11px] font-normal text-muted-foreground">
-          {pageCount} 页
+          {t("toc.pageCount", { count: pageCount })}
         </span>
         {open ? (
           <ChevronUp className="size-4 shrink-0 text-muted-foreground" />
@@ -122,22 +126,25 @@ export default function PageToc({
                 setQuery(e.currentTarget.value);
                 setExpanded(false);
               }}
-              placeholder="搜索页码或文件名…"
-              aria-label="搜索页面目录"
-              className="h-9 rounded-full pl-9 font-mono text-xs"
+              placeholder={t("toc.searchPlaceholder")}
+              aria-label={t("toc.searchAria")}
+              className="h-9 min-w-0 rounded-full pl-9 font-mono text-xs"
             />
           </div>
 
           {loading ? (
-            <PixelPet mode="loading" message="正在读取页面目录" />
+            <PixelPet mode="loading" message={t("toc.loading")} />
           ) : error ? (
-            <ErrorState message={`目录加载失败：${error}`} onRetry={retry} />
+            <ErrorState
+              message={t("toc.error", { error })}
+              onRetry={retry}
+            />
           ) : filtered.length === 0 ? (
             <PixelPet
               message={
                 (entries?.length ?? 0) === 0
-                  ? "这本书还没有可读页面"
-                  : "没有匹配的页面"
+                  ? t("toc.emptyBook")
+                  : t("toc.emptySearch")
               }
             />
           ) : (
@@ -162,7 +169,7 @@ export default function PageToc({
                             {page}
                           </span>
                           <span className="min-w-0 flex-1 truncate">
-                            {entry.name || `第 ${page} 页`}
+                            {entry.name || t("toc.pageLabel", { page })}
                           </span>
                         </button>
                       </li>
@@ -170,29 +177,32 @@ export default function PageToc({
                   })}
                 </ul>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span
                   className="font-mono text-[10px] text-muted-foreground"
                   role="status"
                 >
-                  显示 {shown.length} / {filtered.length} 页
+                  {t("toc.showing", {
+                    shown: shown.length,
+                    total: filtered.length,
+                  })}
                 </span>
                 {canWindow && (
                   <Button
                     variant="pill-ghost"
                     size="pill-sm"
-                    className="ml-auto"
+                    className="ml-auto whitespace-nowrap"
                     onClick={() => setExpanded((value) => !value)}
                   >
                     {expanded ? (
                       <>
                         <ChevronUp />
-                        收起
+                        {t("toc.collapse")}
                       </>
                     ) : (
                       <>
                         <ChevronDown />
-                        显示全部（{filtered.length} 页）
+                        {t("toc.showAll", { count: filtered.length })}
                       </>
                     )}
                   </Button>

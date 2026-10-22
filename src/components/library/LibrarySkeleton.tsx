@@ -1,12 +1,14 @@
+import { useI18n } from "@/i18n";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /** 初始加载时的书卡骨架网格，尺寸与真实卡片一致，避免布局跳动。 */
 export default function LibrarySkeleton({ count = 12 }: { count?: number }) {
+  const { t } = useI18n();
   return (
     <div
       className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
       role="status"
-      aria-label="正在载入书架"
+      aria-label={t("library.loadingAria")}
     >
       {Array.from({ length: count }, (_, index) => (
         <div

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 export interface MenuItem {
@@ -27,6 +28,7 @@ const EDGE = 8;
  * 阶段被卸载导致后续 click 永远不命中菜单项。
  */
 export default function ContextMenu({ x, y, items, onClose }: Props) {
+  const { t } = useI18n();
   const ref = useRef<HTMLDivElement | null>(null);
   const focusedRef = useRef(false);
 
@@ -98,7 +100,7 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
     <div
       ref={ref}
       role="menu"
-      aria-label="书籍操作"
+      aria-label={t("menu.aria")}
       className="fixed z-[100] min-w-[180px] rounded-2xl border border-border bg-popover p-1.5 text-popover-foreground shadow-hard"
       style={{ left, top }}
       onMouseDown={(e) => e.stopPropagation()}

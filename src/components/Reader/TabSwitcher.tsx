@@ -7,6 +7,7 @@ import {
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/features/workspace/WorkspaceContext";
+import { useI18n } from "@/i18n";
 
 interface Props {
   open: boolean;
@@ -22,6 +23,7 @@ const ITEM =
  */
 export default function TabSwitcher({ open, onOpenChange }: Props) {
   const ws = useWorkspace();
+  const { t } = useI18n();
   const total = ws.tabs.length + 1;
 
   return (
@@ -33,10 +35,10 @@ export default function TabSwitcher({ open, onOpenChange }: Props) {
             "h-8 gap-1 px-2",
             open && "bg-accent text-accent-foreground",
           )}
-          aria-label={`阅读页签，共 ${total} 个`}
+          aria-label={t("reader.tabs.aria", { count: total })}
           aria-haspopup="menu"
           aria-expanded={open}
-          title={`阅读页签（Ctrl+1…${ws.maxTabs + 1} 切换）`}
+          title={t("reader.tabs.title", { max: ws.maxTabs + 1 })}
         >
           <Layers className="size-3.5" />
           <span className="mono text-[10px] tabular-nums">{total}</span>
@@ -48,11 +50,11 @@ export default function TabSwitcher({ open, onOpenChange }: Props) {
           sideOffset={10}
           data-reader-hud
           role="menu"
-          aria-label="阅读页签"
+          aria-label={t("reader.tabs.menu")}
           className="reader-portal w-72! rounded-2xl! border! border-border! bg-popover! p-1.5! shadow-hard!"
         >
           <div className="flex h-7 items-center justify-between px-2 text-[10px] font-medium text-muted-foreground">
-            <span>阅读页签</span>
+            <span>{t("reader.tabs.heading")}</span>
             <span className="mono tabular-nums">
               {total}/{ws.maxTabs + 1}
             </span>
@@ -68,7 +70,7 @@ export default function TabSwitcher({ open, onOpenChange }: Props) {
             className={ITEM}
           >
             <LibraryBig className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="flex-1 truncate">书库</span>
+            <span className="flex-1 truncate">{t("nav.library")}</span>
             <span className="mono text-[10px] text-muted-foreground">Ctrl+1</span>
           </button>
 
@@ -109,8 +111,8 @@ export default function TabSwitcher({ open, onOpenChange }: Props) {
               <button
                 type="button"
                 onClick={() => ws.closeTab(tab.bookId)}
-                aria-label={`关闭 ${tab.title}`}
-                title="关闭页签（中键 / Ctrl+W）"
+                aria-label={t("reader.tabs.close", { title: tab.title })}
+                title={t("reader.tabs.closeHint")}
                 className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:bg-destructive/20 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X className="size-3" />
@@ -120,12 +122,12 @@ export default function TabSwitcher({ open, onOpenChange }: Props) {
 
           {ws.tabs.length === 0 && (
             <p className="px-2 py-2 text-[11px] text-muted-foreground">
-              还没有打开的漫画。
+              {t("reader.tabs.empty")}
             </p>
           )}
 
           <p className="mt-1 border-t border-border/60 px-2 pb-1 pt-2 text-[10px] text-muted-foreground">
-            中键或 Ctrl+W 关闭当前 · Ctrl+1…{ws.maxTabs + 1} 切换
+            {t("reader.tabs.footer", { max: ws.maxTabs + 1 })}
           </p>
         </PopoverContent>
       </Popover>

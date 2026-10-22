@@ -845,6 +845,13 @@ const WebtoonView = memo(function WebtoonView({
 
   /* ---------- 指针：单击切 HUD；双指捏合调宽度 ---------- */
   const onPointerDown = (e: React.PointerEvent) => {
+    // 捕获指针：在 HUD/窗口外释放也会收到 up/cancel，避免残留指针
+    // 把下一次单指操作误判成双指捏合。
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* 某些合成事件不支持捕获；up/cancel 仍会清理 */
+    }
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointersRef.current.size === 2) {
       const [a, b] = [...pointersRef.current.values()];
@@ -864,6 +871,14 @@ const WebtoonView = memo(function WebtoonView({
   };
   const onPointerMove = (e: React.PointerEvent) => {
     if (!pointersRef.current.has(e.pointerId)) return;
+    if (e.buttons === 0) {
+      // 丢失 up（例如系统对话框/窗口失焦）时，move 的 buttons 归零即视为
+      // 已释放；先清理该指针，避免状态泄漏。
+      pointersRef.current.delete(e.pointerId);
+      if (pointersRef.current.size < 2) pinchRef.current.dist = 0;
+      tapRef.current.id = -1;
+      return;
+    }
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointersRef.current.size < 2) return;
     const [a, b] = [...pointersRef.current.values()];
@@ -896,6 +911,16 @@ const WebtoonView = memo(function WebtoonView({
     if (pointersRef.current.size < 2) pinchRef.current.dist = 0;
     tapRef.current.id = -1;
   };
+
+  useEffect(() => {
+    const clear = () => {
+      pointersRef.current.clear();
+      pinchRef.current.dist = 0;
+      tapRef.current.id = -1;
+    };
+    window.addEventListener("blur", clear);
+    return () => window.removeEventListener("blur", clear);
+  }, []);
 
   const retryTile = (key: string) => {
     const [i, tile] = key.split(":").map(Number);
@@ -975,6 +1000,7 @@ const WebtoonView = memo(function WebtoonView({
       onPointerMove={onPointerMove}
       onPointerUp={endPointer}
       onPointerCancel={cancelPointer}
+      onLostPointerCapture={cancelPointer}
     >
       {err ? (
         <div className="reader-center">

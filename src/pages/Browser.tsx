@@ -41,6 +41,7 @@ import { toast, toastErr } from "@/components/Toast";
 import { translate, useI18n, type MessageKey, type TranslateVars } from "@/i18n";
 import { useSafeMode } from "@/features/safeMode/SafeModeContext";
 import { recordBreadcrumb } from "@/features/resilience";
+import { localizeBackendError } from "@/features/errors/localize";
 
 const RECENTS_KEY = "mr-browser-recents";
 const RECENTS_LIMIT = 20;
@@ -213,7 +214,7 @@ export default function BrowserPage() {
         recordBreadcrumb("onlineRead");
         toast(translate("online.telegram.channelDetected"));
       } catch (e) {
-        setTelegramError(typeof e === "string" ? e : String(e));
+        setTelegramError(localizeBackendError(e));
         toastErr("resolve_telegram_channel", e);
       } finally {
         setBusy(null);
@@ -265,7 +266,7 @@ export default function BrowserPage() {
       } catch (e) {
         setTelegramError(
           typeof e === "string"
-            ? e
+            ? localizeBackendError(e)
             : translate("browser.telegram.downloadFailed"),
         );
         toastErr(

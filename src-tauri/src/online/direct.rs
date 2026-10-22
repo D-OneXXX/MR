@@ -266,6 +266,7 @@ fn parse_raw_manifest(body: &[u8], url: &url::Url) -> Result<RawParsedManifest, 
         return Err(BackendError::Msg(format!("清单页数超过上限 {MAX_PAGES}")));
     }
     let mut pages = Vec::with_capacity(raw.pages.len());
+    let mut seen = std::collections::HashSet::new();
     for (i, entry) in raw.pages.into_iter().enumerate() {
         let (raw_page, width, height) = match entry {
             RawPageEntry::Url(url) => (url, None, None),
@@ -281,8 +282,12 @@ fn parse_raw_manifest(body: &[u8], url: &url::Url) -> Result<RawParsedManifest, 
             },
             _ => (None, None),
         };
+        let normalized = page_url.to_string();
+        if !seen.insert(normalized.clone()) {
+            continue;
+        }
         pages.push(PageRef {
-            url: page_url.to_string(),
+            url: normalized,
             width,
             height,
             anchor: None,
@@ -668,6 +673,18 @@ mod tests {
                 "http://example.com/manifest.json?token=secret".to_string()
             )]
         );
+    }
+
+    #[test]
+    fn manifest_dedupes_repeated_urls() {
+        let meta = resolve(
+            r#"{"pages":["http://x/1.jpg","http://x/1.jpg#dup",{"url":"http://x/1.jpg","width":800,"height":1200},"http://x/2.jpg"]}"#,
+        )
+        .unwrap();
+        assert_eq!(meta.page_count, 2);
+        let stored: StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
+        assert_eq!(stored.pages[0].url, "http://x/1.jpg");
+        assert_eq!(stored.pages[1].url, "http://x/2.jpg");
     }
 
     #[test]

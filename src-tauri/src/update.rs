@@ -31,7 +31,8 @@ const MANIFEST_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 /// 未提供 size 时的兜底上限，避免异常服务端无限写入临时目录。
 const ARTIFACT_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
 const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// 下载不设 HTTP 客户端总超时（大包/慢网），仅设连接超时与整体安全上限。
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const CHUNK_WAIT: Duration = Duration::from_millis(750);
 /// 连续约 5 分钟收不到数据视为下载停滞（配合 10 分钟总超时）。
@@ -151,6 +152,9 @@ struct Manifest {
     #[serde(default)]
     patch: Option<ArtifactEntry>,
     full: ArtifactEntry,
+    /// 覆盖 version/artifacts 的清单签名（minisign 文本）。
+    #[serde(default)]
+    signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -260,10 +264,19 @@ impl Version {
                 s = rest;
             }
         }
-        // 构建元数据（+xxx）不参与比较。
+        // 构建元数据（+xxx）不参与比较，但必须是合法的点分标识符。
         if let Some((base, build)) = s.split_once('+') {
             if base.is_empty() || build.is_empty() {
                 return Err("版本号格式无效".to_string());
+            }
+            for ident in build.split('.') {
+                if ident.is_empty()
+                    || !ident
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                {
+                    return Err("版本号格式无效".to_string());
+                }
             }
             s = base;
         }
@@ -276,7 +289,10 @@ impl Version {
         }
         let mut core = Vec::new();
         for segment in core_part.split('.') {
-            if segment.is_empty() || !segment.bytes().all(|b| b.is_ascii_digit()) {
+            if segment.is_empty()
+                || !segment.bytes().all(|b| b.is_ascii_digit())
+                || (segment.len() > 1 && segment.starts_with('0'))
+            {
                 return Err("版本号格式无效".to_string());
             }
             let n = segment
@@ -284,8 +300,8 @@ impl Version {
                 .map_err(|_| "版本号格式无效".to_string())?;
             core.push(n);
         }
-        if core.is_empty() {
-            return Err("版本号格式无效".to_string());
+        if core.len() != 3 {
+            return Err("版本号必须是 MAJOR.MINOR.PATCH".to_string());
         }
         let mut pre = Vec::new();
         if let Some(pre_text) = pre_part {
@@ -301,6 +317,9 @@ impl Version {
                     return Err("版本号格式无效".to_string());
                 }
                 if ident.bytes().all(|b| b.is_ascii_digit()) {
+                    if ident.len() > 1 && ident.starts_with('0') {
+                        return Err("预发布数字标识不能有前导零".to_string());
+                    }
                     pre.push(PreId::Num(
                         ident
                             .parse::<u64>()
@@ -783,7 +802,7 @@ fn evaluate(current: &Version, manifest: &ValidManifest) -> (UpdateCheck, Option
 
 // ---------- 网络 ----------
 
-fn http_client(timeout: Duration) -> Result<reqwest::Client, String> {
+fn http_client_with_timeout(timeout: Option<Duration>) -> Result<reqwest::Client, String> {
     // 不允许通过重定向把请求降级到明文或非常规协议：每次跳转都重新
     // 套用与初始地址相同的 HTTPS/回环策略，超限则停止跟随。
     let redirects = reqwest::redirect::Policy::custom(|attempt| {
@@ -795,12 +814,20 @@ fn http_client(timeout: Duration) -> Result<reqwest::Client, String> {
             attempt.stop()
         }
     });
-    reqwest::Client::builder()
-        .timeout(timeout)
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(20))
         .redirect(redirects)
-        .user_agent(concat!("MangaReader/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("MangaReader/", env!("CARGO_PKG_VERSION")));
+    if let Some(timeout) = timeout {
+        builder = builder.timeout(timeout);
+    }
+    builder
         .build()
         .map_err(|_| "无法初始化更新网络客户端".to_string())
+}
+
+fn http_client(timeout: Duration) -> Result<reqwest::Client, String> {
+    http_client_with_timeout(Some(timeout))
 }
 
 /// 注意：不要拼接 `reqwest::Error` 的 Display，避免把带查询参数的 URL 泄露到界面。
@@ -853,9 +880,33 @@ async fn fetch_manifest(raw_url: &str) -> Result<ValidManifest, String> {
         }
         body.extend_from_slice(&chunk);
     }
+    verify_manifest_signature(&body)?;
     let manifest: Manifest =
         serde_json::from_slice(&body).map_err(|_| "更新清单格式无效".to_string())?;
     validate_manifest(manifest)
+}
+
+/// 清单签名覆盖版本、URL、sha256、size 与 notes 等所有字段；签名前把
+/// `signature` 字段移除，再对 serde_json 的稳定键序序列化做 minisign 校验。
+fn verify_manifest_signature(body: &[u8]) -> Result<(), String> {
+    if configured_public_key().is_none() {
+        return Ok(());
+    }
+    let mut value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|_| "更新清单格式无效".to_string())?;
+    let signature_text = value
+        .get("signature")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "更新清单缺少签名，已拒绝更新".to_string())?;
+    let signature = parse_signature(signature_text)?;
+    let key = load_public_key()?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("signature");
+    }
+    let canonical =
+        serde_json::to_vec(&value).map_err(|_| "更新清单规范化失败".to_string())?;
+    key.verify(&canonical, &signature, true)
+        .map_err(|_| "更新清单签名校验失败，已拒绝更新".to_string())
 }
 
 // ---------- 文件与签名 ----------
@@ -1134,6 +1185,7 @@ async fn stream_artifact(
     let mut last_emit_at = last_emit;
     let mut last_emit_bytes: u64 = 0;
     let mut idle_waits: u32 = 0;
+    let started = Instant::now();
 
     emit_update_event(
         on_event,
@@ -1146,6 +1198,9 @@ async fn stream_artifact(
 
     loop {
         ensure_not_cancelled(cancel)?;
+        if started.elapsed() > DOWNLOAD_TIMEOUT {
+            return Err("更新下载超过安全时限（60 分钟），已中止".to_string());
+        }
         let chunk = match tokio::time::timeout(CHUNK_WAIT, response.chunk()).await {
             Ok(Ok(Some(chunk))) => chunk,
             Ok(Ok(None)) => break,
@@ -1261,7 +1316,9 @@ async fn perform_download(
     let mut guard = PartialFileGuard::new();
     guard.track(path.clone());
 
-    let client = http_client(DOWNLOAD_TIMEOUT)?;
+    // 不用 reqwest 的总请求超时：大包在慢网下会被 10 分钟硬切断；
+    // 改为连接超时 + 分块空闲超时 + 60 分钟整体上限。
+    let client = http_client_with_timeout(None)?;
     let response = client
         .get(artifact.url.clone())
         .send()
@@ -1365,16 +1422,41 @@ async fn perform_download(
 // ---------- 安装 ----------
 
 #[cfg(windows)]
-fn batch_quote(path: &Path) -> Result<String, String> {
-    let text = path.to_string_lossy();
-    if text.contains('"')
-        || text.contains('%')
-        || text.contains('\r')
-        || text.contains('\n')
-    {
-        return Err("安装路径包含批处理无法安全引用的字符".to_string());
-    }
-    Ok(format!("\"{text}\""))
+fn powershell_quote(path: &Path) -> String {
+    // PowerShell 单引号字符串：路径中的单引号用两个单引号转义；
+    // 中文/emoji 由 UTF-16LE EncodedCommand 承载，不经过 OEM 码页。
+    format!("'{}'", path.to_string_lossy().replace('\'', "''"))
+}
+
+#[cfg(windows)]
+fn installer_script(path: &Path, format: &str, relaunch_exe: &Path) -> Result<String, String> {
+    let installer = powershell_quote(path);
+    let exe = powershell_quote(relaunch_exe);
+    let install = match format {
+        "msi" => format!(
+            "$p = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('\"' + {installer} + '\"'), '/passive', '/norestart') -Wait -PassThru"
+        ),
+        "nsis" => format!(
+            "$p = Start-Process -FilePath {installer} -ArgumentList '/S' -Wait -PassThru"
+        ),
+        _ => return Err("不支持的安装包格式".to_string()),
+    };
+    // 先等应用释放文件句柄，再等待安装器结束，最后拉起新版本。
+    Ok(format!(
+        "$ErrorActionPreference = 'SilentlyContinue'\n\
+         Start-Sleep -Milliseconds 900\n\
+         {install}\n\
+         Start-Process -FilePath {exe}\n"
+    ))
+}
+
+#[cfg(windows)]
+fn encode_powershell(script: &str) -> String {
+    let utf16: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    base64::engine::general_purpose::STANDARD.encode(utf16)
 }
 
 #[cfg(windows)]
@@ -1382,36 +1464,15 @@ fn spawn_installer(path: &Path, format: &str, relaunch_exe: &Path) -> Result<(),
     use std::os::windows::process::CommandExt;
 
     // DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP：
-    // 等待安装器完成并重新拉起新版本的脚本独立于本进程运行。
+    // 安装/重启脚本独立于本进程运行。
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
-    let installer = batch_quote(path)?;
-    let exe = batch_quote(relaunch_exe)?;
-    let install_command = match format {
-        "msi" => format!(
-            "start \"\" /wait msiexec.exe /i {installer} /passive /norestart"
-        ),
-        "nsis" => format!("start \"\" /wait {installer} /S"),
-        _ => return Err("不支持的安装包格式".to_string()),
-    };
-    // 先让应用完全退出并释放文件句柄，再等待安装器结束，最后拉起新版本。
-    let script = format!(
-        "@echo off\r\nsetlocal\r\nping 127.0.0.1 -n 3 >nul\r\n{install_command}\r\nstart \"\" {exe}\r\nendlocal\r\ndel \"%~f0\" >nul 2>&1\r\n"
-    );
-    let dir = update_dir()?;
-    let script_path = dir.join(format!(
-        "apply-{}-{}.cmd",
-        std::process::id(),
-        chrono::Utc::now().timestamp_millis()
-    ));
-    std::fs::write(&script_path, script)
-        .map_err(|error| format!("无法写入更新应用脚本：{error}"))?;
-
-    std::process::Command::new("cmd.exe")
-        .arg("/C")
-        .arg(&script_path)
+    let script = installer_script(path, format, relaunch_exe)?;
+    let encoded = encode_powershell(&script);
+    std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
         .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
         .spawn()
         .map(|_| ())
@@ -1615,6 +1676,7 @@ mod tests {
             mandatory: false,
             patch,
             full: full_entry(),
+            signature: None,
         })
         .expect("测试清单应有效")
     }
@@ -1628,14 +1690,17 @@ mod tests {
         assert!(version("1.0.0-alpha") < version("1.0.0-beta"));
         assert!(version("1.0.0-1") < version("1.0.0-alpha"));
         assert!(version("2.0.0") > version("1.99.99"));
-        assert_eq!(version("1.2"), version("1.2.0"));
         assert_eq!(version("1.2.3+build.7"), version("1.2.3"));
         assert_eq!(version("v1.2.3"), version("1.2.3"));
         assert!(Version::parse("").is_err());
+        assert!(Version::parse("1.2").is_err());
+        assert!(Version::parse("1.2.3.4").is_err());
+        assert!(Version::parse("01.2.3").is_err());
         assert!(Version::parse("1.2.x").is_err());
         assert!(Version::parse("1..2").is_err());
         assert!(Version::parse("1.2.3-").is_err());
         assert!(Version::parse("1.2.3-alpha..1").is_err());
+        assert!(Version::parse("1.2.3-01").is_err());
     }
 
     #[test]
@@ -1808,6 +1873,7 @@ mod tests {
             mandatory: false,
             patch: None,
             full: bad_full,
+            signature: None,
         };
         assert!(validate_manifest(bad).is_err());
 
@@ -1820,6 +1886,7 @@ mod tests {
             mandatory: false,
             patch: None,
             full: loopback_full,
+            signature: None,
         };
         assert!(validate_manifest(good).is_ok());
     }
@@ -1950,6 +2017,29 @@ QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfN
 
         assert!(parse_signature("").is_err());
         assert!(parse_signature("not a signature").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installer_script_uses_utf16_and_powershell_quoting() {
+        let installer = Path::new(r"C:\用户\漫画 目录\更 新'包.msi");
+        let exe = Path::new(r"C:\用户\漫画 目录\MangaReader.exe");
+        let script = installer_script(installer, "msi", exe).unwrap();
+        assert!(script.contains("更 新''包.msi"), "{script}");
+        assert!(script.contains("Start-Process -FilePath 'msiexec.exe'"));
+        assert!(!script.contains(".cmd"));
+
+        let encoded = encode_powershell(&script);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let decoded = String::from_utf16(&units).unwrap();
+        assert_eq!(decoded, script);
+        assert!(decoded.contains("漫画 目录"));
     }
 
     #[test]

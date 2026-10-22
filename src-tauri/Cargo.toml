@@ -1,6 +1,6 @@
 [package]
 name = "manga-reader-tauri"
-version = "0.12.1"
+version = "0.13.0"
 description = "Local-first manga reader (Tauri 2 + React)"
 authors = ["manga-reader"]
 edition = "2021"
@@ -43,18 +43,15 @@ percent-encoding = "2"
 ureq = { version = "2", features = ["json", "socks-proxy"] }
 # 在线源：单页 HTML 图集解析
 regex = "1"
+# 在线 HTML 图集：按 charset 正确解码（GBK/Shift_JIS 等）。
+encoding_rs = "0.8"
 
-# 阶段三:本地 OCR 走 WinRT Windows.Media.Ocr(仅 Windows)。
+# Windows 专用：系统代理注册表读取与配对桥接签名校验。
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Foundation",
-    "Globalization",
-    "Graphics_Imaging",
-    "Media_Ocr",
-    "Storage_Streams",
     "Win32_Foundation",
     "Win32_Security_Cryptography",
-    "Win32_System_Com",
     "Win32_System_Registry",
 ] }
 

@@ -58,6 +58,9 @@ impl From<rusqlite::Error> for BackendError {
 
 /// 本项目可解码的图片扩展名（与 `image` crate 启用的特性对齐：jpeg/png/gif/webp）。
 pub const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp"];
+/// 本地压缩包的安全上限：页数与声明的总解压体积。
+pub const MAX_LOCAL_PAGES: usize = 10_000;
+pub const MAX_ARCHIVE_UNCOMPRESSED: u64 = 4 * 1024 * 1024 * 1024;
 
 pub fn is_image_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -66,6 +69,31 @@ pub fn is_image_name(name: &str) -> bool {
             && lower.ends_with(ext)
             && lower.as_bytes()[lower.len() - ext.len() - 1] == b'.'
     })
+}
+
+/// 统一收集 zip/cbz 图片条目，并在打开阶段拒绝 zip bomb / 超大归档。
+fn zip_image_names(archive: &mut zip::ZipArchive<File>) -> Result<Vec<String>, BackendError> {
+    let mut names = Vec::new();
+    let mut total: u64 = 0;
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)?;
+        if entry.is_dir() || !is_image_name(entry.name()) {
+            continue;
+        }
+        total = total.saturating_add(entry.size());
+        if names.len() >= MAX_LOCAL_PAGES {
+            return Err(BackendError::Zip(format!(
+                "压缩包图片数超过上限 {MAX_LOCAL_PAGES}"
+            )));
+        }
+        if total > MAX_ARCHIVE_UNCOMPRESSED {
+            return Err(BackendError::Zip(
+                "压缩包总解压体积超过安全上限（4 GiB）".into(),
+            ));
+        }
+        names.push(entry.name().to_string());
+    }
+    Ok(names)
 }
 
 pub fn is_archive_path(path: &Path) -> bool {
@@ -162,11 +190,8 @@ pub struct ZipSource {
 impl ZipSource {
     pub fn open(path: &Path) -> Result<Self, BackendError> {
         let file = File::open(path)?;
-        let archive = zip::ZipArchive::new(file)?;
-        let mut names: Vec<String> = (0..archive.len())
-            .filter_map(|i| archive.name_for_index(i).map(|s| s.to_string()))
-            .filter(|n| !n.ends_with('/') && is_image_name(n))
-            .collect();
+        let mut archive = zip::ZipArchive::new(file)?;
+        let mut names = zip_image_names(&mut archive)?;
         names.sort_by(|a, b| crate::commands::natural_cmp(a, b));
         Ok(Self {
             path: path.to_path_buf(),
@@ -199,8 +224,20 @@ impl ImageSource for ZipSource {
         if entry.enclosed_name().is_none() {
             return Err(BackendError::Zip(format!("非法条目名：{name}")));
         }
+        if entry.size() > PAGE_MAX_BYTES as u64 {
+            return Err(BackendError::Zip(format!(
+                "单页解压体积超过上限：{name}"
+            )));
+        }
         let mut bytes = Vec::with_capacity(entry.size().min(32 * 1024 * 1024) as usize);
-        entry.read_to_end(&mut bytes)?;
+        (&mut entry)
+            .take(PAGE_MAX_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > PAGE_MAX_BYTES {
+            return Err(BackendError::Zip(format!(
+                "单页解压体积超过上限：{name}"
+            )));
+        }
         let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         Ok(RawPage { bytes, ext })
     }
@@ -432,11 +469,8 @@ impl SourceHandle {
             })
         } else if is_archive_path(path) {
             let file = File::open(path)?;
-            let archive = zip::ZipArchive::new(file)?;
-            let mut names: Vec<String> = (0..archive.len())
-                .filter_map(|i| archive.name_for_index(i).map(|s| s.to_string()))
-                .filter(|n| !n.ends_with('/') && is_image_name(n))
-                .collect();
+            let mut archive = zip::ZipArchive::new(file)?;
+            let mut names = zip_image_names(&mut archive)?;
             names.sort_by(|a, b| crate::commands::natural_cmp(a, b));
             Ok(Self {
                 path: path.to_path_buf(),
@@ -517,8 +551,20 @@ impl SourceHandle {
                 if entry.enclosed_name().is_none() {
                     return Err(BackendError::Zip(format!("非法条目名：{name}")));
                 }
+                if entry.size() > PAGE_MAX_BYTES as u64 {
+                    return Err(BackendError::Zip(format!(
+                        "单页解压体积超过上限：{name}"
+                    )));
+                }
                 let mut bytes = Vec::with_capacity(entry.size().min(32 * 1024 * 1024) as usize);
-                entry.read_to_end(&mut bytes)?;
+                (&mut entry)
+                    .take(PAGE_MAX_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() > PAGE_MAX_BYTES {
+                    return Err(BackendError::Zip(format!(
+                        "单页解压体积超过上限：{name}"
+                    )));
+                }
                 let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
                 Ok(RawPage { bytes, ext })
             }

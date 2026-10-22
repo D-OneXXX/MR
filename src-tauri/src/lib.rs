@@ -1,5 +1,5 @@
-//! MangaReader 后端 — 阶段一真实实现（backend-pipeline）。
-//! 契约冻结：命令名与 JSON 形状与骨架一致，前端 `src/lib/tauri.ts` 无需改动。
+//! MangaReader 后端：书库、阅读、在线直读、更新、隐私与韧性。
+//! 前端契约见 `src/lib/tauri.ts`。
 
 mod browser;
 pub mod cache;
@@ -7,22 +7,16 @@ mod commands;
 pub mod db;
 pub mod diagnostics;
 pub mod logging;
-mod ocr;
 mod online;
 mod resilience;
 pub mod pipeline;
 pub mod render_cache;
 mod security;
-mod sidecar;
 pub mod source;
 mod state;
 mod system_proxy;
-mod translate;
 pub mod update;
 mod versioning;
-mod workbench;
-
-pub mod batch;
 pub use state::AppState;
 
 use serde::{Deserialize, Serialize};
@@ -139,6 +133,9 @@ pub struct BookDayPoint {
 pub struct ScanResult {
     pub added: usize,
     pub books: Vec<BookInfo>,
+    /// 无法读取/损坏的条目；不再只写 stderr。
+    #[serde(default)]
+    pub errors: Vec<String>,
 }
 
 /// 单路径导入结果（status: added=已入库 / restored=恢复(进度保留) / skipped=已在书库中 / failed）。
@@ -175,30 +172,9 @@ pub struct Settings {
     pub theme: String,
     pub cache_budget_mb: u32,
     pub library_dir: String,
-    // Stage-3 translation service config (real, no mock)
-    pub trans_endpoint: String,
-    pub trans_api_key: String,
-    pub trans_model: String,
-    pub trans_temp: f32,
-    pub trans_timeout_s: u64,
-    pub ocr_endpoint: String,
-    pub ocr_timeout_s: u64,
-    pub src_lang: String,
-    pub dst_lang: String,
-    /// 实验性功能：翻译（工作台/选区翻译/批量预翻译/术语表）。默认关闭，
-    /// 关闭时相关 UI 全部隐藏。
-    pub experimental_trans: bool,
-    /// 实验性功能：条漫模式（韩漫长条纵向滚动）。默认关闭，
-    /// 关闭时版式只在单页/双页间切换，自动建议与相关 UI 全部隐藏。
+    /// 实验性功能：条漫模式。默认关闭；关闭时版式只在单页/双页间切换。
     pub experimental_webtoon: bool,
-    // Stage-3 sidecar(ctd/mit48px/lama 本地服务),契约见 docs/sidecar-api.md。
-    pub sidecar_endpoint: String,
-    pub sidecar_timeout_s: u64,
-    // 工作台四个 provider 下拉框的当前选择(翻译槽位固定为 OpenAI 兼容服务)。
-    pub wb_detector: String,
-    pub wb_ocr: String,
-    pub wb_inpaint: String,
-    /// 实验性功能：URL 在线直读（JSON 清单 / 单页 HTML 图集）。
+    /// 实验性功能：URL 在线直读（JSON 清单 / HTML 图集 / Telegram）。
     pub experimental_online: bool,
     /// 在线源 HTTP 代理（空=直连；http/https/socks5）。
     pub online_proxy: String,
@@ -214,53 +190,13 @@ impl Default for Settings {
             theme: "dark".into(),
             cache_budget_mb: 128,
             library_dir: String::new(),
-            trans_endpoint: "http://localhost:8080/v1".into(),
-            trans_api_key: String::new(),
-            trans_model: String::new(),
-            trans_temp: 0.0,
-            trans_timeout_s: 30,
-            ocr_endpoint: String::new(),
-            ocr_timeout_s: 30,
-            src_lang: "ja".into(),
-            dst_lang: "zh".into(),
-            experimental_trans: false,
             experimental_webtoon: false,
-            sidecar_endpoint: "http://127.0.0.1:8500".into(),
-            sidecar_timeout_s: 120,
-            wb_detector: "ctd".into(),
-            wb_ocr: "mit48pxctc".into(),
-            wb_inpaint: "lama_large_512px".into(),
             experimental_online: false,
             online_proxy: String::new(),
             online_concurrency: 3,
             online_headers: String::new(),
         }
     }
-}
-
-/// 框选相对坐标（0.0..1.0，相对原图尺寸）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RegionRect {
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OcrResult {
-    pub text: String,
-    pub elapsed_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranslateResult {
-    pub translated: String,
-    pub model: String,
-    pub elapsed_ms: u64,
 }
 
 /// 在线源连通性探测结果（只解析清单，不写库）。
@@ -272,27 +208,6 @@ pub struct OnlineProbe {
     pub page_count: u32,
     pub elapsed_ms: u64,
     pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TransLogEntry {
-    pub kind: String,
-    pub ok: bool,
-    pub elapsed_ms: u64,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TransStats {
-    pub ocr_calls: u64,
-    pub ocr_fail: u64,
-    pub ocr_avg_ms: f64,
-    pub trans_calls: u64,
-    pub trans_fail: u64,
-    pub trans_avg_ms: f64,
-    pub recent: Vec<TransLogEntry>,
 }
 
 /// 从 SQLite `settings` 表恢复持久化设置（无值则保留默认）。
@@ -307,53 +222,8 @@ fn hydrate_settings(conn: &rusqlite::Connection, s: &mut Settings) {
     if let Some(v) = get("library_dir") {
         s.library_dir = v;
     }
-    if let Some(v) = get("trans_endpoint") {
-        s.trans_endpoint = v;
-    }
-    if let Some(v) = get("trans_model") {
-        s.trans_model = v;
-    }
-    if let Some(v) = get("trans_api_key") {
-        s.trans_api_key = v;
-    }
-    if let Some(v) = get("trans_temp").and_then(|v| v.parse::<f32>().ok()) {
-        s.trans_temp = v;
-    }
-    if let Some(v) = get("trans_timeout_s").and_then(|v| v.parse::<u64>().ok()) {
-        s.trans_timeout_s = v;
-    }
-    if let Some(v) = get("ocr_endpoint") {
-        s.ocr_endpoint = v;
-    }
-    if let Some(v) = get("ocr_timeout_s").and_then(|v| v.parse::<u64>().ok()) {
-        s.ocr_timeout_s = v;
-    }
-    if let Some(v) = get("src_lang") {
-        s.src_lang = v;
-    }
-    if let Some(v) = get("dst_lang") {
-        s.dst_lang = v;
-    }
-    if let Some(v) = get("experimental_trans") {
-        s.experimental_trans = v == "true" || v == "1";
-    }
     if let Some(v) = get("experimental_webtoon") {
         s.experimental_webtoon = v == "true" || v == "1";
-    }
-    if let Some(v) = get("sidecar_endpoint") {
-        s.sidecar_endpoint = v;
-    }
-    if let Some(v) = get("sidecar_timeout_s").and_then(|v| v.parse::<u64>().ok()) {
-        s.sidecar_timeout_s = v;
-    }
-    if let Some(v) = get("wb_detector") {
-        s.wb_detector = v;
-    }
-    if let Some(v) = get("wb_ocr") {
-        s.wb_ocr = v;
-    }
-    if let Some(v) = get("wb_inpaint") {
-        s.wb_inpaint = v;
     }
     if let Some(v) = get("experimental_online") {
         s.experimental_online = v == "true" || v == "1";
@@ -477,9 +347,6 @@ pub fn run() {
             if let Err(e) = resilience::initialize(app.handle(), &resilience_state) {
                 logging::log_error("startup", &format!("韧性守卫初始化失败：{e}"));
             }
-            // 批量预翻译队列的常驻 worker(FIFO 取 queued 任务)。
-            let st = app.state::<Arc<AppState>>().inner().clone();
-            batch::spawn_worker(st);
             // 启动时后台 trim 磁盘渲染缓存（≤2GB，按 mtime 删最旧）。
             let st2 = app.state::<Arc<AppState>>().inner().clone();
             std::thread::spawn(move || {
@@ -509,24 +376,6 @@ pub fn run() {
             commands::clear_pages,
             commands::get_settings,
             commands::set_settings,
-            commands::ocr_region,
-            commands::translate_region,
-            commands::get_trans_stats,
-            commands::sidecar_health,
-            commands::glossary_list,
-            commands::glossary_set,
-            commands::glossary_remove,
-            workbench::wb_detect,
-            workbench::wb_ocr,
-            workbench::wb_inpaint,
-            workbench::wb_translate,
-            workbench::wb_save_ocr,
-            workbench::wb_get_ocr,
-            batch::batch_enqueue,
-            batch::batch_pause,
-            batch::batch_resume,
-            batch::batch_cancel,
-            batch::batch_list,
             commands::resolve_online_url,
             commands::test_online_connection,
             commands::import_resolved_pages,

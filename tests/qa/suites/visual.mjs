@@ -90,14 +90,19 @@ const CONTRAST_PROBE = `(() => {
     if (fontSize < 10) continue;
     let fg = parse(style.color);
     if (!fg) continue;
-    let bg = null;
+    // 从根到元素逐层合成半透明背景；不能因为祖先 0.8 alpha 就跳过，
+    // 那会把弹层/胶囊的半透明遮罩误当成底色。
+    const layers = [];
     let parent = el;
     while (parent) {
       const candidate = parse(getComputedStyle(parent).backgroundColor);
-      if (candidate && candidate.a >= 0.85) { bg = candidate; break; }
+      if (candidate && candidate.a > 0) layers.push(candidate);
       parent = parent.parentElement;
     }
-    bg = bg || baseBg;
+    let bg = baseBg;
+    for (let i = layers.length - 1; i >= 0; i -= 1) {
+      bg = composite(layers[i], bg);
+    }
     if (fg.a < 1) fg = composite(fg, bg);
     const c = ratio(fg, bg);
     const large = fontSize >= 24 || (fontSize >= 18.66 && Number(style.fontWeight) >= 700);

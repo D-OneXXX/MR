@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { translate, useI18n } from "@/i18n";
+import { localizeBackendError } from "@/features/errors/localize";
 
-/** 错误 toast：直接展示后端 Err(String) 中文信息 */
+/** 错误 toast：后端中文详情只在中文本地化显示，其他语种使用本地化摘要。 */
 export function toastErr(cmd: string, e: unknown): void {
   const msg =
-    typeof e === "string" ? e : translate("error.requestFailed", { cmd });
+    typeof e === "string"
+      ? localizeBackendError(e)
+      : translate("error.requestFailed", { cmd });
   toast(msg);
 }
 

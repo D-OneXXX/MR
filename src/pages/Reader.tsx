@@ -62,6 +62,7 @@ import ProgressScrubber, {
 import TabSwitcher from "../components/Reader/TabSwitcher";
 import { useWorkspace } from "../features/workspace/WorkspaceContext";
 import { useSafeMode } from "../features/safeMode/SafeModeContext";
+import { localizeBackendError } from "../features/errors/localize";
 import {
   recordBreadcrumb,
   updateRuntimeContext,
@@ -101,7 +102,10 @@ function showFailure(prefixKey: MessageKey, detail: unknown): void {
   const prefix = translate(prefixKey);
   toast(
     typeof detail === "string" && detail
-      ? translate("reader.error.detail", { prefix, detail })
+      ? translate("reader.error.detail", {
+          prefix,
+          detail: localizeBackendError(detail),
+        })
       : prefix,
   );
 }
@@ -783,9 +787,19 @@ export default function Reader() {
       if (safeMode) return;
       if (m === "webtoon" && !webtoonAllowed) return;
       const t = trackRef.current;
-      // 条漫 → 分页：带上滚动位置对应的页码，位置无缝衔接。
+      // 条漫 → 分页：优先取 Webtoon 的实时中心页；400ms 防抖 ref 可能
+      // 落后于用户刚才的快速滚动。
       if (t.mode === "webtoon" && m !== "webtoon" && t.book) {
-        setPage(Math.max(0, Math.min(t.book.pageCount - 1, wtProgressRef.current.page)));
+        const live = wtHandle.current?.getProgress?.();
+        const livePage = live?.page ?? wtProgressRef.current.page;
+        if (live) {
+          wtProgressRef.current = { pct: live.pct, page: live.page };
+          setWtProgress({ pct: live.pct, page: live.page });
+          setBook((b) =>
+            b ? { ...b, currentPage: live.page, scrollPct: live.pct } : b,
+          );
+        }
+        setPage(Math.max(0, Math.min(t.book.pageCount - 1, livePage)));
         setPan({ x: 0, y: 0 });
       }
       // 再次进入条漫时按当前页衔接，不回到本次 Reader 生命周期最初保存的

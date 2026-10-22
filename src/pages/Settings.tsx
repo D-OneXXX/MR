@@ -90,26 +90,11 @@ const DEFAULT_FORM: Settings = {
   theme: "system",
   cacheBudgetMb: 128,
   libraryDir: "",
-  transApiKey: "",
-  transEndpoint: "http://localhost:8080/v1",
-  transModel: "",
-  transTemp: 0,
-  transTimeoutS: 30,
-  ocrEndpoint: "",
-  ocrTimeoutS: 30,
-  srcLang: "ja",
-  dstLang: "zh",
-  experimentalTrans: false,
   experimentalWebtoon: false,
   experimentalOnline: false,
   onlineProxy: "",
   onlineConcurrency: 3,
   onlineHeaders: "",
-  sidecarEndpoint: "http://127.0.0.1:8500",
-  sidecarTimeoutS: 120,
-  wbDetector: "ctd",
-  wbOcr: "mit48pxctc",
-  wbInpaint: "lama_large_512px",
 };
 
 const THEME_OPTIONS: ReadonlyArray<{
@@ -213,8 +198,8 @@ function MemoryTile({ label, value }: { label: string; value: string }) {
 
 /**
  * 设置页：常规与主题 / 在线源网络 / 阅读统计 / 缓存。
- * 所有字段仍保存在 Settings 中，保存时以「已加载设置 + 当前表单」整对象写回，
- * 从而保留页面不再展示的翻译、OCR 等历史字段。
+ * 保存时以「已加载设置 + 当前表单」整对象写回，保留当前页面未展示、
+ * 但后端仍需要的字段（例如实验开关）。
  */
 export default function SettingsPage() {
   const { mode, setMode } = useTheme();
@@ -487,6 +472,13 @@ export default function SettingsPage() {
           count: formatNumber(result.books.length),
         }),
       );
+      if (result.errors?.length) {
+        toast(
+          t("settings.toast.scanErrors", {
+            count: formatNumber(result.errors.length),
+          }),
+        );
+      }
     } catch (e) {
       toastErr("scan_library", e);
     } finally {

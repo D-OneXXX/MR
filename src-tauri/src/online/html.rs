@@ -59,8 +59,10 @@ pub fn parse_gallery_with(
     memory: &FilterMemory,
     thresholds: &FilterThresholds,
 ) -> Result<OnlineBookMeta, BackendError> {
-    let text = String::from_utf8_lossy(body);
+    let text = decode_html(body);
     let title = extract_title(&text).unwrap_or_else(|| crate::online::title_from_url(base_url));
+    // <base href> 改变相对图片解析基准；标题回退仍用最终 URL。
+    let effective_base = base_href(&text, base_url).unwrap_or_else(|| base_url.clone());
 
     let mut stack: Vec<OpenElement> = Vec::new();
     let mut candidates: Vec<CandidateImage> = Vec::new();
@@ -103,7 +105,7 @@ pub fn parse_gallery_with(
             parent.and_then(|el| el.container.clone())
         };
         if name == "img" {
-            if let Some(url) = image_url(&attrs, base_url) {
+            if let Some(url) = image_url(&attrs, &effective_base) {
                 if seen.insert(url.clone()) {
                     let (width, height) = image_dimensions(&attrs);
                     let img_class = class_id.trim().to_string();
@@ -252,6 +254,40 @@ fn selector_hint(name: &str, attrs: &[(String, String)]) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// 按 BOM / `<meta charset>` / `Content-Type` meta 解码 HTML；无声明时按 UTF-8
+/// lossy。编码标签只在前 8 KiB 内查找，避免把正文误当标签。
+fn decode_html(body: &[u8]) -> String {
+    use encoding_rs::{Encoding, UTF_8};
+    if let Some((encoding, bom_len)) = Encoding::for_bom(body) {
+        let (text, _, _) = encoding.decode(&body[bom_len..]);
+        return text.into_owned();
+    }
+    let probe = String::from_utf8_lossy(&body[..body.len().min(8192)]);
+    let lower = probe.to_ascii_lowercase();
+    let label = lower
+        .split("charset=")
+        .nth(1)
+        .map(|tail| {
+            tail.trim_start_matches(|c| c == '"' || c == '\'')
+                .split(|c: char| c == '"' || c == '\'' || c == ';' || c == '>' || c.is_whitespace())
+                .next()
+                .unwrap_or("")
+        })
+        .filter(|label| !label.is_empty());
+    let encoding = label
+        .and_then(|label| Encoding::for_label(label.as_bytes()))
+        .unwrap_or(UTF_8);
+    let (text, _, _) = encoding.decode(body);
+    text.into_owned()
+}
+
+fn base_href(text: &str, base_url: &url::Url) -> Option<url::Url> {
+    let re = Regex::new(r#"(?is)<base\b[^>]*href\s*=\s*["']([^"']+)["']"#).ok()?;
+    let raw = decode_entities(re.captures(text)?.get(1)?.as_str().trim());
+    let joined = base_url.join(&raw).ok()?;
+    normalize_url(joined.as_str()).ok()
 }
 
 fn extract_title(text: &str) -> Option<String> {
@@ -630,6 +666,17 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(err.contains("超过上限"), "{err}");
+    }
+
+    #[test]
+    fn decodes_declared_charset_and_honors_base_href() {
+        let source = r#"<html><head><meta charset="gbk"><base href="https://cdn.example/gallery/"><title>中文图集</title></head><body><img src="01.jpg"></body></html>"#;
+        let (encoded, _, _) = encoding_rs::GBK.encode(source);
+        let page = url::Url::parse("http://gallery.example/view/1").unwrap();
+        let meta = parse_gallery(&encoded, &page, &page).unwrap();
+        assert_eq!(meta.title, "中文图集");
+        let stored: crate::online::StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
+        assert_eq!(stored.pages[0].url, "https://cdn.example/gallery/01.jpg");
     }
 
     #[test]

@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 export const MAIN_CARGO_PACKAGE = "manga-reader-tauri";
@@ -63,6 +69,27 @@ function readText(root, rel) {
 
 function writeText(root, rel, text) {
   writeFileSync(path.join(root, rel), text, "utf8");
+}
+
+/** 临时文件 + rename；失败时回退为直接写，避免半个文件。 */
+function writeTextAtomic(root, rel, text) {
+  const target = path.join(root, rel);
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, text, "utf8");
+  try {
+    renameSync(tmp, target);
+  } catch (error) {
+    try {
+      writeFileSync(target, text, "utf8");
+    } finally {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!existsSync(target)) throw error;
+  }
 }
 
 function detectNewline(text) {
@@ -345,19 +372,30 @@ export function syncProjectVersions(root, requestedVersion) {
     );
   }
 
-  const writes = [];
-  const writeVersionFile = (rel, reader, updater) => {
+  const originals = new Map();
+  const plans = [];
+  const planVersionFile = (rel, reader, updater) => {
     const text = readText(root, rel);
+    if (!originals.has(rel)) originals.set(rel, text);
     const result = updater(text, target);
-    writeText(root, rel, result.text);
-    writes.push({ file: rel, line: result.line ?? result.lines?.[0] ?? reader(text).line, version: target });
+    plans.push({
+      file: rel,
+      text: result.text,
+      line: result.line ?? result.lines?.[0] ?? reader(text).line,
+      version: target,
+    });
   };
 
   const packageUpdated = updateJsonVersionField(packageText, target);
-  writeText(root, "package.json", packageUpdated.text);
-  writes.push({ file: "package.json", line: packageUpdated.line, version: target });
+  originals.set("package.json", packageText);
+  plans.push({
+    file: "package.json",
+    text: packageUpdated.text,
+    line: packageUpdated.line,
+    version: target,
+  });
 
-  writeVersionFile(
+  planVersionFile(
     "package-lock.json",
     (text) => packageLockVersionLines(text).root,
     (text, value) => {
@@ -369,7 +407,7 @@ export function syncProjectVersions(root, requestedVersion) {
       };
     },
   );
-  writeVersionFile(
+  planVersionFile(
     "src-tauri/tauri.conf.json",
     (text) => lineOfJsonProperty(text, "version"),
     (text, value) => {
@@ -377,22 +415,39 @@ export function syncProjectVersions(root, requestedVersion) {
       return { text: result.text, line: result.line };
     },
   );
-  writeVersionFile(
+  planVersionFile(
     "src-tauri/Cargo.toml",
     lineOfCargoTomlPackageVersion,
     updateCargoTomlVersion,
   );
-  writeVersionFile(
+  planVersionFile(
     "src-tauri/Cargo.lock",
     lineOfCargoLockVersion,
     updateCargoLockVersion,
   );
 
+  // 所有文件先完成读取/校验，再统一写入；任一写入失败恢复全部原文件，
+  // 避免“package.json 已改、Cargo.toml 仍旧”的半迁移状态。
+  try {
+    for (const plan of plans) {
+      writeTextAtomic(root, plan.file, plan.text);
+    }
+  } catch (error) {
+    for (const [rel, text] of originals) {
+      try {
+        writeText(root, rel, text);
+      } catch {
+        /* 恢复尽力而为 */
+      }
+    }
+    throw error;
+  }
+
   return {
     source: packageVersion,
     version: target,
     change,
-    writes,
+    writes: plans,
     checked: checkProjectVersions(root),
   };
 }

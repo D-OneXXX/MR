@@ -1,8 +1,7 @@
 //! SQLite 书库（全新设计）：
 //! - `books(id, path, title, page_count, current_page, updated_at)`
 //! - `reading_log(date, pages)`：按日累计阅读页数（热力图/今日统计用）
-//! - `settings(k, v)`：持久化前端设置（主题/缓存预算/目录/翻译服务）
-//! - `trans_log(id, kind, ok, elapsed_ms, created_at)`：OCR/翻译调用日志（滚动保留 5000 条）
+//! - `settings(k, v)`：持久化前端设置（主题/缓存预算/目录/在线源）
 //!
 //! `id` 为路径的 SHA-256 hex（稳定、可跨扫描复用，保留进度）。
 
@@ -11,7 +10,6 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 
 use crate::source::BackendError;
-use crate::{TransLogEntry, TransStats};
 
 pub fn book_id_for_path(path: &str) -> String {
     let mut h = Sha256::new();
@@ -54,48 +52,6 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
         CREATE TABLE IF NOT EXISTS app_meta(
             k TEXT PRIMARY KEY,
             v TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS trans_log(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind TEXT NOT NULL,
-            ok INTEGER NOT NULL DEFAULT 1,
-            elapsed_ms INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS trans_cache(
-            id TEXT PRIMARY KEY,
-            text TEXT NOT NULL DEFAULT '',
-            book_id TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS glossary(
-            series_id TEXT NOT NULL,
-            src TEXT NOT NULL,
-            dst TEXT NOT NULL,
-            PRIMARY KEY(series_id, src)
-        );
-        CREATE TABLE IF NOT EXISTS page_ocr(
-            book_id TEXT NOT NULL,
-            page INTEGER NOT NULL,
-            width INTEGER NOT NULL DEFAULT 0,
-            height INTEGER NOT NULL DEFAULT 0,
-            boxes TEXT NOT NULL DEFAULT '[]',
-            texts TEXT NOT NULL DEFAULT '[]',
-            updated_at TEXT NOT NULL DEFAULT '',
-            PRIMARY KEY(book_id, page)
-        );
-        CREATE TABLE IF NOT EXISTS batch_jobs(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            book_id TEXT NOT NULL,
-            book_title TEXT NOT NULL DEFAULT '',
-            state TEXT NOT NULL DEFAULT 'queued',
-            total_pages INTEGER NOT NULL DEFAULT 0,
-            done_pages INTEGER NOT NULL DEFAULT 0,
-            ok_pages INTEGER NOT NULL DEFAULT 0,
-            fail_pages INTEGER NOT NULL DEFAULT 0,
-            last_error TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS online_filter_profiles(
             host TEXT PRIMARY KEY,
@@ -143,29 +99,83 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
 
 /// 旧库列迁移：
 /// - reading_log(date PK) → (date, book_id)，旧数据并入 book_id=''（全局视图仍聚合）；
-/// - books 加 removed 软删列、trans_cache 加 book_id 归属列（级联清理用）。
-fn migrate_reading_log(conn: &Connection) -> Result<(), BackendError> {
-    let has_book_id: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('reading_log') WHERE name='book_id'",
-        [],
+/// - books 加 removed / scroll_pct / source_type / meta_json 列。
+fn table_exists(conn: &Connection, name: &str) -> Result<bool, BackendError> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        params![name],
         |r| r.get(0),
     )?;
-    if has_book_id > 0 {
-        return Ok(());
-    }
+    Ok(count > 0)
+}
+
+fn create_reading_log(conn: &Connection) -> Result<(), BackendError> {
     conn.execute_batch(
-        "ALTER TABLE reading_log RENAME TO reading_log_legacy;
-         CREATE TABLE reading_log(
+        "CREATE TABLE IF NOT EXISTS reading_log(
              date TEXT NOT NULL,
              book_id TEXT NOT NULL DEFAULT '',
              pages INTEGER NOT NULL DEFAULT 0,
              PRIMARY KEY(date, book_id)
-         );
-         INSERT INTO reading_log(date, book_id, pages)
-             SELECT date, '', pages FROM reading_log_legacy;
-         DROP TABLE reading_log_legacy;",
+         );",
     )?;
     Ok(())
+}
+
+/// 旧库迁移必须在单事务内完成：rename 后崩溃不能留下半个库。
+/// 同时能恢复上次崩在 rename/merge 之间留下的 `reading_log_legacy`。
+fn migrate_reading_log(conn: &Connection) -> Result<(), BackendError> {
+    let new_exists = table_exists(conn, "reading_log")?;
+    let legacy_exists = table_exists(conn, "reading_log_legacy")?;
+    let has_book_id: i64 = if new_exists {
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('reading_log') WHERE name='book_id'",
+            [],
+            |r| r.get(0),
+        )?
+    } else {
+        0
+    };
+    if new_exists && has_book_id > 0 && !legacy_exists {
+        return Ok(());
+    }
+
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let migrated = (|| -> Result<(), BackendError> {
+        if !new_exists {
+            create_reading_log(conn)?;
+        }
+        if legacy_exists {
+            // 崩溃恢复：旧表已 rename，但新表/合并未完成。
+            conn.execute(
+                "INSERT OR IGNORE INTO reading_log(date, book_id, pages)
+                 SELECT date, '', pages FROM reading_log_legacy",
+                [],
+            )?;
+            conn.execute("DROP TABLE reading_log_legacy", [])?;
+        } else if new_exists && has_book_id == 0 {
+            // 正常旧库：先 rename，再建新表、合并、删旧表。
+            conn.execute("ALTER TABLE reading_log RENAME TO reading_log_legacy", [])?;
+            create_reading_log(conn)?;
+            conn.execute(
+                "INSERT OR IGNORE INTO reading_log(date, book_id, pages)
+                 SELECT date, '', pages FROM reading_log_legacy",
+                [],
+            )?;
+            conn.execute("DROP TABLE reading_log_legacy", [])?;
+        }
+        Ok(())
+    })();
+
+    match migrated {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
 }
 
 /// 无则加列（SQLite ALTER ADD 带默认值，老行自动取默认）。
@@ -209,17 +219,6 @@ fn migrate_book_columns(conn: &Connection) -> Result<(), BackendError> {
     if books_has_meta == 0 {
         conn.execute(
             "ALTER TABLE books ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'",
-            [],
-        )?;
-    }
-    let cache_has_book: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('trans_cache') WHERE name='book_id'",
-        [],
-        |r| r.get(0),
-    )?;
-    if cache_has_book == 0 {
-        conn.execute(
-            "ALTER TABLE trans_cache ADD COLUMN book_id TEXT NOT NULL DEFAULT ''",
             [],
         )?;
     }
@@ -296,23 +295,6 @@ pub fn upsert_online_book(
         params![id, path, title, page_count as i64, now, source_type, meta_json],
     )?;
     Ok(())
-}
-
-/// 清单变化时清掉该书的派生缓存（页 OCR 与翻译缓存）。
-pub fn clear_book_derived(conn: &Connection, id: &str) -> Result<(), BackendError> {
-    conn.execute("DELETE FROM page_ocr WHERE book_id=?1", params![id])?;
-    conn.execute("DELETE FROM trans_cache WHERE book_id=?1", params![id])?;
-    Ok(())
-}
-
-/// 是否存在 queued/running/paused 批量任务。
-pub fn has_active_batch(conn: &Connection, book_id: &str) -> Result<bool, BackendError> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM batch_jobs WHERE book_id=?1 AND state IN ('queued','running','paused')",
-        params![book_id],
-        |r| r.get(0),
-    )?;
-    Ok(n > 0)
 }
 
 pub fn get_book(conn: &Connection, id: &str) -> Result<Option<BookRow>, BackendError> {
@@ -515,85 +497,6 @@ pub fn set_meta(conn: &Connection, k: &str, v: &str) -> Result<(), BackendError>
     Ok(())
 }
 
-/// 记一条 OCR/翻译调用日志(kind: "ocr" | "trans");只保留最近 5000 条。
-pub fn log_trans(conn: &Connection, kind: &str, ok: bool, elapsed_ms: u64) -> Result<(), BackendError> {
-    conn.execute(
-        "INSERT INTO trans_log(kind, ok, elapsed_ms, created_at) VALUES(?1, ?2, ?3, ?4)",
-        params![kind, ok as i64, elapsed_ms as i64, now_str()],
-    )?;
-    conn.execute(
-        "DELETE FROM trans_log WHERE id <= (SELECT MAX(id) FROM trans_log) - 5000",
-        [],
-    )?;
-    Ok(())
-}
-
-/// 聚合 OCR/翻译调用统计 + 最近 50 条(id 倒序)。
-pub fn trans_stats(conn: &Connection) -> Result<TransStats, BackendError> {
-    let agg = |kind: &str| -> Result<(u64, u64, f64), BackendError> {
-        conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(ok = 0), 0), COALESCE(AVG(elapsed_ms), 0.0)
-             FROM trans_log WHERE kind = ?1",
-            params![kind],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)? as u64,
-                    r.get::<_, i64>(1)? as u64,
-                    r.get::<_, f64>(2)?,
-                ))
-            },
-        )
-        .map_err(From::from)
-    };
-    let (ocr_calls, ocr_fail, ocr_avg_ms) = agg("ocr")?;
-    let (trans_calls, trans_fail, trans_avg_ms) = agg("trans")?;
-    let mut stmt = conn.prepare(
-        "SELECT kind, ok, elapsed_ms, created_at FROM trans_log ORDER BY id DESC LIMIT 50",
-    )?;
-    let recent = stmt
-        .query_map([], |r| {
-            Ok(TransLogEntry {
-                kind: r.get(0)?,
-                ok: r.get::<_, i64>(1)? != 0,
-                elapsed_ms: r.get::<_, i64>(2)? as u64,
-                created_at: r.get(3)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(TransStats {
-        ocr_calls,
-        ocr_fail,
-        ocr_avg_ms,
-        trans_calls,
-        trans_fail,
-        trans_avg_ms,
-        recent,
-    })
-}
-
-/// 翻译缓存:键为 sha256(book_id|page|区域图哈希|目标语言)(工作台阶段接入)。
-/// book_id 冗余入列，供删除源文件时级联清理。
-pub fn cache_get(conn: &Connection, id: &str) -> Result<Option<String>, BackendError> {
-    let v: Option<String> = conn
-        .query_row("SELECT text FROM trans_cache WHERE id=?1", params![id], |r| r.get(0))
-        .ok();
-    Ok(v)
-}
-
-pub fn cache_put(
-    conn: &Connection,
-    id: &str,
-    text: &str,
-    book_id: &str,
-) -> Result<(), BackendError> {
-    conn.execute(
-        "INSERT INTO trans_cache(id, text, book_id, created_at) VALUES(?1, ?2, ?3, ?4)
-         ON CONFLICT(id) DO UPDATE SET text=excluded.text, book_id=excluded.book_id",
-        params![id, text, book_id, now_str()],
-    )?;
-    Ok(())
-}
-
 // ---------- 书籍移除/删除（移除 ≠ 删除，两个独立动作） ----------
 
 /// 移除（软删）：只从书库隐藏，源文件与阅读进度全部保留；重导入/重扫描自动恢复。
@@ -612,234 +515,9 @@ pub fn hard_delete_books(conn: &Connection, ids: &[String]) -> Result<usize, Bac
     for id in ids {
         conn.execute("DELETE FROM books WHERE id=?1", params![id])?;
         conn.execute("DELETE FROM reading_log WHERE book_id=?1", params![id])?;
-        conn.execute("DELETE FROM page_ocr WHERE book_id=?1", params![id])?;
-        conn.execute("DELETE FROM batch_jobs WHERE book_id=?1", params![id])?;
-        conn.execute("DELETE FROM trans_cache WHERE book_id=?1", params![id])?;
         n += 1;
     }
     Ok(n)
-}
-
-/// 术语表:按系列维护人名/招式名,翻译时注入 prompt。
-pub fn glossary_list(
-    conn: &Connection,
-    series_id: &str,
-) -> Result<Vec<(String, String)>, BackendError> {
-    let mut stmt =
-        conn.prepare("SELECT src, dst FROM glossary WHERE series_id=?1 ORDER BY src")?;
-    let rows = stmt
-        .query_map(params![series_id], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-pub fn glossary_upsert(
-    conn: &Connection,
-    series_id: &str,
-    src: &str,
-    dst: &str,
-) -> Result<(), BackendError> {
-    conn.execute(
-        "INSERT INTO glossary(series_id, src, dst) VALUES(?1, ?2, ?3)
-         ON CONFLICT(series_id, src) DO UPDATE SET dst=excluded.dst",
-        params![series_id, src, dst],
-    )?;
-    Ok(())
-}
-
-pub fn glossary_remove(
-    conn: &Connection,
-    series_id: &str,
-    src: &str,
-) -> Result<(), BackendError> {
-    conn.execute(
-        "DELETE FROM glossary WHERE series_id=?1 AND src=?2",
-        params![series_id, src],
-    )?;
-    Ok(())
-}
-
-// ---------- 页 OCR 存档(批量/工作台共用:翻过的页秒出) ----------
-
-#[derive(Debug, Clone)]
-pub struct PageOcrRow {
-    pub width: u32,
-    pub height: u32,
-    pub boxes: String,
-    pub texts: String,
-}
-
-/// 存/覆盖一页的检测框与 OCR 文本(JSON)。
-pub fn save_page_ocr(
-    conn: &Connection,
-    book_id: &str,
-    page: u32,
-    width: u32,
-    height: u32,
-    boxes_json: &str,
-    texts_json: &str,
-) -> Result<(), BackendError> {
-    conn.execute(
-        "INSERT INTO page_ocr(book_id, page, width, height, boxes, texts, updated_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(book_id, page) DO UPDATE SET
-           width=excluded.width, height=excluded.height,
-           boxes=excluded.boxes, texts=excluded.texts, updated_at=excluded.updated_at",
-        params![book_id, page, width, height, boxes_json, texts_json, now_str()],
-    )?;
-    Ok(())
-}
-
-pub fn get_page_ocr(
-    conn: &Connection,
-    book_id: &str,
-    page: u32,
-) -> Result<Option<PageOcrRow>, BackendError> {
-    let row = conn
-        .query_row(
-            "SELECT width, height, boxes, texts FROM page_ocr WHERE book_id=?1 AND page=?2",
-            params![book_id, page],
-            |r| {
-                Ok(PageOcrRow {
-                    width: r.get::<_, i64>(0)? as u32,
-                    height: r.get::<_, i64>(1)? as u32,
-                    boxes: r.get(2)?,
-                    texts: r.get(3)?,
-                })
-            },
-        )
-        .ok();
-    Ok(row)
-}
-
-// ---------- 批量预翻译队列 ----------
-
-#[derive(Debug, Clone)]
-pub struct BatchJobRow {
-    pub id: i64,
-    pub book_id: String,
-    pub book_title: String,
-    pub state: String,
-    pub total_pages: u32,
-    pub done_pages: u32,
-    pub ok_pages: u32,
-    pub fail_pages: u32,
-    pub last_error: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-const BATCH_ACTIVE: &str = "('queued','running','paused')";
-
-/// 入队:该书已有 queued/running/paused 任务则直接返回它(幂等)。
-pub fn batch_create(
-    conn: &Connection,
-    book_id: &str,
-    book_title: &str,
-    total_pages: u32,
-) -> Result<i64, BackendError> {
-    if let Some(row) = conn
-        .query_row(
-            &format!(
-                "SELECT id FROM batch_jobs WHERE book_id=?1 AND state IN {BATCH_ACTIVE} ORDER BY id DESC LIMIT 1"
-            ),
-            params![book_id],
-            |r| r.get::<_, i64>(0),
-        )
-        .ok()
-    {
-        return Ok(row);
-    }
-    conn.execute(
-        "INSERT INTO batch_jobs(book_id, book_title, state, total_pages, created_at, updated_at)
-         VALUES(?1, ?2, 'queued', ?3, ?4, ?4)",
-        params![book_id, book_title, total_pages, now_str()],
-    )?;
-    Ok(conn.last_insert_rowid())
-}
-
-fn row_to_job(r: &rusqlite::Row<'_>) -> rusqlite::Result<BatchJobRow> {
-    Ok(BatchJobRow {
-        id: r.get(0)?,
-        book_id: r.get(1)?,
-        book_title: r.get(2)?,
-        state: r.get(3)?,
-        total_pages: r.get::<_, i64>(4)? as u32,
-        done_pages: r.get::<_, i64>(5)? as u32,
-        ok_pages: r.get::<_, i64>(6)? as u32,
-        fail_pages: r.get::<_, i64>(7)? as u32,
-        last_error: r.get(8)?,
-        created_at: r.get(9)?,
-        updated_at: r.get(10)?,
-    })
-}
-
-const BATCH_COLS: &str =
-    "id, book_id, book_title, state, total_pages, done_pages, ok_pages, fail_pages, last_error, created_at, updated_at";
-
-pub fn batch_get(conn: &Connection, id: i64) -> Result<Option<BatchJobRow>, BackendError> {
-    let row = conn
-        .query_row(
-            &format!("SELECT {BATCH_COLS} FROM batch_jobs WHERE id=?1"),
-            params![id],
-            row_to_job,
-        )
-        .ok();
-    Ok(row)
-}
-
-pub fn batch_list(conn: &Connection, limit: i64) -> Result<Vec<BatchJobRow>, BackendError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {BATCH_COLS} FROM batch_jobs ORDER BY id DESC LIMIT ?1"
-    ))?;
-    let rows = stmt
-        .query_map(params![limit], row_to_job)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-/// worker 取下一个排队任务(id 升序 FIFO)。
-pub fn batch_next_queued(conn: &Connection) -> Result<Option<BatchJobRow>, BackendError> {
-    let row = conn
-        .query_row(
-            &format!(
-                "SELECT {BATCH_COLS} FROM batch_jobs WHERE state='queued' ORDER BY id ASC LIMIT 1"
-            ),
-            [],
-            row_to_job,
-        )
-        .ok();
-    Ok(row)
-}
-
-/// 状态迁移(queued/running/paused/done/done_errors/failed/cancelled),刷新 updated_at。
-pub fn batch_set_state(
-    conn: &Connection,
-    id: i64,
-    state: &str,
-    last_error: &str,
-) -> Result<(), BackendError> {
-    conn.execute(
-        "UPDATE batch_jobs SET state=?2, last_error=?3, updated_at=?4 WHERE id=?1",
-        params![id, state, last_error, now_str()],
-    )?;
-    Ok(())
-}
-
-/// 进度计数更新(worker 每处理一页调用)。
-pub fn batch_progress(
-    conn: &Connection,
-    id: i64,
-    done_pages: u32,
-    ok_pages: u32,
-    fail_pages: u32,
-    last_error: &str,
-) -> Result<(), BackendError> {
-    conn.execute(
-        "UPDATE batch_jobs SET done_pages=?2, ok_pages=?3, fail_pages=?4, last_error=?5, updated_at=?6 WHERE id=?1",
-        params![id, done_pages, ok_pages, fail_pages, last_error, now_str()],
-    )?;
-    Ok(())
 }
 
 // ---------- 在线图片提纯：站点档案 / 用户规则 / 事件 ----------
@@ -1146,58 +824,8 @@ mod tests {
         conn
     }
 
-    #[test]
-    fn trans_log_roundtrip_and_stats() {
-        let conn = mem();
-        log_trans(&conn, "ocr", true, 120).unwrap();
-        log_trans(&conn, "ocr", false, 80).unwrap();
-        log_trans(&conn, "trans", true, 900).unwrap();
 
-        let s = trans_stats(&conn).unwrap();
-        assert_eq!(s.ocr_calls, 2);
-        assert_eq!(s.ocr_fail, 1);
-        assert_eq!(s.ocr_avg_ms, 100.0);
-        assert_eq!(s.trans_calls, 1);
-        assert_eq!(s.trans_fail, 0);
-        assert_eq!(s.trans_avg_ms, 900.0);
 
-        // recent 按 id 倒序,最近一条在前。
-        assert_eq!(s.recent.len(), 3);
-        assert_eq!(s.recent[0].kind, "trans");
-        assert!(s.recent[0].ok);
-        assert_eq!(s.recent[0].elapsed_ms, 900);
-        assert!(!s.recent[1].ok);
-        assert_eq!(s.recent[2].kind, "ocr");
-        assert!(!s.recent[2].created_at.is_empty());
-    }
-
-    #[test]
-    fn trans_stats_empty_and_limit() {
-        let conn = mem();
-        let s = trans_stats(&conn).unwrap();
-        assert_eq!(s.ocr_calls, 0);
-        assert_eq!(s.ocr_avg_ms, 0.0);
-        assert!(s.recent.is_empty());
-
-        for i in 0..60 {
-            log_trans(&conn, "ocr", true, i as u64).unwrap();
-        }
-        let s = trans_stats(&conn).unwrap();
-        assert_eq!(s.ocr_calls, 60);
-        assert_eq!(s.recent.len(), 50, "recent 只保留最近 50 条");
-        assert_eq!(s.recent[0].elapsed_ms, 59);
-    }
-
-    #[test]
-    fn trans_cache_roundtrip() {
-        let conn = mem();
-        assert_eq!(cache_get(&conn, "k1").unwrap(), None);
-        cache_put(&conn, "k1", "你好", "b1").unwrap();
-        cache_put(&conn, "k1", "覆盖后", "b1").unwrap();
-        assert_eq!(cache_get(&conn, "k1").unwrap().as_deref(), Some("覆盖后"));
-        cache_put(&conn, "k2", "别的书", "b2").unwrap();
-        assert_eq!(cache_get(&conn, "k2").unwrap().as_deref(), Some("别的书"));
-    }
 
     #[test]
     fn soft_remove_then_reimport_restores_progress() {
@@ -1222,82 +850,15 @@ mod tests {
         let conn = mem();
         upsert_book(&conn, "b1", "p/b1", "第一卷", 30).unwrap();
         set_progress(&conn, "b1", 5, None).unwrap();
-        cache_put(&conn, "k1", "译文", "b1").unwrap();
-        save_page_ocr(&conn, "b1", 0, 100, 100, "[]", "[]").unwrap();
-        batch_create(&conn, "b1", "第一卷", 30).unwrap();
         // 别的书不受影响。
         upsert_book(&conn, "b2", "p/b2", "第二卷", 10).unwrap();
-        cache_put(&conn, "k2", "b2 译文", "b2").unwrap();
 
         let n = hard_delete_books(&conn, &["b1".into()]).unwrap();
         assert_eq!(n, 1);
         assert!(get_book(&conn, "b1").unwrap().is_none());
         assert!(list_books(&conn, None).unwrap().iter().all(|b| b.id == "b2"));
-        // 进度/缓存/页 OCR/批量任务全部级联清理。
+        // 阅读进度记录级联清理。
         assert_eq!(reading_log_days(&conn, Some("b1"), 7).unwrap().len(), 0);
-        assert_eq!(cache_get(&conn, "k1").unwrap(), None);
-        assert!(get_page_ocr(&conn, "b1", 0).unwrap().is_none());
-        assert!(batch_list(&conn, 10).unwrap().iter().all(|j| j.book_id == "b2"));
-        // b2 的记录原样。
-        assert_eq!(cache_get(&conn, "k2").unwrap().as_deref(), Some("b2 译文"));
-    }
-
-    #[test]
-    fn glossary_upsert_list_remove() {
-        let conn = mem();
-        glossary_upsert(&conn, "series-a", "ナルト", "鸣人").unwrap();
-        glossary_upsert(&conn, "series-a", "サスケ", "佐助").unwrap();
-        glossary_upsert(&conn, "series-a", "ナルト", "漩涡鸣人").unwrap(); // 覆盖
-        glossary_upsert(&conn, "series-b", "ルフィ", "路飞").unwrap();
-
-        let a = glossary_list(&conn, "series-a").unwrap();
-        assert_eq!(a, vec![("サスケ".into(), "佐助".into()), ("ナルト".into(), "漩涡鸣人".into())]);
-        assert_eq!(glossary_list(&conn, "series-b").unwrap().len(), 1);
-        assert!(glossary_list(&conn, "nope").unwrap().is_empty());
-
-        glossary_remove(&conn, "series-a", "サスケ").unwrap();
-        assert_eq!(glossary_list(&conn, "series-a").unwrap().len(), 1);
-    }
-
-    #[test]
-    fn page_ocr_roundtrip() {
-        let conn = mem();
-        assert!(get_page_ocr(&conn, "b1", 0).unwrap().is_none());
-        save_page_ocr(&conn, "b1", 0, 1600, 2400, r#"[{"x":1}]"#, r#"["あ"]"#).unwrap();
-        save_page_ocr(&conn, "b1", 0, 1600, 2400, r#"[{"x":2}]"#, r#"["い"]"#).unwrap(); // 覆盖
-        let row = get_page_ocr(&conn, "b1", 0).unwrap().unwrap();
-        assert_eq!((row.width, row.height), (1600, 2400));
-        assert_eq!(row.boxes, r#"[{"x":2}]"#);
-        assert_eq!(row.texts, r#"["い"]"#);
-        assert!(get_page_ocr(&conn, "b1", 1).unwrap().is_none());
-    }
-
-    #[test]
-    fn batch_job_lifecycle() {
-        let conn = mem();
-        let id = batch_create(&conn, "b1", "第一卷", 10).unwrap();
-        // 同书幂等:active 任务存在时不再新建。
-        assert_eq!(batch_create(&conn, "b1", "第一卷", 10).unwrap(), id);
-
-        batch_set_state(&conn, id, "running", "").unwrap();
-        batch_progress(&conn, id, 3, 2, 1, "第3页失败").unwrap();
-        let j = batch_get(&conn, id).unwrap().unwrap();
-        assert_eq!(j.state, "running");
-        assert_eq!((j.done_pages, j.ok_pages, j.fail_pages), (3, 2, 1));
-        assert_eq!(j.last_error, "第3页失败");
-
-        // FIFO:先入队先跑;paused 不参与取队。
-        let id2 = batch_create(&conn, "b2", "第二卷", 5).unwrap();
-        batch_set_state(&conn, id, "paused", "").unwrap();
-        let next = batch_next_queued(&conn).unwrap().unwrap();
-        assert_eq!(next.id, id2);
-        batch_set_state(&conn, id, "queued", "").unwrap();
-        assert_eq!(batch_next_queued(&conn).unwrap().unwrap().id, id);
-
-        // 终态后可重新入队(新任务)。
-        batch_set_state(&conn, id, "done", "").unwrap();
-        assert_ne!(batch_create(&conn, "b1", "第一卷", 10).unwrap(), id);
-        assert_eq!(batch_list(&conn, 10).unwrap().len(), 3);
     }
 
     #[test]
@@ -1320,6 +881,25 @@ mod tests {
         assert!(reading_log_days(&conn, Some("b1"), 30).unwrap().is_empty());
         // 堆叠趋势排除全局旧史。
         assert!(reading_by_book(&conn, 30).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reading_log_migration_recovers_legacy_after_crash() {
+        // 模拟上次崩在 rename 之后：只剩 reading_log_legacy，没有新表。
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE reading_log_legacy(
+                 date TEXT PRIMARY KEY, pages INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO reading_log_legacy(date, pages) VALUES ('2026-10-03', 7);",
+        )
+        .unwrap();
+        init_schema(&conn).unwrap();
+        assert_eq!(
+            reading_log_days(&conn, None, 30).unwrap(),
+            vec![("2026-10-03".into(), 7)]
+        );
+        assert!(!table_exists(&conn, "reading_log_legacy").unwrap());
     }
 
     #[test]
@@ -1387,21 +967,6 @@ mod tests {
         assert!(list_books(&conn, None).unwrap().iter().any(|b| b.id == "o1"));
     }
 
-    #[test]
-    fn clear_derived_and_active_batch() {
-        let conn = mem();
-        upsert_online_book(&conn, "o1", "http://x/a", "A", 2, "generic_manga", "{}").unwrap();
-        save_page_ocr(&conn, "o1", 0, 10, 10, "[]", "[]").unwrap();
-        cache_put(&conn, "k", "t", "o1").unwrap();
-        assert!(has_active_batch(&conn, "o1").unwrap() == false);
-        clear_book_derived(&conn, "o1").unwrap();
-        assert!(get_page_ocr(&conn, "o1", 0).unwrap().is_none());
-        assert!(cache_get(&conn, "k").unwrap().is_none());
-
-        let id = batch_create(&conn, "o1", "A", 2).unwrap();
-        batch_set_state(&conn, id, "running", "").unwrap();
-        assert!(has_active_batch(&conn, "o1").unwrap());
-    }
 
     #[test]
     fn filter_profiles_rules_and_events_roundtrip() {

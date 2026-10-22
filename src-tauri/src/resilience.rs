@@ -24,6 +24,9 @@ const RECOVERY_TITLE: &str = "MangaReader · 恢复与诊断";
 const HEARTBEAT_STALE: Duration = Duration::from_secs(6);
 const BOOT_GRACE: Duration = Duration::from_secs(12);
 const WATCHDOG_TICK: Duration = Duration::from_secs(1);
+/// 定时线程自身间隔突然变大（系统睡眠/唤醒、调试暂停）时，不能把这段
+/// 时间算进“主线程无心跳”，否则唤醒后第一 tick 会误弹恢复窗。
+const RESUME_GAP: Duration = Duration::from_secs(3);
 const RAGE_COOLDOWN: Duration = Duration::from_secs(15);
 const SAFE_MODE_FILE: &str = "safe-mode.json";
 const BOOT_GUARD_FILE: &str = "crash-guard.json";
@@ -149,10 +152,16 @@ fn safe_mode_path() -> Result<PathBuf, String> {
 /// invoked directly.
 pub(crate) fn ensure_online_allowed() -> Result<(), String> {
     let path = safe_mode_path()?;
-    if read_safe_mode_at(&path).active {
-        Err("安全模式保障中，在线与浏览器功能已暂停".to_string())
-    } else {
-        Ok(())
+    match read_safe_mode_result(&path) {
+        Ok(state) if !state.active => Ok(()),
+        Ok(_) => Err("安全模式保障中，在线与浏览器功能已暂停".to_string()),
+        Err(error) => {
+            crate::logging::log_error(
+                "safe_mode",
+                &format!("安全模式状态不可读，按安全模式阻断在线功能：{error}"),
+            );
+            Err(format!("安全模式状态不可读，已阻断在线功能：{error}"))
+        }
     }
 }
 
@@ -160,20 +169,69 @@ fn boot_guard_path() -> Result<PathBuf, String> {
     Ok(crate::data_dir()?.join(BOOT_GUARD_FILE))
 }
 
+fn read_safe_mode_result(path: &Path) -> Result<SafeModeState, String> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => serde_json::from_str::<SafeModeState>(&raw)
+            .map_err(|err| format!("安全模式文件损坏：{err}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(SafeModeState::default())
+        }
+        Err(error) => Err(format!("无法读取安全模式文件：{error}")),
+    }
+}
+
 fn read_safe_mode_at(path: &Path) -> SafeModeState {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return SafeModeState::default();
-    };
-    serde_json::from_str::<SafeModeState>(&raw).unwrap_or_default()
+    match read_safe_mode_result(path) {
+        Ok(state) => state,
+        Err(error) => {
+            crate::logging::log_error("safe_mode", &error);
+            SafeModeState {
+                active: true,
+                reason: Some("unreadable".into()),
+                activated_at: Some(now_string()),
+            }
+        }
+    }
+}
+
+fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| format!("无法创建目录：{err}"))?;
+    }
+    let tmp = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_millis()
+    ));
+    {
+        use std::io::Write as _;
+        let mut file =
+            std::fs::File::create(&tmp).map_err(|err| format!("无法创建临时文件：{err}"))?;
+        file.write_all(data)
+            .map_err(|err| format!("无法写入临时文件：{err}"))?;
+        file.sync_all()
+            .map_err(|err| format!("无法同步临时文件：{err}"))?;
+    }
+    if let Err(first) = std::fs::rename(&tmp, path) {
+        // Windows 不能总是覆盖已存在文件；退化为删除后重命名。
+        if let Err(remove) = std::fs::remove_file(path) {
+            if remove.kind() != std::io::ErrorKind::NotFound {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(format!("无法替换文件：{first}; {remove}"));
+            }
+        }
+        std::fs::rename(&tmp, path).map_err(|err| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("无法替换文件：{err}")
+        })?;
+    }
+    Ok(())
 }
 
 fn write_safe_mode_at(path: &Path, state: &SafeModeState) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| format!("无法创建安全模式目录：{err}"))?;
-    }
     let data =
         serde_json::to_vec_pretty(state).map_err(|err| format!("无法序列化安全模式：{err}"))?;
-    std::fs::write(path, data).map_err(|err| format!("无法写入安全模式：{err}"))
+    atomic_write(path, &data).map_err(|err| format!("无法写入安全模式：{err}"))
 }
 
 fn read_boot_guard_at(path: &Path) -> BootGuard {
@@ -235,6 +293,14 @@ fn declare_freeze(
     } else {
         since_start >= BOOT_GRACE
     }
+}
+
+fn is_resume_gap(gap: Duration) -> bool {
+    gap >= RESUME_GAP
+}
+
+fn should_replace_main(main_exists: bool, responsive: bool) -> bool {
+    !main_exists || !responsive
 }
 
 fn heartbeat_readiness(state: &ResilienceState) -> (Option<String>, u64, bool) {
@@ -311,8 +377,18 @@ fn open_recovery(
 fn spawn_watchdog(app: AppHandle, state: Arc<ResilienceState>) {
     let _ = std::thread::Builder::new()
         .name("mr-ui-watchdog".to_string())
-        .spawn(move || loop {
+        .spawn(move || {
+            let mut last_tick = Instant::now();
+            loop {
             std::thread::sleep(WATCHDOG_TICK);
+            let now = Instant::now();
+            let gap = now.duration_since(last_tick);
+            last_tick = now;
+            if is_resume_gap(gap) {
+                *state.last_heartbeat.lock() = Some(now);
+                state.freeze_notified.store(false, Ordering::SeqCst);
+                continue;
+            }
             let Some(main) = app.get_webview_window("main") else {
                 continue;
             };
@@ -342,6 +418,7 @@ fn spawn_watchdog(app: AppHandle, state: Arc<ResilienceState>) {
                 String::new(),
             ) {
                 crate::logging::log_error("watchdog", &format!("打开恢复窗口失败：{err}"));
+            }
             }
         });
 }
@@ -479,15 +556,20 @@ pub fn get_recovery_context(
 }
 
 #[tauri::command]
-pub fn resilience_reload_main(app: AppHandle) -> Result<(), String> {
-    if app.get_webview_window(RECOVERY_LABEL).is_some() {
-        crate::logging::log_error("recovery", "用户选择了仅重载当前视图；重建主窗口");
-        replace_main_window(app);
-        return Ok(());
+pub async fn resilience_reload_main(
+    app: AppHandle,
+    state: State<'_, Arc<ResilienceState>>,
+) -> Result<(), String> {
+    let main = app.get_webview_window("main");
+    let (_, _, responsive) = heartbeat_readiness(&state);
+    if should_replace_main(main.is_some(), responsive) {
+        crate::logging::log_error(
+            "recovery",
+            "主窗口缺失或无心跳；重建主窗口（不静默重启应用）",
+        );
+        return replace_main_window(app).await;
     }
-    let main = app
-        .get_webview_window("main")
-        .ok_or_else(|| "主窗口不存在".to_string())?;
+    let main = main.expect("checked main exists");
     main.reload()
         .map_err(|err| format!("重载主窗口失败：{err}"))?;
     crate::logging::log_error("recovery", "用户选择了仅重载当前视图");
@@ -496,58 +578,69 @@ pub fn resilience_reload_main(app: AppHandle) -> Result<(), String> {
 
 /// A JS event loop can ignore a plain WebView reload. Destroying and rebuilding
 /// the local main window is the only reliable escape when the renderer is in a
-/// hard loop. This runs off the command thread because window creation needs
-/// the main event loop.
-fn replace_main_window(app: AppHandle) {
+/// hard loop. The rebuilding thread sends a real result back so the recovery UI
+/// never reports a fake success.
+async fn replace_main_window(app: AppHandle) -> Result<(), String> {
+    // 窗口创建必须让出命令线程/主事件循环；这里只确认重建任务已派出，
+    // 真实结果由日志与恢复窗的目标探测确认，避免伪造“已重建”。
     std::thread::spawn(move || {
-        let Some(main) = app.get_webview_window("main") else {
-            crate::logging::log_error("recovery", "主窗口已不存在，跳过重建");
-            return;
-        };
-        let url = main.url().ok();
-        let scale = main.scale_factor().unwrap_or(1.0);
-        let size = main.inner_size().ok();
-        let position = main.outer_position().ok();
-        let maximized = main.is_maximized().unwrap_or(false);
-        if let Err(err) = main.destroy() {
-            crate::logging::log_error("recovery", &format!("销毁卡死主窗口失败：{err}"));
-            return;
-        }
-        // Let the native window and its label leave Tauri's registry.
-        std::thread::sleep(Duration::from_millis(600));
-
-        let target = match url {
-            Some(url) => WebviewUrl::External(url),
-            None => WebviewUrl::App("index.html".into()),
-        };
-        let mut builder = WebviewWindowBuilder::new(&app, "main", target)
-            .title("MangaReader")
-            .min_inner_size(900.0, 600.0)
-            .decorations(false)
-            .shadow(true)
-            .resizable(true)
-            .focused(true);
-        if let Some(size) = size {
-            builder = builder.inner_size(
-                (size.width as f64 / scale).max(900.0),
-                (size.height as f64 / scale).max(600.0),
-            );
-        }
-        if maximized {
-            builder = builder.maximized(true);
-        } else if let Some(position) = position {
-            builder = builder.position(position.x as f64 / scale, position.y as f64 / scale);
-        }
-        match builder.build() {
-            Ok(window) => {
-                let _ = window.set_focus();
-                crate::logging::log_error("recovery", "主窗口已重建，等待心跳恢复");
-            }
-            Err(err) => {
-                crate::logging::log_error("recovery", &format!("重建主窗口失败：{err}"));
-            }
+        if let Err(error) = rebuild_main_window(&app) {
+            crate::logging::log_error("recovery", &format!("重建主窗口失败：{error}"));
         }
     });
+    Ok(())
+}
+
+fn rebuild_main_window(app: &AppHandle) -> Result<(), String> {
+    let existing = app.get_webview_window("main");
+    let (url, scale, size, position, maximized) = if let Some(main) = existing.as_ref() {
+        (
+            main.url().ok(),
+            main.scale_factor().unwrap_or(1.0),
+            main.inner_size().ok(),
+            main.outer_position().ok(),
+            main.is_maximized().unwrap_or(false),
+        )
+    } else {
+        (None, 1.0, None, None, false)
+    };
+    if let Some(main) = existing {
+        main.destroy()
+            .map_err(|err| format!("销毁卡死主窗口失败：{err}"))?;
+    }
+    // Let the native window and its label leave Tauri's registry.
+    std::thread::sleep(Duration::from_millis(600));
+
+    let target = match url {
+        Some(url) => WebviewUrl::External(url),
+        None => WebviewUrl::App("index.html".into()),
+    };
+    let mut builder = WebviewWindowBuilder::new(app, "main", target)
+        .title("MangaReader")
+        .min_inner_size(900.0, 600.0)
+        .decorations(false)
+        .shadow(true)
+        .resizable(true)
+        .focused(true);
+    if let Some(size) = size {
+        builder = builder.inner_size(
+            (size.width as f64 / scale).max(900.0),
+            (size.height as f64 / scale).max(600.0),
+        );
+    } else {
+        builder = builder.inner_size(1200.0, 820.0);
+    }
+    if maximized {
+        builder = builder.maximized(true);
+    } else if let Some(position) = position {
+        builder = builder.position(position.x as f64 / scale, position.y as f64 / scale);
+    }
+    let window = builder
+        .build()
+        .map_err(|err| format!("重建主窗口失败：{err}"))?;
+    let _ = window.set_focus();
+    crate::logging::log_error("recovery", "主窗口已重建，等待心跳恢复");
+    Ok(())
 }
 
 #[tauri::command]
@@ -565,7 +658,7 @@ pub fn get_safe_mode_state() -> Result<SafeModeState, String> {
 }
 
 #[tauri::command]
-pub fn resilience_enable_safe_mode(
+pub async fn resilience_enable_safe_mode(
     app: AppHandle,
     reason: Option<String>,
 ) -> Result<SafeModeState, String> {
@@ -586,14 +679,26 @@ pub fn resilience_enable_safe_mode(
     app_state.cancel_handoff();
     app_state.invalidate_sources();
 
-    if let Some(main) = app.get_webview_window("main") {
-        if app.get_webview_window(RECOVERY_LABEL).is_some() {
-            // A frozen renderer cannot process a plain reload. Recreate the main
-            // WebView so the safe-mode startup policy is actually applied.
-            drop(main);
-            replace_main_window(app.clone());
-            crate::logging::log_error("safe_mode", "已请求重建主窗口以应用安全模式");
-        } else if let Err(err) = main.reload() {
+    let main = app.get_webview_window("main");
+    let responsive = app
+        .try_state::<Arc<ResilienceState>>()
+        .map(|state| heartbeat_readiness(&state).2)
+        .unwrap_or(false);
+    if should_replace_main(main.is_some(), responsive) {
+        // A frozen/missing renderer cannot process a plain reload. Recreate the
+        // main WebView so the safe-mode startup policy is actually applied.
+        match replace_main_window(app.clone()).await {
+            Ok(()) => crate::logging::log_error(
+                "safe_mode",
+                "已重建主窗口以应用安全模式",
+            ),
+            Err(err) => crate::logging::log_error(
+                "safe_mode",
+                &format!("重建主窗口应用安全模式失败：{err}"),
+            ),
+        }
+    } else if let Some(main) = main {
+        if let Err(err) = main.reload() {
             crate::logging::log_error("safe_mode", &format!("重载主窗口失败：{err}"));
         }
     }
@@ -685,6 +790,26 @@ mod tests {
             "startupFailures"
         );
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn corrupt_safe_mode_file_is_fail_closed() {
+        let path = temp_path("safe-corrupt");
+        std::fs::write(&path, "{not-json").unwrap();
+        assert!(read_safe_mode_result(&path).is_err());
+        let state = read_safe_mode_at(&path);
+        assert!(state.active, "损坏文件必须按安全模式处理");
+        assert_eq!(state.reason.as_deref(), Some("unreadable"));
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn resume_gap_and_missing_main_trigger_rebuild_not_freeze() {
+        assert!(!is_resume_gap(Duration::from_secs(1)));
+        assert!(is_resume_gap(Duration::from_secs(3)));
+        assert!(!should_replace_main(true, true));
+        assert!(should_replace_main(true, false));
+        assert!(should_replace_main(false, false));
     }
 
     #[test]

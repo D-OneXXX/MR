@@ -157,6 +157,29 @@ test("sync updates every manifest and remains idempotent", () => {
   }
 });
 
+test("sync validates every file before writing anything", () => {
+  const root = fixture();
+  try {
+    const cargo = path.join(root, "src-tauri", "Cargo.toml");
+    writeFileSync(
+      cargo,
+      readFileSync(cargo, "utf8").replace('version = "1.2.3"\n', ""),
+    );
+    assert.throws(() => syncProjectVersions(root, "2.0.0"));
+    // package.json / tauri.conf.json 必须保持原版本，不能出现半迁移。
+    assert.equal(
+      JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version,
+      "1.2.3",
+    );
+    assert.equal(
+      JSON.parse(readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8")).version,
+      "1.2.3",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("release semantics map patch/minor/major to the correct update mode", () => {
   assert.deepEqual(classifyVersionChange("0.10.1", "0.10.2"), {
     kind: "patch",

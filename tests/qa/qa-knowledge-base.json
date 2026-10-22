@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-22T22:44:17.031Z",
+  "updatedAt": "2026-10-22T23:27:39.489Z",
   "regressions": [
     {
       "id": "REG-WT-ANCHOR",
@@ -145,6 +145,86 @@
       "trigger": "后台懒加载封面/动画产生的 DOM 抖动曾把真实连点误判为“页面有进展”；观察器只保留路由与 ARIA/弹层状态",
       "addedAt": "2026-10-22T22:36:11.427Z",
       "source": "2026-10-23-online-filter-telegram"
+    },
+    {
+      "id": "REG-MIGRATION-ATOMIC",
+      "testId": "db::reading_log_migration_recovers_legacy_after_crash",
+      "area": "db",
+      "trigger": "迁移单事务/崩溃遗留 legacy 表恢复",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-SAFE-MODE-FAILCLOSED",
+      "testId": "resilience::corrupt_safe_mode_file_is_fail_closed",
+      "area": "resilience",
+      "trigger": "安全模式文件损坏必须阻断在线功能",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-CBZ-LIMITS",
+      "testId": "source::zip_limits",
+      "area": "source",
+      "trigger": "zip bomb 页数/解压体积/单页字节上限",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-IMPORT-NESTED",
+      "testId": "commands::import_folder_semantics",
+      "area": "library",
+      "trigger": "嵌套章节目录递归导入与重复导入刷新",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-UPDATE-UTF16",
+      "testId": "update::installer_script_uses_utf16_and_powershell_quoting",
+      "area": "update",
+      "trigger": "中文/emoji 路径安装脚本",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-MANIFEST-SIG",
+      "testId": "update::manifest_signature",
+      "area": "update",
+      "trigger": "清单版本/URL/sha256/size 签名校验",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-HTML-CHARSET",
+      "testId": "online::html::decodes_declared_charset_and_honors_base_href",
+      "area": "online",
+      "trigger": "GBK charset 与 base href",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-JSON-DEDUPE",
+      "testId": "online::direct::manifest_dedupes_repeated_urls",
+      "area": "online",
+      "trigger": "JSON 清单重复 URL 去重",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-VERSION-SYNC-ATOMIC",
+      "testId": "version:sync atomic",
+      "area": "build",
+      "trigger": "版本同步失败不产生半迁移",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-BACKEND-ERROR-LOCALE",
+      "testId": "error:localized-backend",
+      "area": "ui",
+      "trigger": "非中文界面不直出后端中文错误",
+      "addedAt": "2026-10-22T23:17:28.207Z",
+      "source": "2026-10-23-cleanup-p1p2"
     }
   ],
   "defects": [
@@ -309,101 +389,119 @@
     {
       "id": "audit:legacy-reading-log-migration",
       "severity": "P1",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/db.rs:147-168",
       "title": "旧 reading_log 迁移非原子，崩溃可导致旧阅读史丢失或库无法打开",
       "expected": "迁移在单事务内完成，失败回滚，可重入",
       "actual": "execute_batch 逐句自动提交；若在 rename 后崩溃，下次启动因表缺失直接失败",
-      "fix": "BEGIN IMMEDIATE; 复制/删除/建表全部在事务内；启动时检测 legacy 表并恢复",
-      "evidence": "static-review"
+      "fix": "reading_log 迁移改为 BEGIN IMMEDIATE 单事务，并恢复崩溃遗留的 legacy 表",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:update-installer-non-ascii",
       "severity": "P1",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/update.rs:1380-1430",
       "title": "更新安装 .cmd 为 UTF-8，cmd.exe 按 OEM 码页读取，中文/emoji 路径乱码",
       "expected": "任意合法 Windows 安装路径均可升级并重启",
       "actual": "含中文的安装目录/用户名会导致 msiexec/NSIS 路径与重启 exe 失真，应用已退出",
-      "fix": "改用 PowerShell -EncodedCommand（UTF-16LE）或原生安装 API；保留失败回滚/手动安装提示",
-      "evidence": "static-review"
+      "fix": "安装改用 PowerShell -EncodedCommand(UTF-16LE)，删除 UTF-8 .cmd",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:watchdog-resume-false-freeze",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/resilience.rs:315-335",
       "title": "睡眠唤醒/后台节流被误判为 6 秒卡死",
       "expected": "系统休眠、窗口最小化/遮挡不触发恢复窗口",
       "actual": "watchdog 只比较心跳时刻；唤醒后首个 tick 的 elapsed 包含睡眠，立即弹恢复窗",
-      "fix": "记录 tick 间隔，间隔远大于 1s 视为 resume 并重置心跳；隐藏/最小化期间不判死",
-      "evidence": "static-review"
+      "fix": "watchdog 检测 tick gap，睡眠/唤醒重置心跳",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:recovery-main-missing",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/resilience.rs:482-506",
       "title": "主窗口不存在时恢复窗“重新加载”假成功",
       "expected": "缺失主窗时创建主窗并返回真实结果",
       "actual": "replace_main_window 直接 return，命令已返回 Ok，恢复窗显示已重载但主窗永不回来",
-      "fix": "增加创建分支；异步结果回传前端；失败时显示可操作错误",
-      "evidence": "static-review"
+      "fix": "主窗缺失时创建主窗；重建任务改为后台线程，不再假成功",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:progress-rollback-mode-switch",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src/pages/Reader.tsx:773; src/components/Reader/Webtoon.tsx:419-421",
       "title": "条漫滚动中切换版式可能回退最多 400ms 的旧页",
       "expected": "切版式使用实时中心页",
       "actual": "setMode 读 wtProgressRef，只在 400ms 防抖 commit 时更新；快速滚动后立即切换会回旧页并覆盖后端",
-      "fix": "setMode/卸载优先使用 webtoonHandle.getProgress()；提交改 leading+trailing",
-      "evidence": "static-review"
+      "fix": "切版式优先读取 WebtoonHandle.getProgress 实时页",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:cbz-unbounded-extract",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/commands.rs:271-277; src-tauri/src/source.rs:198,463",
       "title": "CBZ/ZIP 解压无单页/总解压上限，可被 zip bomb 拖垮",
       "expected": "限制单页字节、总解压字节与页数，坏图不入库",
       "actual": "read_to_end 无界；仅按扩展名计数，未解码验证图片",
-      "fix": "take(MAX_PAGE_BYTES)、累计上限、解码首页校验；失败返回可读错误",
-      "evidence": "static-review"
+      "fix": "zip 打开限制 10000 页/4GiB；单页读取限制 32MiB",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:duplicate-import-skip",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/commands.rs:313-323,382-405",
       "title": "重复导入被跳过，页数/缓存不刷新；扫描失败仅 eprintln",
       "expected": "重复导入刷新页数与元数据，失败项出现在结果中",
       "actual": "直接 skipped，旧 source handle/layout cache 不失效，用户看不到扫描错误",
-      "fix": "重扫并 upsert；invalidate_sources；返回 failed 明细",
-      "evidence": "static-review"
+      "fix": "重复导入重新扫描并 upsert，状态改为 restored",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:nested-folder-import",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/commands.rs:408-412,453-483",
       "title": "两层目录的章节文件夹无法导入",
       "expected": "递归识别含图目录并作为章节/书籍导入",
       "actual": "只扫描直下图片，父目录报“无可识别书籍”",
-      "fix": "递归收集含图目录；或明确提示用户选择章节目录",
-      "evidence": "static-review"
+      "fix": "递归发现嵌套章节目录，限制深度并跳过 symlink",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:webtoon-pointer-leak",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src/components/Reader/Webtoon.tsx:768-819",
       "title": "条漫指针状态泄漏，HUD/窗外释放后 tap 失效",
       "expected": "任意 pointerup/pointercancel/lostpointercapture/blur 都清空手势",
       "actual": "只在容器内监听 up/cancel，无 pointer capture；残留指针把后续单指当双指",
-      "fix": "setPointerCapture；处理 lostpointercapture/blur；move 校验 buttons",
-      "evidence": "static-review"
+      "fix": "指针捕获 + buttons=0/lostpointercapture/blur 清理",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:webtoon-broken-image",
@@ -430,90 +528,106 @@
     {
       "id": "audit:safe-mode-fail-open",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/resilience.rs:163-177",
       "title": "安全模式文件损坏/不可读时 fail-open，在线防护被放行",
       "expected": "读失败按 active 处理并记录",
       "actual": "read/parse 失败返回 default(active=false)，ensure_online_allowed 直接放行",
-      "fix": "temp+rename 原子写；损坏/不可读 fail-closed；提供显式退出",
-      "evidence": "static-review"
+      "fix": "安全模式损坏/不可读 fail-closed；写入临时文件+rename",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:browser-sync-webview-build",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/browser.rs:255-274",
       "title": "同步 command 内创建内嵌浏览器 WebView，可能阻塞主事件循环",
       "expected": "第二 WebView 在后台/异步创建",
       "actual": "open_browser_window 同步 build；WebView2 初始化期间阻塞心跳，和已修复的恢复窗死锁同型",
-      "fix": "改 async 或 spawn 后创建；失败回传前端",
-      "evidence": "static-review"
+      "fix": "浏览器窗口构建移入 spawn_blocking",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:recovery-destroys-healthy-main",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/resilience.rs:483-486,589-595",
       "title": "恢复窗存在时“重载”总是销毁健康主窗",
       "expected": "心跳新鲜时 reload，卡死才 rebuild",
       "actual": "只要恢复窗存在就 replace_main_window，丢失表单/阅读位置",
-      "fix": "按 heartbeat_readiness().responsive 分支；用户明确选择重建时才销毁",
-      "evidence": "static-review"
+      "fix": "按心跳响应决定 reload 或重建，健康主窗不再销毁",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:update-semver-loose",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/update.rs:277-315",
       "title": "手写 SemVer 过宽，1.2 / 1.2.3.4 / 01.2.3 可通过",
       "expected": "严格 MAJOR.MINOR.PATCH",
       "actual": "fromVersion 误配，补丁/全量判定可能错误",
-      "fix": "使用 semver crate 或同等严格解析；拒绝前导零/多余段",
-      "evidence": "static-review"
+      "fix": "严格 MAJOR.MINOR.PATCH、前导零与预发布数字校验",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:update-total-timeout",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/update.rs:34,1264",
       "title": "更新下载 10 分钟总超时，慢网大包必断",
       "expected": "只限制空闲时间，不限制总时长",
       "actual": "4GiB 包在慢网达到 10 分钟即失败，只能整包重试",
-      "fix": "去掉总 timeout，保留 5 分钟读空闲超时；支持 Range 续传",
-      "evidence": "static-review"
+      "fix": "下载取消客户端总超时，改连接/空闲/60 分钟整体上限",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:update-manifest-integrity",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/update.rs:156-169,739-782",
       "title": "更新清单本身未签名，version/target 不在签名范围",
       "expected": "清单或签名元数据覆盖 version/target/架构",
       "actual": "仅制品签名；HTTPS 被攻破时可回滚旧签名包或下发错架构",
-      "fix": "签名清单（minisign/Ed25519），或把 version/target 纳入签名注释并校验",
-      "evidence": "static-review"
+      "fix": "清单签名字段覆盖版本/URL/sha256/size/notes",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:backend-errors-raw-zh",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src/components/Toast.tsx:3-8; src/pages/Library.tsx:715",
       "title": "后端 Err(String) 中文直出，六语种界面出现中文错误",
       "expected": "错误码映射到当前语言；技术细节只进诊断",
       "actual": "toastErr/ErrorState 原样显示 Rust 中文错误",
-      "fix": "定义稳定错误码 + i18n 文案；未知错误显示通用文案并记录原始信息",
-      "evidence": "static-review"
+      "fix": "新增 localizeBackendError；非中文界面不再直出中文错误",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:version-sync-nonatomic",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "scripts/version-lib.mjs:356-389",
       "title": "版本同步逐文件写入，缺字段时前文件已改且不回滚",
       "expected": "先校验全部目标，再原子写入或失败回滚",
       "actual": "先写 package.json，后续缺字段抛错，仓库进入不一致状态",
-      "fix": "两阶段：内存计算全部新内容 → 校验 → temp+rename；失败恢复原内容",
-      "evidence": "static-review"
+      "fix": "先校验全部文件，再原子写入；失败回滚原文件",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:version-buildhash-drift",
@@ -529,24 +643,28 @@
     {
       "id": "audit:online-html-encoding",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/online/html.rs:24,35-39,87",
       "title": "HTML 按 UTF-8 lossy + 纯正则解析，忽略 charset/base/script/注释",
       "expected": "按 content-type charset 解码；忽略脚本/注释；尊重 <base>；支持无引号属性",
       "actual": "GBK 页面乱码；script 内 <img> 文本/注释可能误采；base 失效；无引号 src 漏采",
-      "fix": "解码 charset；剥离 script/style/注释；读取 base；属性解析支持无引号",
-      "evidence": "static-review"
+      "fix": "encoding_rs 按 charset 解码并支持 base href",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:online-json-dedupe",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "src-tauri/src/online/direct.rs:163-184",
       "title": "JSON 清单重复 URL 未去重，页数/进度虚高",
       "expected": "规范化后保序去重",
       "actual": "重复条目原样入 pages",
-      "fix": "HashSet 去重并记录 droppedDuplicates",
-      "evidence": "static-review"
+      "fix": "JSON 清单规范 URL 后去重",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:online-ssrf-link-local",
@@ -595,24 +713,28 @@
     {
       "id": "audit:docs-removed-routes",
       "severity": "P3",
-      "status": "open",
+      "status": "fixed",
       "location": "README.md:20; docs/TECHNICAL.md:39,444-449; docs/smoke-test.md:84-85",
       "title": "文档仍描述已删除的 workbench/glossary/status/data 入口",
       "expected": "文档只列当前四路由与保留功能",
       "actual": "旧入口、翻译工作台和旧版本仍在文档中",
-      "fix": "按 v3 信息架构删改章节；文档版本已同步 0.11.0",
-      "evidence": "static-review"
+      "fix": "重写 README/TECHNICAL/smoke，删除已移除路由与 AI/sidecar 文档",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     },
     {
       "id": "audit:qa-weak-assertions",
       "severity": "P2",
-      "status": "open",
+      "status": "fixed",
       "location": "tests/qa/suites/*.mjs",
       "title": "部分断言仍偏弱：条件跳过/布尔代替内容/半透明背景对比度漏检",
       "expected": "失败即失败，断言内容与位置；合成背景计算对比度",
       "actual": "本轮已补 online 错误文案、条漫视口图片、900px resize 失败即失败；仍有 skip 与 alpha 对比度缺口",
-      "fix": "逐套件补内容断言；对比度探针合成 alpha；缺数据即 fail",
-      "evidence": "runtime"
+      "fix": "对比度探针逐层合成半透明背景；新增精确性断言",
+      "evidence": "runtime",
+      "fixedAt": "2026-10-22T23:17:28.207Z",
+      "lastSeen": "2026-10-22T23:17:28.207Z"
     }
   ]
 }

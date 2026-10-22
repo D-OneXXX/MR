@@ -252,7 +252,7 @@ fn handle_download_event(app: &AppHandle, event: DownloadEvent<'_>) -> bool {
 }
 
 #[tauri::command]
-pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
     crate::resilience::ensure_online_allowed()?;
     let url = validate_browser_url(&url)?;
     if let Some(window) = app.get_webview_window(BROWSER_LABEL) {
@@ -262,14 +262,19 @@ pub fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
         return Ok(());
     }
 
-    let download_app = app.clone();
-    WebviewWindowBuilder::new(&app, BROWSER_LABEL, WebviewUrl::External(url))
-        .title(BROWSER_TITLE)
-        .inner_size(BROWSER_WIDTH, BROWSER_HEIGHT)
-        .on_download(move |_webview, event| handle_download_event(&download_app, event))
-        .build()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    // WebView 构建不能占住 async IPC 线程/主事件循环；移到阻塞池。
+    tauri::async_runtime::spawn_blocking(move || {
+        let download_app = app.clone();
+        WebviewWindowBuilder::new(&app, BROWSER_LABEL, WebviewUrl::External(url))
+            .title(BROWSER_TITLE)
+            .inner_size(BROWSER_WIDTH, BROWSER_HEIGHT)
+            .on_download(move |_webview, event| handle_download_event(&download_app, event))
+            .build()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("浏览器窗口任务失败：{e}"))?
 }
 
 #[tauri::command]

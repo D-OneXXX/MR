@@ -159,6 +159,7 @@ export interface BookDayPoint {
 export interface ScanResult {
   added: number;
   books: BookInfo[];
+  errors: string[];
 }
 
 export interface ImportItemResult {
@@ -183,56 +184,10 @@ export interface RemoveResult {
   errors: string[];
 }
 
-export interface RegionRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-export interface OcrResult {
-  text: string;
-  elapsedMs: number;
-}
-
-export interface TranslateResult {
-  translated: string;
-  model: string;
-  elapsedMs: number;
-}
-
-export interface TransLogEntry {
-  kind: string;
-  ok: boolean;
-  elapsedMs: number;
-  createdAt: string;
-}
-
-export interface TransStats {
-  ocrCalls: number;
-  ocrFail: number;
-  ocrAvgMs: number;
-  transCalls: number;
-  transFail: number;
-  transAvgMs: number;
-  recent: TransLogEntry[];
-}
-
 export interface Settings {
   theme: string;
   cacheBudgetMb: number;
   libraryDir: string;
-  transApiKey: string;
-  transEndpoint: string;
-  transModel: string;
-  transTemp: number;
-  transTimeoutS: number;
-  ocrEndpoint: string;
-  ocrTimeoutS: number;
-  srcLang: string;
-  dstLang: string;
-  /** 实验性功能：翻译（工作台/选区翻译/批量预翻译/术语表）。默认关闭。 */
-  experimentalTrans: boolean;
   /** 实验性功能：条漫模式。默认关闭，关闭时版式只在单页/双页间切换。 */
   experimentalWebtoon: boolean;
   /** 实验性功能：URL 在线直读（JSON 清单 / 单页 HTML 图集）。默认关闭。 */
@@ -243,83 +198,6 @@ export interface Settings {
   onlineConcurrency: number;
   /** 手动请求头：JSON 对象或单行 Cookie；仅用于自建/授权源，明文存储。 */
   onlineHeaders: string;
-  sidecarEndpoint: string;
-  sidecarTimeoutS: number;
-  wbDetector: string;
-  wbOcr: string;
-  wbInpaint: string;
-}
-
-export interface DetectBox {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  score?: number;
-  vertical?: boolean;
-}
-
-export interface OcrBoxResult {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  text: string;
-}
-
-export interface WbDetectResult {
-  width: number;
-  height: number;
-  boxes: DetectBox[];
-  elapsedMs: number;
-}
-
-export interface WbOcrResult {
-  results: OcrBoxResult[];
-  elapsedMs: number;
-}
-
-export interface WbImageResult {
-  dataUrl: string;
-  width: number;
-  height: number;
-  elapsedMs: number;
-}
-
-export interface WbTransItem {
-  text: string;
-  translated: string;
-  cached: boolean;
-}
-
-export interface WbTranslateResult {
-  items: WbTransItem[];
-  elapsedMs: number;
-}
-
-export interface WbStoredOcr {
-  width: number;
-  height: number;
-  boxes: DetectBox[];
-  texts: string[];
-}
-
-export interface BatchJob {
-  id: number;
-  bookId: string;
-  bookTitle: string;
-  state: "queued" | "running" | "paused" | "done" | "done_errors" | "failed" | "cancelled";
-  totalPages: number;
-  donePages: number;
-  okPages: number;
-  failPages: number;
-  lastError: string;
-}
-
-export interface SidecarHealth {
-  ok: boolean;
-  device: string;
-  models: Record<string, string>;
 }
 
 /** 在线源连通性探测结果（只解析清单，不写库）。 */
@@ -363,26 +241,15 @@ export interface HandoffStatus {
 // 设置的权威副本在 SQLite；这里维护 localStorage 镜像，让无法等待
 // 异步 getSettings 的组件（阅读器/导航）能同步读取开关状态。
 
-const EXP_KEY = "mr-exp-trans";
 const EXP_WT_KEY = "mr-exp-wt";
 const EXP_ONLINE_KEY = "mr-exp-online";
 
 function applySettingsMirror(s: Settings) {
   try {
-    localStorage.setItem(EXP_KEY, s.experimentalTrans ? "1" : "0");
     localStorage.setItem(EXP_WT_KEY, s.experimentalWebtoon ? "1" : "0");
     localStorage.setItem(EXP_ONLINE_KEY, s.experimentalOnline ? "1" : "0");
   } catch {
     /* 忽略 */
-  }
-}
-
-/** 同步读取实验性翻译开关（镜像；任一处 getSettings/setSettings 成功即刷新）。 */
-export function isTransEnabled(): boolean {
-  try {
-    return localStorage.getItem(EXP_KEY) === "1";
-  } catch {
-    return false;
   }
 }
 
@@ -409,11 +276,6 @@ export function onExperimentalChange(cb: () => void): () => void {
   const h = () => cb();
   window.addEventListener("mr-settings-changed", h);
   return () => window.removeEventListener("mr-settings-changed", h);
-}
-
-/** 兼容旧签名：订阅翻译开关变化。 */
-export function onTransToggle(cb: (enabled: boolean) => void): () => void {
-  return onExperimentalChange(() => cb(isTransEnabled()));
 }
 
 export const api = {
@@ -467,9 +329,7 @@ export const api = {
     invoke<void>("set_settings", { settings }).then(() => {
       applySettingsMirror(settings);
       window.dispatchEvent(new CustomEvent("mr-settings-changed"));
-    }),  ocrRegion: (bookId: string, index: number, rect: RegionRect) =>
-    invoke<OcrResult>("ocr_region", { bookId, index, rect }),
-  // 解析 JSON 清单/单页 HTML 图集并入库或恢复；不改变已有书进度。
+    }),  // 解析 JSON 清单/单页 HTML 图集并入库或恢复；不改变已有书进度。
   resolveOnlineUrl: (url: string) =>
     invoke<BookInfo>("resolve_online_url", { url }),
   // 只测试清单/图集 + 代理连通性，不写库。
@@ -538,46 +398,4 @@ export const api = {
     invoke<BrowserDownload[]>("list_browser_downloads"),
   importBrowserDownload: (path: string) =>
     invoke<string | null>("import_browser_download", { path }),
-  translateRegion: (text: string) =>
-    invoke<TranslateResult>("translate_region", { text }),
-  getTransStats: () => invoke<TransStats>("get_trans_stats"),
-  sidecarHealth: () => invoke<SidecarHealth>("sidecar_health"),
-  glossaryList: (seriesId: string) =>
-    invoke<[string, string][]>("glossary_list", { seriesId }),
-  glossarySet: (seriesId: string, src: string, dst: string) =>
-    invoke<void>("glossary_set", { seriesId, src, dst }),
-  glossaryRemove: (seriesId: string, src: string) =>
-    invoke<void>("glossary_remove", { seriesId, src }),
-  wbDetect: (bookId: string, index: number) =>
-    invoke<WbDetectResult>("wb_detect", { bookId, index }),
-  wbOcr: (bookId: string, index: number, boxes: DetectBox[]) =>
-    invoke<WbOcrResult>("wb_ocr", { bookId, index, boxes }),
-  wbInpaint: (bookId: string, index: number, boxes: DetectBox[]) =>
-    invoke<WbImageResult>("wb_inpaint", { bookId, index, boxes }),
-  wbTranslate: (bookId: string, index: number, texts: string[]) =>
-    invoke<WbTranslateResult>("wb_translate", { bookId, index, texts }),
-  wbSaveOcr: (
-    bookId: string,
-    index: number,
-    width: number,
-    height: number,
-    boxes: DetectBox[],
-    texts: string[],
-  ) =>
-    invoke<void>("wb_save_ocr", {
-      bookId,
-      index,
-      width,
-      height,
-      boxes,
-      texts,
-    }),
-  wbGetOcr: (bookId: string, index: number) =>
-    invoke<WbStoredOcr | null>("wb_get_ocr", { bookId, index }),
-  batchEnqueue: (bookId: string) =>
-    invoke<BatchJob>("batch_enqueue", { bookId }),
-  batchPause: (bookId: string) => invoke<void>("batch_pause", { bookId }),
-  batchResume: (bookId: string) => invoke<void>("batch_resume", { bookId }),
-  batchCancel: (bookId: string) => invoke<void>("batch_cancel", { bookId }),
-  batchList: () => invoke<BatchJob[]>("batch_list"),
 };

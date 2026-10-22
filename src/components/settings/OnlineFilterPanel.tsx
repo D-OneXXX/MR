@@ -14,6 +14,7 @@ import {
   type OnlineFilterStats,
 } from "@/lib/tauri";
 import { useI18n } from "@/i18n";
+import { localizeBackendError } from "@/features/errors/localize";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -83,7 +84,7 @@ export default function OnlineFilterPanel() {
       setStats(nextStats);
       setRules(nextRules);
     } catch (e) {
-      setError(typeof e === "string" ? e : String(e));
+      setError(localizeBackendError(e));
     } finally {
       setLoading(false);
     }

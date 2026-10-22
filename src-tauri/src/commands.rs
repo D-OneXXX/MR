@@ -12,16 +12,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::db::{self};
-use crate::ocr;
 use crate::pipeline;
 use crate::pipeline::RenderedPage;
 use crate::source::{self, BackendError, ImageSource};
 use crate::state::AppState;
-use crate::translate;
 use crate::{
     BookDayPoint, BookInfo, Dashboard, HeatDay, ImportItemResult, ImportResult, MemoryStats,
-    OcrResult, OnlineProbe, PageDim, PageEntry, PageImage, RegionRect, RemoveResult, ScanResult,
-    SeriesProgress, Settings, TransStats, TranslateResult,
+    OnlineProbe, PageDim, PageEntry, PageImage, RemoveResult, ScanResult, SeriesProgress, Settings,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use image::GenericImageView as _;
@@ -302,44 +299,71 @@ pub(crate) fn import_local_archive(
     Ok(Some(book.id))
 }
 
-/// 扫描目录：其直接子目录（图片书）与直接 .zip/.cbz 文件均为一本书；单书路径直接入库。
-fn blocking_scan(db_path: PathBuf, root: &str) -> Result<Vec<BookInfo>, BackendError> {
+/// 递归收集书籍路径：直下有图片的目录视为一本书；否则继续向下找章节目录
+/// 与 zip/cbz。限制深度并跳过 symlink，避免链接环。
+fn collect_book_paths(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    const MAX_DEPTH: usize = 8;
+    if depth > MAX_DEPTH || !root.is_dir() {
+        return;
+    }
+    if dir_has_direct_images(root) {
+        out.push(root.to_path_buf());
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut kids: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    kids.sort_by(|a, b| {
+        crate::commands::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy())
+    });
+    for kid in kids {
+        let Ok(meta) = std::fs::symlink_metadata(&kid) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if kid.is_dir() {
+            collect_book_paths(&kid, depth + 1, out);
+        } else if source::is_archive_path(&kid) {
+            out.push(kid);
+        }
+    }
+}
+
+/// 扫描目录：直接子目录/嵌套章节目录（含图片）与 zip/cbz 均入库；单书路径直接入库。
+fn blocking_scan(
+    db_path: PathBuf,
+    root: &str,
+) -> Result<(Vec<BookInfo>, Vec<String>), BackendError> {
     let path = PathBuf::from(root);
     let conn = rusqlite::Connection::open(db_path)?;
     db::init_schema(&conn)?;
 
     let mut books = Vec::new();
+    let mut errors = Vec::new();
+    let mut candidates = Vec::new();
     if path.is_dir() {
-        let mut kids: Vec<PathBuf> = std::fs::read_dir(&path)?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .collect();
-        kids.sort();
-        for kid in kids {
-            if kid.is_dir() {
-                // 目录书：含图片才算书。
-                if let Ok(src) = source::open_source(&kid) {
-                    if src.page_count().unwrap_or(0) > 0 {
-                        match scan_single_book(&conn, &kid) {
-                            Ok(b) => books.push(b),
-                            Err(e) => eprintln!("[scan] 跳过 {}：{e}", kid.display()),
-                        }
-                    }
-                }
-            } else if source::is_archive_path(&kid) {
-                match scan_single_book(&conn, &kid) {
-                    Ok(b) => books.push(b),
-                    Err(e) => eprintln!("[scan] 跳过 {}：{e}", kid.display()),
-                }
-            }
-        }
+        collect_book_paths(&path, 0, &mut candidates);
     } else if path.is_file() && source::is_archive_path(&path) {
-        books.push(scan_single_book(&conn, &path)?);
+        candidates.push(path.clone());
     } else {
         return Err(BackendError::Msg(format!(
             "扫描路径无效（需要目录或 .zip/.cbz）：{root}"
         )));
     }
-    Ok(books)
+    let mut seen = std::collections::HashSet::new();
+    for candidate in candidates {
+        if !seen.insert(candidate.clone()) {
+            continue;
+        }
+        match scan_single_book(&conn, &candidate) {
+            Ok(book) => books.push(book),
+            Err(error) => errors.push(format!("{}：{error}", candidate.display())),
+        }
+    }
+    Ok((books, errors))
 }
 
 pub(crate) async fn blocking<T, F>(f: F) -> Result<T, String>
@@ -359,7 +383,7 @@ pub async fn scan_library(
     path: String,
 ) -> Result<ScanResult, String> {
     let db_path = state.db_path();
-    let books = blocking(move || blocking_scan(db_path, &path)).await?;
+    let (books, errors) = blocking(move || blocking_scan(db_path, &path)).await?;
     // 刷新后全量回读。
     let list = state.db.with(|conn| {
         db::list_books(conn, None)
@@ -369,6 +393,7 @@ pub async fn scan_library(
     Ok(ScanResult {
         added: books.len(),
         books: list,
+        errors,
     })
 }
 
@@ -387,29 +412,22 @@ fn import_outcome(
     }
 }
 
-/// 单本书路径的去重导入：已入库 → skipped；软删过 → 恢复；新路径 → 入库。
+/// 单本书路径导入：已入库也重新扫描并 upsert，刷新页数/元数据，保留进度；
+/// 软删的书同样恢复。读取失败进入 failed，而不是静默 skipped。
 fn import_one(conn: &rusqlite::Connection, p: &Path) -> ImportItemResult {
     let path = p.to_string_lossy().to_string();
     let id = db::book_id_for_path(&path);
-    match db::get_book(conn, &id) {
-        Ok(Some(_)) => {
-            // 已在书库（含软删）。软删的书走恢复（upsert 会置 removed=0 并刷新页数）。
-            match db::book_is_removed(conn, &id) {
-                Ok(true) => match scan_single_book(conn, p) {
-                    Ok(b) => {
-                        import_outcome(&path, "restored", "已恢复，阅读进度保留".into(), Some(b))
-                    }
-                    Err(e) => import_outcome(&path, "failed", e.to_string(), None),
-                },
-                Ok(false) => import_outcome(&path, "skipped", "已在书库中".into(), None),
-                Err(e) => import_outcome(&path, "failed", e.to_string(), None),
-            }
+    let existed = matches!(db::get_book(conn, &id), Ok(Some(_)));
+    match scan_single_book(conn, p) {
+        Ok(book) => {
+            let (status, message) = if existed {
+                ("restored", "已刷新页数与元数据，阅读进度保留")
+            } else {
+                ("added", "已入库")
+            };
+            import_outcome(&path, status, message.into(), Some(book))
         }
-        Ok(None) => match scan_single_book(conn, p) {
-            Ok(b) => import_outcome(&path, "added", "已入库".into(), Some(b)),
-            Err(e) => import_outcome(&path, "failed", e.to_string(), None),
-        },
-        Err(e) => import_outcome(&path, "failed", e.to_string(), None),
+        Err(error) => import_outcome(&path, "failed", error.to_string(), None),
     }
 }
 
@@ -463,28 +481,22 @@ fn import_blocking(
             if dir_has_direct_images(&p) {
                 out.push(import_one(&conn, &p));
             } else {
-                let mut kids: Vec<PathBuf> = std::fs::read_dir(&p)?
-                    .filter_map(|e| e.ok().map(|e| e.path()))
-                    .collect();
-                kids.sort();
+                let mut candidates = Vec::new();
+                collect_book_paths(&p, 0, &mut candidates);
+                let mut seen = std::collections::HashSet::new();
                 let mut found = 0usize;
-                for kid in kids {
-                    let kid_is_book = if kid.is_dir() {
-                        dir_has_direct_images(&kid)
-                    } else {
-                        source::is_archive_path(&kid)
-                    };
-                    if !kid_is_book {
+                for candidate in candidates {
+                    if !seen.insert(candidate.clone()) {
                         continue;
                     }
                     found += 1;
-                    out.push(import_one(&conn, &kid));
+                    out.push(import_one(&conn, &candidate));
                 }
                 if found == 0 {
                     out.push(import_outcome(
                         &path,
                         "failed",
-                        "目录中没有可识别的书籍（需要：直下图片 / 含图片的子文件夹 / zip/cbz）"
+                        "目录中没有可识别的书籍（需要：直下图片 / 含图片的嵌套目录 / zip/cbz）"
                             .into(),
                         None,
                     ));
@@ -1173,141 +1185,6 @@ pub async fn get_webtoon_tile(
     Ok(to_page_image(index, rendered))
 }
 
-/// 阶段三:框选区域 OCR。裁剪原图(非展示缩放图)→ 本地 WinRT / HTTP OCR。
-#[tauri::command]
-pub async fn ocr_region(
-    state: State<'_, Arc<AppState>>,
-    book_id: String,
-    index: u32,
-    rect: RegionRect,
-) -> Result<OcrResult, String> {
-    let t0 = Instant::now();
-    let (endpoint, lang, timeout_s) = {
-        let s = state.settings.lock().clone();
-        (s.ocr_endpoint, s.src_lang, s.ocr_timeout_s)
-    };
-    let st = state.inner().clone();
-    let bid = book_id.clone();
-    let png = blocking(move || -> Result<Vec<u8>, BackendError> {
-        let handle = st.source_handle_for_book(&bid)?;
-        let count = handle.page_count()?;
-        if index >= count as u32 {
-            return Err(BackendError::Msg(format!(
-                "页码 {index} 超出范围(共 {count} 页)"
-            )));
-        }
-        let raw = handle.read_raw(index as usize)?;
-        ocr::encode_png(&ocr::crop_dyn(&raw, &rect)?)
-    })
-    .await?;
-
-    let client = state.http.clone();
-    let res: Result<String, String> = if endpoint.trim().is_empty() {
-        blocking(move || ocr::ocr_local(&png, &lang).map_err(BackendError::Msg)).await
-    } else {
-        ocr::ocr_http(&client, endpoint.trim(), &png, timeout_s)
-            .await
-            .map_err(err)
-    };
-
-    let elapsed_ms = t0.elapsed().as_millis() as u64;
-    let _ = state
-        .db
-        .with(|conn| db::log_trans(conn, "ocr", res.is_ok(), elapsed_ms).map_err(err));
-    match res {
-        Ok(text) => Ok(OcrResult { text, elapsed_ms }),
-        Err(e) => Err(e),
-    }
-}
-
-/// 阶段三:翻译一段文本(OpenAI 兼容 /chat/completions)。
-#[tauri::command]
-pub async fn translate_region(
-    state: State<'_, Arc<AppState>>,
-    text: String,
-) -> Result<TranslateResult, String> {
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return Err("没有可翻译的文本".into());
-    }
-    let t0 = Instant::now();
-    let s = state.settings.lock().clone();
-    let res = translate::translate(&state.http, &s, &text).await;
-    let elapsed_ms = t0.elapsed().as_millis() as u64;
-    let _ = state
-        .db
-        .with(|conn| db::log_trans(conn, "trans", res.is_ok(), elapsed_ms).map_err(err));
-    let (translated, model, _) = res?;
-    Ok(TranslateResult {
-        translated,
-        model,
-        elapsed_ms,
-    })
-}
-
-/// 阶段三:OCR/翻译调用统计(设置页展示)。
-#[tauri::command]
-pub async fn get_trans_stats(state: State<'_, Arc<AppState>>) -> Result<TransStats, String> {
-    state.db.with(|conn| db::trans_stats(conn).map_err(err))
-}
-
-/// 阶段三:sidecar 健康检查(模型加载状态/设备),工作台四下拉框的状态来源。
-#[tauri::command]
-pub async fn sidecar_health(
-    state: State<'_, Arc<AppState>>,
-) -> Result<crate::sidecar::SidecarHealth, String> {
-    let (endpoint, timeout) = {
-        let s = state.settings.lock().clone();
-        (s.sidecar_endpoint, s.sidecar_timeout_s)
-    };
-    let client = state.http.clone();
-    crate::sidecar::health(&client, endpoint.trim(), timeout).await
-}
-
-/// 阶段三:术语表(按系列)读取。
-#[tauri::command]
-pub async fn glossary_list(
-    state: State<'_, Arc<AppState>>,
-    series_id: String,
-) -> Result<Vec<(String, String)>, String> {
-    state
-        .db
-        .with(|conn| db::glossary_list(conn, &series_id).map_err(err))
-}
-
-/// 阶段三:术语表新增/修改一条。
-#[tauri::command]
-pub async fn glossary_set(
-    state: State<'_, Arc<AppState>>,
-    series_id: String,
-    src: String,
-    dst: String,
-) -> Result<(), String> {
-    let (series_id, src, dst) = (
-        series_id.trim().to_string(),
-        src.trim().to_string(),
-        dst.trim().to_string(),
-    );
-    if series_id.is_empty() || src.is_empty() || dst.is_empty() {
-        return Err("系列 ID、原文、译文都不能为空".into());
-    }
-    state
-        .db
-        .with(|conn| db::glossary_upsert(conn, &series_id, &src, &dst).map_err(err))
-}
-
-/// 阶段三:术语表删除一条。
-#[tauri::command]
-pub async fn glossary_remove(
-    state: State<'_, Arc<AppState>>,
-    series_id: String,
-    src: String,
-) -> Result<(), String> {
-    state
-        .db
-        .with(|conn| db::glossary_remove(conn, series_id.trim(), src.trim()).map_err(err))
-}
-
 #[tauri::command]
 pub async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<Settings, String> {
     Ok(state.settings.lock().clone())
@@ -1320,24 +1197,6 @@ fn settings_persist_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("theme", s.theme.clone()),
         ("cache_budget_mb", s.cache_budget_mb.to_string()),
         ("library_dir", s.library_dir.clone()),
-        ("trans_endpoint", s.trans_endpoint.clone()),
-        ("trans_model", s.trans_model.clone()),
-        ("trans_api_key", s.trans_api_key.clone()),
-        ("trans_temp", s.trans_temp.to_string()),
-        ("trans_timeout_s", s.trans_timeout_s.to_string()),
-        ("ocr_endpoint", s.ocr_endpoint.clone()),
-        ("ocr_timeout_s", s.ocr_timeout_s.to_string()),
-        ("src_lang", s.src_lang.clone()),
-        ("dst_lang", s.dst_lang.clone()),
-        (
-            "experimental_trans",
-            if s.experimental_trans {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        ),
         (
             "experimental_webtoon",
             if s.experimental_webtoon {
@@ -1347,11 +1206,6 @@ fn settings_persist_pairs(s: &Settings) -> Vec<(&'static str, String)> {
             }
             .to_string(),
         ),
-        ("sidecar_endpoint", s.sidecar_endpoint.clone()),
-        ("sidecar_timeout_s", s.sidecar_timeout_s.to_string()),
-        ("wb_detector", s.wb_detector.clone()),
-        ("wb_ocr", s.wb_ocr.clone()),
-        ("wb_inpaint", s.wb_inpaint.clone()),
         (
             "experimental_online",
             if s.experimental_online {
@@ -1404,11 +1258,6 @@ fn upsert_resolved_meta(
             .map(|m| m.manifest_hash)
     });
     let changed = old_hash.as_deref() != Some(new_hash.as_str());
-    if changed && old.is_some() && db::has_active_batch(conn, &id)? {
-        return Err(BackendError::Msg(
-            "清单已变化，请先取消该书的批量任务再更新".into(),
-        ));
-    }
     db::upsert_online_book(
         conn,
         &id,
@@ -1418,9 +1267,6 @@ fn upsert_resolved_meta(
         &meta.source_type,
         &meta.meta_json,
     )?;
-    if changed && old.is_some() {
-        db::clear_book_derived(conn, &id)?;
-    }
     let row =
         db::get_book(conn, &id)?.ok_or_else(|| BackendError::Msg("在线书入库后回读失败".into()))?;
     Ok((row, changed))
@@ -2616,22 +2462,7 @@ mod tests {
             "theme",
             "cache_budget_mb",
             "library_dir",
-            "trans_endpoint",
-            "trans_model",
-            "trans_api_key",
-            "trans_temp",
-            "trans_timeout_s",
-            "ocr_endpoint",
-            "ocr_timeout_s",
-            "src_lang",
-            "dst_lang",
-            "experimental_trans",
             "experimental_webtoon",
-            "sidecar_endpoint",
-            "sidecar_timeout_s",
-            "wb_detector",
-            "wb_ocr",
-            "wb_inpaint",
             "experimental_online",
             "online_proxy",
             "online_concurrency",
@@ -2736,6 +2567,10 @@ mod tests {
         tiny_png(&book_dir.join("p1.png"));
         tiny_png(&book_dir.join("p2.png"));
         build_zip(&root.join("第二话.zip"));
+        // 两层嵌套章节也应被递归识别。
+        let nested = root.join("系列/第3话");
+        std::fs::create_dir_all(&nested).unwrap();
+        tiny_png(&nested.join("p1.png"));
 
         // 单本书：直下就是图片。
         let single = dir.join("单行本");
@@ -2744,15 +2579,15 @@ mod tests {
 
         let db = dir.join("lib.db");
 
-        // 书库根 → 逐子项入库 2 本。
+        // 书库根 → 逐子项/嵌套章节入库 3 本。
         let items = import_blocking(db.clone(), vec![root.to_string_lossy().into()]).unwrap();
-        assert_eq!(items.iter().filter(|i| i.status == "added").count(), 2);
+        assert_eq!(items.iter().filter(|i| i.status == "added").count(), 3);
 
         // 直下图片的目录 → 单本书。
         let items = import_blocking(db.clone(), vec![single.to_string_lossy().into()]).unwrap();
         assert_eq!(items.iter().filter(|i| i.status == "added").count(), 1);
 
-        // 重复导入 → 全部 skipped（已在书库中），不重复入库。
+        // 重复导入 → 重新扫描并刷新页数/元数据，但不重复建书。
         let items = import_blocking(
             db,
             vec![
@@ -2761,8 +2596,11 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(items.len(), 3);
-        assert!(items.iter().all(|i| i.status == "skipped"), "{items:?}");
+        assert_eq!(items.len(), 4);
+        assert!(
+            items.iter().all(|i| i.status == "restored"),
+            "重复导入应刷新而非静默跳过：{items:?}"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2895,106 +2733,36 @@ mod tests {
     }
 
     #[test]
-    fn apply_resolved_meta_keeps_derived_caches_when_hash_unchanged() {
+    fn apply_resolved_meta_is_idempotent_when_hash_unchanged() {
         let st = online_state();
         let meta = online_meta("https://example.com/gallery/2", "不变", "h1", pages(2));
         let (row, _) = apply_resolved_meta(&st, &meta).expect("首次入库");
         let id = row.id;
 
-        st.db
-            .with(|conn| {
-                db::save_page_ocr(conn, &id, 0, 800, 1200, "[]", r#"["原文"]"#)
-                    .map_err(|e| e.to_string())?;
-                db::cache_put(conn, "t1", "译文", &id).map_err(|e| e.to_string())
-            })
-            .expect("写入派生缓存");
-
         let (row, changed) = apply_resolved_meta(&st, &meta).expect("同清单应可重复解析");
-
         assert!(!changed, "hash 未变不应标记变化");
         assert_eq!(row.id, id);
-        st.db
-            .with(|conn| {
-                assert!(db::get_page_ocr(conn, &id, 0).unwrap().is_some());
-                assert_eq!(db::cache_get(conn, "t1").unwrap().as_deref(), Some("译文"));
-                Ok(())
-            })
-            .unwrap();
+        assert_eq!(row.page_count, 2);
     }
 
     #[test]
-    fn apply_resolved_meta_rejects_hash_change_with_active_batch() {
-        let st = online_state();
-        let original = online_meta("https://example.com/gallery/3", "旧标题", "h1", pages(2));
-        let (row, _) = apply_resolved_meta(&st, &original).expect("首次入库");
-        let id = row.id;
-        let changed_meta = online_meta("https://example.com/gallery/3", "新标题", "h2", pages(1));
-
-        for batch_state in ["queued", "paused"] {
-            st.db
-                .with(|conn| {
-                    conn.execute("DELETE FROM batch_jobs", [])
-                        .map_err(|e| e.to_string())?;
-                    let job =
-                        db::batch_create(conn, &id, "旧标题", 2).map_err(|e| e.to_string())?;
-                    db::batch_set_state(conn, job, batch_state, "").map_err(|e| e.to_string())
-                })
-                .expect("准备活动批量任务");
-
-            let err = apply_resolved_meta(&st, &changed_meta).expect_err("应拒绝更新");
-            assert!(
-                err.to_string().contains("请先取消该书的批量任务"),
-                "{batch_state}: {err}"
-            );
-
-            st.db
-                .with(|conn| {
-                    let row = db::get_book(conn, &id)
-                        .map_err(|e| e.to_string())?
-                        .expect("旧书仍在库");
-                    assert_eq!(row.title, "旧标题", "{batch_state}: 不应更新标题");
-                    assert_eq!(row.page_count, 2, "{batch_state}: 不应更新页数");
-                    Ok(())
-                })
-                .unwrap();
-        }
-    }
-
-    #[test]
-    fn apply_resolved_meta_clears_derived_and_clamps_progress_on_hash_change() {
+    fn apply_resolved_meta_clamps_progress_on_hash_change() {
         let st = online_state();
         let old = online_meta("https://example.com/gallery/4", "旧", "h1", pages(5));
         let (row, _) = apply_resolved_meta(&st, &old).expect("首次入库");
         let id = row.id;
-
         st.db
             .with(|conn| {
-                db::set_progress(conn, &id, 4, None).map_err(|e| e.to_string())?;
-                db::save_page_ocr(conn, &id, 0, 800, 1200, "[]", r#"["旧"]"#)
-                    .map_err(|e| e.to_string())?;
-                db::cache_put(conn, "t1", "旧译文", &id).map_err(|e| e.to_string())
+                db::set_progress(conn, &id, 4, None).map_err(|e| e.to_string())
             })
-            .expect("写入进度与派生缓存");
+            .expect("写入进度");
 
-        // 页数不变的变化：进度保留，派生缓存清空。
+        // 页数不变的变化：进度保留。
         let same_len = online_meta("https://example.com/gallery/4", "新", "h2", pages(5));
         let (row, changed) = apply_resolved_meta(&st, &same_len).expect("清单变化应更新");
         assert!(changed);
         assert_eq!(row.title, "新");
         assert_eq!(row.current_page, 4, "页数未缩小时进度应保留");
-        st.db
-            .with(|conn| {
-                assert!(
-                    db::get_page_ocr(conn, &id, 0).unwrap().is_none(),
-                    "page_ocr 应清空"
-                );
-                assert!(
-                    db::cache_get(conn, "t1").unwrap().is_none(),
-                    "trans_cache 应清空"
-                );
-                Ok(())
-            })
-            .unwrap();
 
         // 页数缩小的变化：进度钳制到新末页。
         let shorter = online_meta("https://example.com/gallery/4", "新", "h3", pages(2));
@@ -3254,35 +3022,6 @@ mod tests {
         let stored: crate::online::StoredMeta = serde_json::from_str(&second.meta_json).unwrap();
         assert_eq!(stored.series_id.as_deref(), Some("S"));
         assert!(stored.next_url.is_none());
-    }
-
-    #[test]
-    fn batch_ingest_rolls_back_on_active_batch() {
-        let st = online_state();
-        let existing = insert_linked(&st, "http://e/old", "旧", None, None);
-        st.db
-            .with(|conn| {
-                db::batch_create(conn, &existing, "旧", 1).unwrap();
-                Ok(())
-            })
-            .unwrap();
-        let payload = r#"{"chapters":[
-            {"title":"新","url":"http://e/new","pages":["http://x/1.jpg"]},
-            {"title":"改名","url":"http://e/old","pages":["http://x/9.jpg","http://x/10.jpg"]}
-        ]}"#;
-        let metas = crate::online::direct::parse_batch_payload(payload.as_bytes()).unwrap();
-        let err = ingest_resolved_batch(&st, metas).unwrap_err().to_string();
-        assert!(err.contains("批量任务"), "{err}");
-        st.db
-            .with(|conn| {
-                let new_id = db::book_id_for_path("http://e/new");
-                assert!(db::get_book(conn, &new_id).unwrap().is_none());
-                let old = db::get_book(conn, &existing).unwrap().unwrap();
-                assert_eq!(old.title, "旧");
-                assert_eq!(old.page_count, 1);
-                Ok(())
-            })
-            .unwrap();
     }
 
     #[test]

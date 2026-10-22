@@ -171,6 +171,7 @@ const zhCN = {
   "settings.errors.loadSettingsDetail": "设置加载失败：{detail}",
 
   "settings.toast.scanDone": "扫描完成，书库共 {count} 本",
+  "settings.toast.scanErrors": "有 {count} 个条目无法读取，已跳过",
   "settings.toast.proxyFilled": "已填入系统代理，保存后生效",
   "settings.toast.proxyNotFound": "未检测到开启的系统代理",
   "settings.toast.sessionCleared": "已清空内存凭据",
@@ -356,6 +357,7 @@ const zhTW: SettingsMessages = {
   "settings.errors.loadSettingsDetail": "設定載入失敗：{detail}",
 
   "settings.toast.scanDone": "掃描完成，書庫共 {count} 本",
+  "settings.toast.scanErrors": "有 {count} 個項目無法讀取，已跳過",
   "settings.toast.proxyFilled": "已填入系統代理，儲存後生效",
   "settings.toast.proxyNotFound": "未偵測到開啟的系統代理",
   "settings.toast.sessionCleared": "已清空記憶體憑證",
@@ -540,6 +542,7 @@ const en: SettingsMessages = {
   "settings.errors.loadSettingsDetail": "Failed to load settings: {detail}",
 
   "settings.toast.scanDone": "Scan complete. {count} books in the library.",
+  "settings.toast.scanErrors": "{count} entries could not be read and were skipped",
   "settings.toast.proxyFilled": "System proxy filled in; save to apply",
   "settings.toast.proxyNotFound": "No enabled system proxy detected",
   "settings.toast.sessionCleared": "Memory credentials cleared",
@@ -728,6 +731,8 @@ const es: SettingsMessages = {
 
   "settings.toast.scanDone":
     "Escaneo completado. {count} libros en la biblioteca.",
+  "settings.toast.scanErrors":
+    "No se pudieron leer {count} entradas; se omitieron",
   "settings.toast.proxyFilled":
     "Proxy del sistema rellenado; guarda para aplicar",
   "settings.toast.proxyNotFound":
@@ -920,6 +925,8 @@ const ja: SettingsMessages = {
 
   "settings.toast.scanDone":
     "スキャン完了。ライブラリに {count} 冊あります。",
+  "settings.toast.scanErrors":
+    "{count} 件を読み込めずスキップしました",
   "settings.toast.proxyFilled":
     "システムプロキシを入力しました。保存で反映されます",
   "settings.toast.proxyNotFound": "有効なシステムプロキシが見つかりません",
@@ -1110,6 +1117,7 @@ const ko: SettingsMessages = {
     "설정을 불러오지 못했습니다: {detail}",
 
   "settings.toast.scanDone": "스캔 완료. 서재에 {count}권이 있습니다.",
+  "settings.toast.scanErrors": "항목 {count}개를 읽지 못해 건너뛰었습니다",
   "settings.toast.proxyFilled":
     "시스템 프록시를 채웠습니다. 저장 후 적용됩니다",
   "settings.toast.proxyNotFound": "활성화된 시스템 프록시를 찾지 못했습니다",

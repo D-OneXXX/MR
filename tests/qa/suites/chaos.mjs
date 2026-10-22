@@ -61,6 +61,7 @@ export async function runChaosSuite(ctx, report) {
   await ctx.goto("#/");
   await page.waitFor("!!document.querySelector('main')", { timeout: 8000 });
 
+  note(report, "chaos stage: rage-click");
   // ---------- Rage click ----------
   const point = await page.eval(`(() => {
     for (let y = 300; y < 600; y += 30) {
@@ -166,8 +167,11 @@ export async function runChaosSuite(ctx, report) {
     }
   }
 
+  note(report, "chaos stage: freeze");
   // ---------- Freeze → independent recovery → user-authorized reload ----------
   try {
+    await ctx.reconnectMain();
+    page = ctx.page;
     const targetsBefore = await targetsOnPort(ctx);
     const mainBefore = targetsBefore.find((target) => target.url.includes("localhost:1420/") && !target.url.includes("recovery.html"));
     await freezeMain(page);
@@ -250,8 +254,10 @@ export async function runChaosSuite(ctx, report) {
     return;
   }
 
+  note(report, "chaos stage: safe-mode");
   // ---------- Safe mode from a real frozen main ----------
   try {
+    await ctx.reconnectMain();
     await ctx.goto("#/");
     const safeBefore = await invoke(ctx.page, "get_safe_mode_state");
     if (safeBefore.active) {

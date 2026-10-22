@@ -86,6 +86,7 @@ const zhCN = {
   "source.url": "在线 URL",
   "source.hiddenAddress": "在线源地址（已脱敏）",
   "error.requestFailed": "调用 {cmd} 失败",
+  "error.backendGeneric": "操作失败；详情已写入本地日志。",
 } as const;
 
 type CommonMessages = { [K in keyof typeof zhCN]: string };
@@ -178,6 +179,7 @@ const zhTW: CommonMessages = {
   "source.url": "線上 URL",
   "source.hiddenAddress": "線上來源位址（已遮罩）",
   "error.requestFailed": "呼叫 {cmd} 失敗",
+  "error.backendGeneric": "操作失敗；詳情已寫入本機日誌。",
 };
 
 const en: CommonMessages = {
@@ -268,6 +270,7 @@ const en: CommonMessages = {
   "source.url": "Online URL",
   "source.hiddenAddress": "Online source (sanitized)",
   "error.requestFailed": "Request failed: {cmd}",
+  "error.backendGeneric": "The operation failed. Details were written to the local log.",
 };
 
 const es: CommonMessages = {
@@ -358,6 +361,7 @@ const es: CommonMessages = {
   "source.url": "URL en línea",
   "source.hiddenAddress": "Fuente en línea (oculta)",
   "error.requestFailed": "Error al llamar a {cmd}",
+  "error.backendGeneric": "La operación falló. Los detalles se guardaron en el registro local.",
 };
 
 const ja: CommonMessages = {
@@ -448,6 +452,7 @@ const ja: CommonMessages = {
   "source.url": "オンライン URL",
   "source.hiddenAddress": "オンラインソース（秘匿）",
   "error.requestFailed": "{cmd} の呼び出しに失敗しました",
+  "error.backendGeneric": "操作に失敗しました。詳細はローカルログに記録しました。",
 };
 
 const ko: CommonMessages = {
@@ -538,6 +543,7 @@ const ko: CommonMessages = {
   "source.url": "온라인 URL",
   "source.hiddenAddress": "온라인 소스(숨김)",
   "error.requestFailed": "{cmd} 호출 실패",
+  "error.backendGeneric": "작업에 실패했습니다. 자세한 내용은 로컬 로그에 기록했습니다.",
 };
 
 export const commonMessages = {

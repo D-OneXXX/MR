@@ -1,6 +1,7 @@
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
+import { localizeBackendError } from "@/features/errors/localize";
 import PixelPet from "./PixelPet";
 
 /** 统一错误态：像素宠物 + 原因 + 重试。 */
@@ -12,9 +13,10 @@ export default function ErrorState({
   onRetry?: () => void;
 }) {
   const { t } = useI18n();
+  const localized = localizeBackendError(message);
   return (
     <div className="pet-wrap">
-      <PixelPet mode="empty" message={message} />
+      <PixelPet mode="empty" message={localized} />
       {onRetry && (
         <Button variant="pill" size="pill-sm" onClick={onRetry}>
           <RotateCcw />

@@ -6,11 +6,19 @@
 ## 1. 已配置内容
 
 - `src-tauri/tauri.conf.json`
-  - `bundle.createUpdaterArtifacts: true`
+  - `bundle.targets: ["nsis", "deb", "rpm", "appimage"]`；Windows 只发布 NSIS，
+    不再产出 MSI
+  - `bundle.windows.nsis`：`installMode: "both"`、`compression: "lzma"`、
+    `displayLanguageSelector: true`，六种安装向导语言
+    `SimpChinese / TradChinese / English / Spanish / Japanese / Korean`
   - `bundle.fileAssociations`：`.cbz` / `.zip`
   - `plugins.updater.pubkey`：本仓库对应的 minisign 公钥
   - `plugins.updater.endpoints`：
     `https://github.com/D-OneXXX/MR/releases/latest/download/latest.json`
+  - `plugins.updater.windows.installMode: "passive"`
+- **升级身份**：`productName`、`identifier` 与主程序名必须保持稳定；NSIS 升级键、
+  桌面快捷方式与 `.cbz` 关联都依赖它们。不要为了改品牌名而直接修改；
+  如需改名，必须设计迁移方案并重新验证升级继承。
 - `src-tauri/capabilities/updater.json`：仅主窗获得 `updater:default`；
   重启走自研 `restart_app`，**没有** `process:*` 权限。
 - `.github/workflows/release.yml`：推送 `v*` 标签时构建 NSIS 安装包、

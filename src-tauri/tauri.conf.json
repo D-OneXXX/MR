@@ -3,6 +3,7 @@
   "productName": "MangaReader",
   "version": "0.16.0",
   "identifier": "com.local.manga-reader",
+  "mainBinaryName": "manga-reader-tauri",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -27,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "deb", "rpm", "appimage"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -35,6 +36,21 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "compression": "lzma",
+        "displayLanguageSelector": true,
+        "languages": [
+          "SimpChinese",
+          "TradChinese",
+          "English",
+          "Spanish",
+          "Japanese",
+          "Korean"
+        ]
+      }
+    },
     "createUpdaterArtifacts": true,
     "fileAssociations": [
       {
@@ -58,7 +74,10 @@
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY3Q0IzMDQ0NjBFMDhFNEEKUldSS2p1QmdSRERMWjBNTEpWb2E3N1l6MFFJYzRVMHl6L3BEZWM3NUNKOGcxY2hoNHVYZDVRdnEK",
       "endpoints": [
         "https://github.com/D-OneXXX/MR/releases/latest/download/latest.json"
-      ]
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

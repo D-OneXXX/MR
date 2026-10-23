@@ -127,6 +127,13 @@
   只信任 GitHub Releases `latest.json`；CI 必须通过
   `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 注入私钥，
   **私钥与密码绝不入库**。两条通道可以并存，但不得互相绕过校验。
+- Windows 只发布 NSIS，`bundle.targets` 锁定为
+  `["nsis", "deb", "rpm", "appimage"]`，不得加入 `msi`；NSIS 使用
+  `installMode: "both"`、`compression: "lzma"`、语言选择器与六种内置语言。
+  `plugins.updater.windows.installMode` 固定为 `passive`。
+- **升级身份不可漂移**：`productName`（MangaReader）、`identifier`
+  （com.local.manga-reader）与主程序名是 NSIS 卸载/升级键、桌面快捷方式和
+  `.cbz`/`.zip` 文件关联的锚点；静态守卫 `static:release-surface` 会阻止误改。
 - 补丁与全量包必须下载到**系统临时目录**（`std::env::temp_dir()`）或应用专属 staging 目录，
   完成 SHA-256 + minisign 签名校验后，由标准安装器事务（PowerShell `-EncodedCommand`，UTF-16LE）
   完成替换；校验失败一律拒绝。

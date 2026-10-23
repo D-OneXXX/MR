@@ -273,6 +273,31 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `restart_app` 是自研命令，不需要 `process:*`。
 - `version:sync` 先校验全部文件再统一写入，失败回滚，不产生半迁移。
 
+### 8.3 Windows NSIS 安装器与升级身份（0.16.0）
+
+- `bundle.targets = ["nsis", "deb", "rpm", "appimage"]`；Windows 只产出 NSIS
+  `*-setup.exe`，绝不产出 MSI。Tauri 在 Windows 上会忽略 deb/rpm/appimage；
+  Linux 由 `tauri.linux.conf.json` 覆盖为 deb/rpm/appimage，避免跨平台构建 NSIS。
+- `bundle.windows.nsis`：`installMode: "both"`（用户可选当前用户/全机安装，
+  元数据写 HKCU 或 HKLM）、`compression: "lzma"`、`displayLanguageSelector: true`，
+  内置 `SimpChinese` / `TradChinese` / `English` / `Spanish` / `Japanese` / `Korean`
+  六种安装向导语言。
+- `plugins.updater.windows.installMode: "passive"`：自动更新以被动模式运行 NSIS，
+  只显示进度条与管理员授权（若原安装为全机模式），不弹出完整安装向导。
+- **升级身份**：NSIS 的卸载/升级键为
+  `Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}`，快捷方式与
+  文件关联都绑定 `${PRODUCTNAME}` 与稳定的主程序名。因此 `productName`（MangaReader）、
+  `identifier`（com.local.manga-reader）与主程序名（显式锁定
+  `mainBinaryName: "manga-reader-tauri"`）必须保持稳定；升级安装会复用
+  `MANUPRODUCTKEY` 中记录的 `$INSTDIR`，在 update 模式下跳过快捷方式重建，
+  文件关联则按当前配置重新登记。
+- 静态守卫 `static:release-surface` 锁定 productName/identifier、targets、NSIS 六语、
+  `.cbz/.zip` 关联、`plugins.updater.windows.installMode` 与签名 CI，防止误改断链。
+- 已知上游限制：Tauri 内置的 NSIS 韩语 MUI 文件缺少 MultiUser 插件的 5 条
+  「安装范围」文案，选择韩语时该页会回退英文；其余安装向导为韩语，语言选择与安装
+  不受影响。Tauri 的 `customLanguageFiles` 在 `MUI_LANGUAGE` 之后才 include，
+  无法补齐这些已冻结的 MUI 字符串，强行自定义只会留下无效配置。
+
 ### 8.3 Linux 更新策略（feat/linux-port）
 
 - 安装形态由 Rust `platform::install_channel()` 判定，经 `get_app_info` 的

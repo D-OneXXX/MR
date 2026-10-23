@@ -536,6 +536,35 @@ export function checkReleaseSurface(root, report) {
 
   const conf = parseJson("src-tauri/tauri.conf.json");
   if (conf) {
+    // 升级身份：NSIS 的卸载/升级键、快捷方式与文件关联都依赖这两个值。
+    // 一旦改名，旧版本的桌面快捷方式、.cbz 关联和自动更新继承会断链。
+    if (conf.productName !== "MangaReader") {
+      errors.push(`productName 必须固定为 MangaReader（当前 ${conf.productName}）`);
+    }
+    if (conf.identifier !== "com.local.manga-reader") {
+      errors.push(
+        `identifier 必须固定为 com.local.manga-reader（当前 ${conf.identifier}）`,
+      );
+    }
+    if (conf.mainBinaryName !== "manga-reader-tauri") {
+      errors.push(
+        `mainBinaryName 必须固定为 manga-reader-tauri（当前 ${conf.mainBinaryName}）`,
+      );
+    }
+
+    const expectedTargets = ["nsis", "deb", "rpm", "appimage"];
+    const targets = Array.isArray(conf.bundle?.targets)
+      ? conf.bundle.targets
+      : [];
+    if (JSON.stringify(targets) !== JSON.stringify(expectedTargets)) {
+      errors.push(
+        `bundle.targets 必须锁定为 ${JSON.stringify(expectedTargets)}（当前 ${JSON.stringify(targets)}）`,
+      );
+    }
+    if (targets.includes("msi")) {
+      errors.push("bundle.targets 不得包含 msi：Windows 只发布 NSIS");
+    }
+
     const associations = Array.isArray(conf.bundle?.fileAssociations)
       ? conf.bundle.fileAssociations
       : [];
@@ -547,6 +576,35 @@ export function checkReleaseSurface(root, report) {
         errors.push(`bundle.fileAssociations 缺少 .${ext}`);
       }
     }
+
+    const nsis = conf.bundle?.windows?.nsis;
+    if (!nsis || typeof nsis !== "object") {
+      errors.push("bundle.windows.nsis 缺失");
+    } else {
+      if (nsis.installMode !== "both") {
+        errors.push("bundle.windows.nsis.installMode 必须为 both");
+      }
+      if (nsis.compression !== "lzma") {
+        errors.push("bundle.windows.nsis.compression 必须为 lzma");
+      }
+      if (nsis.displayLanguageSelector !== true) {
+        errors.push("bundle.windows.nsis.displayLanguageSelector 必须为 true");
+      }
+      const expectedLanguages = [
+        "SimpChinese",
+        "TradChinese",
+        "English",
+        "Spanish",
+        "Japanese",
+        "Korean",
+      ];
+      if (JSON.stringify(nsis.languages) !== JSON.stringify(expectedLanguages)) {
+        errors.push(
+          `bundle.windows.nsis.languages 必须为 ${JSON.stringify(expectedLanguages)}`,
+        );
+      }
+    }
+
     if (conf.bundle?.createUpdaterArtifacts !== true) {
       errors.push("bundle.createUpdaterArtifacts 必须为 true");
     }
@@ -568,6 +626,9 @@ export function checkReleaseSurface(root, report) {
       )
     ) {
       errors.push("plugins.updater.endpoints 缺少 GitHub latest.json");
+    }
+    if (conf.plugins?.updater?.windows?.installMode !== "passive") {
+      errors.push("plugins.updater.windows.installMode 必须为 passive");
     }
   }
 

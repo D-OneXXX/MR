@@ -17,6 +17,8 @@ export type UpdatePhase =
 export interface AppInfo {
   version: string;
   buildBaseline: string;
+  /** 构建来源指纹：official / community（关于页徽章 + 诊断快照）。 */
+  buildOrigin: string;
   target: string;
   profile: string;
   signatureConfigured: boolean;

@@ -66,6 +66,10 @@ pub struct AppInfo {
     pub profile: String,
     pub signature_configured: bool,
     pub sha256_enforced: bool,
+    /// 构建来源指纹：`official`（官方 CI 注入 `MR_BUILD_ORIGIN=official`，
+    /// 产物走官方签名）/ `community`（第三方自行修改编译，默认值）。
+    /// 用于「关于」页徽章与诊断快照，防止社区魔改版的 Bug 混淆官方排查。
+    pub build_origin: String,
     /// Linux 安装形态：`appimage`（可自动替换）/ `system`（deb/rpm，
     /// 引导手动安装）/ `portable` / 空串（非 Linux，前端跳过相关提示）。
     pub linux_install: String,
@@ -1589,6 +1593,7 @@ pub fn get_app_info() -> AppInfo {
         .to_string(),
         signature_configured: signature_configured(),
         sha256_enforced: true,
+        build_origin: build_origin().to_string(),
         linux_install: crate::platform::install_channel().to_string(),
     }
 }
@@ -1604,6 +1609,18 @@ fn build_baseline() -> &'static str {
             }
         }
         None => "local",
+    }
+}
+
+/// 构建来源指纹（编译期注入）：
+/// - 官方发布流水线注入 `MR_BUILD_ORIGIN=official`；
+/// - 社区构建脚本显式注入 `community`；
+/// - 本地裸 `cargo build` / `tauri dev` 未注入 → 默认按社区构建对待
+///   （宁可误标社区，不可把第三方产物冒充官方）。
+pub fn build_origin() -> &'static str {
+    match option_env!("MR_BUILD_ORIGIN") {
+        Some(value) if value.trim().eq_ignore_ascii_case("official") => "official",
+        _ => "community",
     }
 }
 

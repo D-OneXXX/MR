@@ -48,6 +48,7 @@ import {
   type ThemeMode,
 } from "@/features/theme/ThemeProvider";
 import { writeOnlineLastTest } from "@/lib/onlineLastTest";
+import { updateApi } from "@/features/update/api";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -950,6 +951,7 @@ export default function SettingsPage() {
                     {t("settings.about.dataFlowValue")}
                   </dd>
                 </div>
+                <AboutBuildOriginCell />
               </dl>
               <p className="text-xs leading-relaxed text-muted-foreground">
                 {t("settings.about.note")}
@@ -958,6 +960,22 @@ export default function SettingsPage() {
 
             <UpdatesPanel />
             <SupportPanel />
+
+            {/* 非商用授权徽章（Build Origin）：常驻关于分区底部。 */}
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant="secondary"
+                  className="rounded-full border border-border px-3 py-1 text-xs font-semibold whitespace-nowrap"
+                >
+                  {t("settings.about.nonCommercial")}
+                </Badge>
+                <span className="text-xs font-medium">
+                  {t("settings.about.buildOriginLabel")}
+                </span>
+              </div>
+              <AboutBuildOriginValue />
+            </div>
           </TabsContent>
 
           <TabsContent value="privacy" className="mt-2 space-y-4">
@@ -1692,5 +1710,64 @@ export default function SettingsPage() {
       </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * 构建来源指纹：官方 CI 注入 `MR_BUILD_ORIGIN=official` → Official
+ * Release；否则按社区构建展示。拉取失败回落 community（宁可误标社区，
+ * 不把第三方产物冒充官方）。模块级缓存避免多处重复 invoke。
+ */
+let buildOriginCache: Promise<string> | null = null;
+function fetchBuildOrigin(): Promise<string> {
+  buildOriginCache ??= updateApi
+    .getAppInfo()
+    .then((info) => (info.buildOrigin === "official" ? "official" : "community"))
+    .catch(() => "community");
+  return buildOriginCache;
+}
+
+function useBuildOrigin(): string | null {
+  const [origin, setOrigin] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchBuildOrigin().then((value) => {
+      if (alive) setOrigin(value);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return origin;
+}
+
+/** 构建来源指纹格子（关于分区 dl 的第 5 格）。 */
+function AboutBuildOriginCell() {
+  const { t } = useI18n();
+  const origin = useBuildOrigin();
+  return (
+    <div className="rounded-xl border border-border bg-background/60 px-3 py-2.5">
+      <dt className="text-[11px] font-medium text-muted-foreground">
+        {t("settings.about.buildOrigin")}
+      </dt>
+      <dd className="mt-1 text-sm font-semibold">
+        {origin === "official"
+          ? t("settings.about.buildOriginOfficial")
+          : t("settings.about.buildOriginCommunity")}
+      </dd>
+    </div>
+  );
+}
+
+/** 构建来源指纹值（非商用徽章行右侧）。 */
+function AboutBuildOriginValue() {
+  const { t } = useI18n();
+  const origin = useBuildOrigin();
+  return (
+    <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+      {origin === "official"
+        ? t("settings.about.buildOriginOfficial")
+        : t("settings.about.buildOriginCommunity")}
+    </span>
   );
 }

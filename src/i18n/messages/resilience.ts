@@ -179,6 +179,7 @@ const zhCN = {
     "修复与临时方案：给出具体修复方案、最小验证/测试计划，以及安全的用户侧临时规避方案。不要建议上传私有日志或绕过本地隐私模型。",
   "diagnostics.prompt.format":
     "输出清晰的 Markdown。优先给出具体、可验证的步骤，而非泛泛建议。",
+  "diagnostics.prompt.runtimeOrigin": "构建来源：{origin}",
 } as const;
 
 type ResilienceMessages = { [K in keyof typeof zhCN]: string };
@@ -364,6 +365,7 @@ const zhTW: ResilienceMessages = {
     "修正與臨時方案：提出具體修正、最小驗證/測試計畫，以及安全的使用者端暫時規避方式。不要建議上傳私有日誌或繞過本機隱私模型。",
   "diagnostics.prompt.format":
     "輸出清晰的 Markdown。優先提供具體、可驗證的步驟，而非空泛建議。",
+  "diagnostics.prompt.runtimeOrigin": "構建來源：{origin}",
 };
 
 const en: ResilienceMessages = {
@@ -552,6 +554,7 @@ const en: ResilienceMessages = {
     "Fix and temporary workaround — propose a concrete fix, a minimal verification/test plan, and a safe user-facing workaround. Do not suggest uploading private logs or bypassing the local privacy model.",
   "diagnostics.prompt.format":
     "Output clear Markdown. Prefer specific, testable steps over generic advice.",
+  "diagnostics.prompt.runtimeOrigin": "Build origin: {origin}",
 };
 
 const es: ResilienceMessages = {
@@ -744,6 +747,7 @@ const es: ResilienceMessages = {
     "Corrección y solución temporal: propone una corrección concreta, un plan mínimo de verificación/pruebas y una alternativa segura para el usuario. No sugieras subir registros privados ni eludir el modelo de privacidad local.",
   "diagnostics.prompt.format":
     "Devuelve Markdown claro. Prefiere pasos concretos y comprobables antes que consejos genéricos.",
+  "diagnostics.prompt.runtimeOrigin": "Origen de compilación: {origin}",
 };
 
 const ja: ResilienceMessages = {
@@ -934,6 +938,7 @@ const ja: ResilienceMessages = {
     "修正と一時的な回避策：具体的な修正、最小限の検証/テスト計画、安全なユーザー向け回避策を提案してください。非公開ログのアップロードやローカル優先のプライバシーモデルの回避は提案しないでください。",
   "diagnostics.prompt.format":
     "明確な Markdown で出力してください。一般的な助言より、具体的で検証可能な手順を優先してください。",
+  "diagnostics.prompt.runtimeOrigin": "ビルド由来：{origin}",
 };
 
 const ko: ResilienceMessages = {
@@ -1122,6 +1127,7 @@ const ko: ResilienceMessages = {
     "수정 및 임시 우회: 구체적인 수정안, 최소 검증/테스트 계획, 사용자를 위한 안전한 임시 우회 방법을 제안하세요. 비공개 로그 업로드나 로컬 우선 개인정보 모델 우회는 제안하지 마세요.",
   "diagnostics.prompt.format":
     "명확한 Markdown으로 출력하세요. 일반적인 조언보다 구체적이고 검증 가능한 단계를 우선하세요.",
+  "diagnostics.prompt.runtimeOrigin": "빌드 출처: {origin}",
 };
 
 export const resilienceMessages = {

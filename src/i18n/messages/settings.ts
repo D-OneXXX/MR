@@ -229,6 +229,12 @@ const zhCN = {
   "settings.backup.restored": "已从备份恢复：{books} 本 · {days} 天阅读记录",
   "settings.backup.applied": "已应用备份中的主题、语言与阅读器偏好",
   "settings.backup.error": "备份操作失败，请重试",
+  "settings.about.buildOrigin": "构建来源",
+  "settings.about.buildOriginLabel": "构建来源指纹（Build Origin）",
+  "settings.about.buildOriginOfficial": "Official Release",
+  "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
+  "settings.about.nonCommercial": "非商业授权 (Non-Commercial Only)",
+  "settings.backup.forwardSchema": "备份来自更高版本（{version}）：已按兼容模式恢复核心书库与进度，高版本新增配置项被忽略",
 } as const;
 
 type SettingsMessages = { [K in keyof typeof zhCN]: string };
@@ -463,6 +469,12 @@ const zhTW: SettingsMessages = {
   "settings.backup.restored": "已從備份還原：{books} 本 · {days} 天閱讀記錄",
   "settings.backup.applied": "已套用備份中的主題、語言與閱讀器偏好",
   "settings.backup.error": "備份操作失敗，請再試一次",
+  "settings.about.buildOrigin": "構建來源",
+  "settings.about.buildOriginLabel": "構建來源指紋（Build Origin）",
+  "settings.about.buildOriginOfficial": "Official Release",
+  "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
+  "settings.about.nonCommercial": "非商業授權 (Non-Commercial Only)",
+  "settings.backup.forwardSchema": "備份來自更高版本（{version}）：已按相容模式還原核心書庫與進度，高版本新增設定項已忽略",
 };
 
 const en: SettingsMessages = {
@@ -698,6 +710,12 @@ const en: SettingsMessages = {
   "settings.backup.applied":
     "Theme, language and reader preferences from the backup were applied",
   "settings.backup.error": "Backup operation failed. Please try again.",
+  "settings.about.buildOrigin": "Build origin",
+  "settings.about.buildOriginLabel": "Build origin fingerprint",
+  "settings.about.buildOriginOfficial": "Official Release",
+  "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
+  "settings.about.nonCommercial": "Non-Commercial Only",
+  "settings.backup.forwardSchema": "Backup was exported by a newer version ({version}). Core library and progress were restored in compatibility mode; settings added in newer versions were ignored.",
 };
 
 const es: SettingsMessages = {
@@ -943,6 +961,12 @@ const es: SettingsMessages = {
     "Se aplicaron el tema, el idioma y las preferencias de lectura de la copia",
   "settings.backup.error":
     "La operación de copia falló. Inténtalo de nuevo.",
+  "settings.about.buildOrigin": "Origen de compilación",
+  "settings.about.buildOriginLabel": "Huella de origen de compilación",
+  "settings.about.buildOriginOfficial": "Official Release",
+  "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
+  "settings.about.nonCommercial": "Solo no comercial (Non-Commercial Only)",
+  "settings.backup.forwardSchema": "La copia procede de una versión más reciente ({version}). La biblioteca y el progreso esenciales se restauraron en modo de compatibilidad; se ignoraron las opciones añadidas en versiones más recientes.",
 };
 
 const ja: SettingsMessages = {
@@ -1189,6 +1213,12 @@ const ja: SettingsMessages = {
     "バックアップのテーマ、言語、リーダー設定を適用しました",
   "settings.backup.error":
     "バックアップ操作に失敗しました。もう一度お試しください。",
+  "settings.about.buildOrigin": "ビルド由来",
+  "settings.about.buildOriginLabel": "ビルド由来フィンガープリント",
+  "settings.about.buildOriginOfficial": "Official Release",
+  "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
+  "settings.about.nonCommercial": "非商用ライセンス (Non-Commercial Only)",
+  "settings.backup.forwardSchema": "新しいバージョン（{version}）で書き出されたバックアップです。互換モードで中核のライブラリと進捗を復元し、新バージョンで追加された設定は無視しました。",
 };
 
 const ko: SettingsMessages = {
@@ -1430,6 +1460,12 @@ const ko: SettingsMessages = {
   "settings.backup.applied":
     "백업의 테마, 언어, 리더 환경설정을 적용했습니다",
   "settings.backup.error": "백업 작업에 실패했습니다. 다시 시도하세요.",
+  "settings.about.buildOrigin": "빌드 출처",
+  "settings.about.buildOriginLabel": "빌드 출처 지문",
+  "settings.about.buildOriginOfficial": "Official Release",
+  "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
+  "settings.about.nonCommercial": "비상업 라이선스 (Non-Commercial Only)",
+  "settings.backup.forwardSchema": "더 최신 버전({version})에서 내보낸 백업입니다. 호환 모드로 핵심 라이브러리와 진행 상황을 복원했으며, 최신 버전에서 추가된 설정은 무시했습니다.",
 };
 
 export const settingsMessages = {

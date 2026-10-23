@@ -70,6 +70,7 @@ function runtimeSection(bundle: DiagnosticBundle): string {
   const lines = [
     tr("diagnostics.prompt.runtimeVersion", { version: r.version }),
     tr("diagnostics.prompt.runtimeBuild", { build: r.buildBaseline }),
+    tr("diagnostics.prompt.runtimeOrigin", { origin: r.buildOrigin }),
     tr("diagnostics.prompt.runtimeBundle", {
       version: APP_VERSION,
       commit: BUILD_COMMIT,

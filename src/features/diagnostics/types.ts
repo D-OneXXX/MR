@@ -1,6 +1,8 @@
 export interface DiagnosticRuntime {
   version: string;
   buildBaseline: string;
+  /** 构建来源指纹：official / community（区分官方发行版与社区魔改版）。 */
+  buildOrigin: string;
   os: string;
   arch: string;
   route?: string | null;

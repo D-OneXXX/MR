@@ -51,6 +51,9 @@ const KNOWN_KINDS: &[&str] = &[
 pub struct DiagnosticRuntime {
     pub version: String,
     pub build_baseline: String,
+    /// 构建来源指纹（`official` / `community`），随 AI 排查提示词导出，
+    /// 用于区分官方发行版与第三方社区魔改版的缺陷报告。
+    pub build_origin: String,
     pub os: String,
     pub arch: String,
     pub route: Option<String>,
@@ -808,6 +811,7 @@ pub fn diagnostics_collect(
     let runtime = DiagnosticRuntime {
         version: app_info.version,
         build_baseline: app_info.build_baseline,
+        build_origin: crate::update::build_origin().to_string(),
         os: sanitize_text(&os, redact_url_paths),
         arch: std::env::consts::ARCH.to_string(),
         route: context.route,

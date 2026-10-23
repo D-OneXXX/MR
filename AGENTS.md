@@ -6,7 +6,7 @@
 
 - 角色：首席架构师 / 实施代理。
 - 使命：本地优先、零遥测、零静默副作用的 Windows 桌面漫画阅读器。
-- 当前版本：`0.15.0`（版本单一事实源是 `package.json`，`npm run version:sync` 负责同步）。
+- 当前版本：`0.16.0`（版本单一事实源是 `package.json`，`npm run version:sync` 负责同步）。
 
 ---
 
@@ -107,6 +107,9 @@
   **严禁** 出现 `fs:allow-*` 全量、`shell:*`、`process:*` 等过宽权限。
 - 自研 Rust 命令（`invoke_handler` 注册）不经过 capability ACL；新增命令不需要改 JSON，
   但新增**插件**调用必须同步补权限。
+- 官方 Updater 的 `updater:default` 只授予主窗（`capabilities/updater.json`），
+  恢复窗/内嵌浏览器窗不得获得更新能力；重启走自研 `restart_app`，**禁止**声明
+  `process:*` 全量权限。
 - 内嵌浏览器窗只允许 `http/https` 导航，且**禁止跳回应用本地源**（`tauri.localhost`、
   开发态 `localhost:1420`）：远程页一旦自跳到本地 Origin，就可能拿到该窗口的本地能力。
 - 新增窗口时必须在同一提交内补齐 `windows` 数组，否则该窗口按钮“点了没反应”。
@@ -118,8 +121,12 @@
 ### 4.1 防杀软误报与安全事务更新
 
 - 严禁直接内存覆写正在运行的二进制。
-- 签名校验以构建期注入的 `MR_UPDATE_PUBKEY` 为准：注入了公钥时 minisign 校验强制生效；
-  未注入公钥时只接受回环（loopback）制品，不允许任何远程包落地。
+- 自定义补丁通道的签名校验以构建期注入的 `MR_UPDATE_PUBKEY` 为准：注入了公钥时
+  minisign 校验强制生效；未注入公钥时只接受回环（loopback）制品，不允许任何远程包落地。
+- 官方 GitHub Updater 通道以 `tauri.conf.json` 的 `plugins.updater.pubkey` 为准，
+  只信任 GitHub Releases `latest.json`；CI 必须通过
+  `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 注入私钥，
+  **私钥与密码绝不入库**。两条通道可以并存，但不得互相绕过校验。
 - 补丁与全量包必须下载到**系统临时目录**（`std::env::temp_dir()`）或应用专属 staging 目录，
   完成 SHA-256 + minisign 签名校验后，由标准安装器事务（PowerShell `-EncodedCommand`，UTF-16LE）
   完成替换；校验失败一律拒绝。
@@ -185,6 +192,15 @@
 - **无 Sidecar**：应用启动不得拉起任何 Python / 8500 端口进程；静态守卫在
   `tests/qa/suites/static.mjs`。
 - **在线提纯**：规则 → URL/DOM → 尺寸/宽高比 → 中位宽度/序列聚类 → 站点档案，四层漏斗不得删减。
+- **文件关联/单实例**：`.cbz` / `.zip` 与命令行路径只接受已存在的目录或压缩包；
+  二次启动由 `tauri-plugin-single-instance` 唤醒主窗，请求只驻留内存队列，
+  前端通过 `take_pending_open` 一次性消费。不得把任意参数当可执行命令。
+- **失效路径无损重定位**：只有本地源 `NotFound` 才标记 `missing`；重定位在单事务内
+  迁移 `id=sha256(newPath)`、`reading_log` 与过滤事件，保留 `current_page` /
+  `scroll_pct` / 阅读统计；绝不因文件移动而删记录或重置进度。
+- **本地备份/恢复**：`.mrbackup` 只含净化后的 SQLite 快照（书库/进度/统计/设置/
+  过滤规则）与白名单前端偏好；**绝不包含**图片缓存、`online_headers`、Cookie、
+  `online_filter_events` 或内部版本标记。恢复前必须完整性/计数校验，失败不得改活库。
 
 ---
 

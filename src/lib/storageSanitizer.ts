@@ -269,6 +269,8 @@ const KEY_RULES: Record<string, Rule> = {
   // 阅读版式 / 方向（pages/Reader.tsx loadPrefs）。
   "mr-reader-mode": enumRule(["single", "double"], "阅读版式"),
   "mr-reader-dir": enumRule(["rtl", "ltr"], "阅读方向"),
+  // 双页模式「首页封面单独成页」开关。
+  "mr-reader-cover": flagRule("双页封面偏移"),
   // 条漫阅读宽度：钳制区间对齐 pages/Reader.tsx 的 WT_MIN_WIDTH(50) / WT_MAX_WIDTH(150)。
   "mr-reader-wt-width": numberRule(50, 150, "条漫阅读宽度"),
   // 更早期的宽度键名，同一套钳制区间。

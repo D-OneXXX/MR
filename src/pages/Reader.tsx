@@ -46,10 +46,13 @@ import {
 } from "../components/ui/sheet";
 import {
   isSoloCover,
+  isWideSolo,
   spreadFor,
   stepPage,
   type Direction,
+  type PageDims,
   type PageMode,
+  type SpreadOptions,
 } from "../components/Reader/spread";
 import { READER_SHORTCUTS } from "../components/Reader/shortcuts";
 import WebtoonView, { type WebtoonHandle } from "../components/Reader/Webtoon";
@@ -111,14 +114,26 @@ function showFailure(prefixKey: MessageKey, detail: unknown): void {
   );
 }
 
-function loadPrefs(): { mode: PageMode; dir: Direction } {
+interface ReaderPrefs {
+  mode: PageMode;
+  dir: Direction;
+  /**
+   * 双页模式「首页封面单独成页」：null = 未显式设置，跟随方向默认
+   * （RTL 封面单页=日漫惯例，LTR 从 [0,1] 起对）。
+   */
+  cover: boolean | null;
+}
+
+function loadPrefs(): ReaderPrefs {
   try {
     const mode =
       localStorage.getItem("mr-reader-mode") === "double" ? "double" : "single";
     const dir = localStorage.getItem("mr-reader-dir") === "ltr" ? "ltr" : "rtl";
-    return { mode: mode as PageMode, dir: dir as Direction };
+    const rawCover = localStorage.getItem("mr-reader-cover");
+    const cover = rawCover === "1" ? true : rawCover === "0" ? false : null;
+    return { mode: mode as PageMode, dir: dir as Direction, cover };
   } catch {
-    return { mode: "single", dir: "rtl" };
+    return { mode: "single", dir: "rtl", cover: null };
   }
 }
 
@@ -157,6 +172,9 @@ export default function Reader() {
   const [pending, setPending] = useState<Record<number, boolean>>({});
   const [failed, setFailed] = useState<Record<number, boolean>>({});
   const [prefs, setPrefs] = useState(loadPrefs);
+  // 双页模式逐页原始尺寸（横向跨页大图独占判定）；按需加载，失败回落空表
+  // （退回朴素配对，仅损失宽页独占，不影响阅读）。
+  const [pageDims, setPageDims] = useState<PageDims | null>(null);
   // 按书记忆的版式（webtoon/single/double；null = 跟随全局偏好）。
   const [bookMode, setBookMode] = useState<PageMode | null>(null);
   const [wtSuggest, setWtSuggest] = useState(false);
@@ -241,10 +259,21 @@ export default function Reader() {
 
   const n = book?.pageCount ?? 0;
   const currentFilterIndex = mode === "webtoon" ? wtProgress.page : page;
-  const spread = spreadFor(page, n, mode, prefs.dir);
-  const solo = isSoloCover(spread, mode, prefs.dir);
-  const canPrev = n > 0 && stepPage(page, n, mode, prefs.dir, -1) !== page;
-  const canNext = n > 0 && stepPage(page, n, mode, prefs.dir, 1) !== page;
+  // 双页配对选项：封面偏移（显式设置优先，缺省 RTL 封面单页）+ 宽页独占。
+  const coverOffset = prefs.cover ?? prefs.dir === "rtl";
+  const spreadOptions: SpreadOptions = useMemo(
+    () => ({ dims: mode === "double" ? pageDims : null, coverOffset }),
+    [mode, pageDims, coverOffset],
+  );
+  const spreadOptsRef = useRef<SpreadOptions>(spreadOptions);
+  spreadOptsRef.current = spreadOptions;
+  const spread = spreadFor(page, n, mode, prefs.dir, spreadOptions);
+  const solo = isSoloCover(spread, mode, prefs.dir, spreadOptions);
+  const wideSolo = isWideSolo(spread, mode, pageDims);
+  const canPrev =
+    n > 0 && stepPage(page, n, mode, prefs.dir, -1, spreadOptions) !== page;
+  const canNext =
+    n > 0 && stepPage(page, n, mode, prefs.dir, 1, spreadOptions) !== page;
   const atLastPage =
     bookState === "ready" &&
     book !== null &&
@@ -458,7 +487,8 @@ export default function Reader() {
     const vh = el?.clientHeight || window.innerHeight;
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
     const boost = t.zoom > 1.25 ? Math.min(t.zoom, 2) : 1;
-    const per = spreadFor(t.page, t.book?.pageCount ?? 0, t.mode, t.dir).length;
+    const per = spreadFor(t.page, t.book?.pageCount ?? 0, t.mode, t.dir, spreadOptsRef.current)
+      .length;
     const bucket = (v: number) =>
       Math.min(MAX_EDGE, Math.max(64, Math.round(v / 64) * 64)) || 64;
     const w = bucket(((vw * dpr * boost) / Math.max(1, per)) || 0);
@@ -549,7 +579,7 @@ export default function Reader() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookState, book, page, mode, prefs.dir, sizeTick]);
+  }, [bookState, book, page, mode, prefs.dir, spreadOptions, sizeTick]);
 
   /* ---------- prune frontend urls outside the window ---------- */
   useEffect(() => {
@@ -590,7 +620,9 @@ export default function Reader() {
     const run = () => {
       const t = trackRef.current;
       if (!t.book || t.book.id !== book.id) return;
-      const vis = new Set(spreadFor(t.page, n, t.mode, t.dir));
+      const vis = new Set(
+        spreadFor(t.page, n, t.mode, t.dir, spreadOptsRef.current),
+      );
       const online = book.sourceType !== "local";
       const start = online ? t.page : t.page - 3;
       const end = online ? Math.min(n - 1, t.page + 2) : Math.min(n - 1, t.page + 3);
@@ -654,10 +686,42 @@ export default function Reader() {
     try {
       localStorage.setItem("mr-reader-mode", prefs.mode);
       localStorage.setItem("mr-reader-dir", prefs.dir);
+      // 封面偏移只在用户显式切换后落盘（null = 跟随方向默认，不写键）。
+      if (prefs.cover === null) localStorage.removeItem("mr-reader-cover");
+      else localStorage.setItem("mr-reader-cover", prefs.cover ? "1" : "0");
     } catch {
       /* ignore */
     }
   }, [prefs]);
+
+  /* ---------- double 模式逐页尺寸（宽页独占判定） ----------
+     本地书只读每页 256KB 头部（后端 LRU 缓存），在线书读清单尺寸；
+     失败静默回落朴素配对。换书清空，避免上一本的宽页表污染下一本。 */
+  useEffect(() => {
+    setPageDims(null);
+  }, [bookId]);
+  useEffect(() => {
+    if (mode !== "double" || bookState !== "ready" || !book) return;
+    let alive = true;
+    api.getWebtoonLayout(book.id).then(
+      (dims) => {
+        if (!alive) return;
+        const map: Map<number, readonly [number, number]> = new Map();
+        for (const dim of dims) {
+          if (dim.width > 0 && dim.height > 0) {
+            map.set(dim.index, [dim.width, dim.height]);
+          }
+        }
+        setPageDims(map.size ? map : null);
+      },
+      () => {
+        if (alive) setPageDims(null);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [mode, bookState, book]);
 
   /* ---------- resize -> re-request at viewport size ---------- */
   useEffect(() => {
@@ -758,7 +822,9 @@ export default function Reader() {
         poke();
         return;
       }
-      setPage((p) => stepPage(p, t.book!.pageCount, t.mode, t.dir, delta));
+      setPage((p) =>
+        stepPage(p, t.book!.pageCount, t.mode, t.dir, delta, spreadOptsRef.current),
+      );
       setPan({ x: 0, y: 0 });
       poke();
     },
@@ -1319,6 +1385,70 @@ export default function Reader() {
     fetchIdx(idx);
   };
 
+  /** 唤醒自愈：丢弃该页全部尺寸桶的缓存图并静默重取（无 toast 打扰）。 */
+  const healIdx = useCallback(
+    (idx: number) => {
+      const b = trackRef.current.book;
+      if (!b || idx < 0 || idx >= b.pageCount) return;
+      for (const key of [...requestedRef.current]) {
+        if (key.startsWith(`${idx}@`)) requestedRef.current.delete(key);
+      }
+      delete imgKeyRef.current[idx];
+      setImgs((prev) => {
+        if (!(idx in prev)) return prev;
+        const next = { ...prev };
+        delete next[idx];
+        return next;
+      });
+      fetchIdx(idx, { silent: true });
+    },
+    [fetchIdx],
+  );
+
+  /* ---------- 休眠唤醒 / 外接磁盘重连的视图自愈 ----------
+     系统从睡眠恢复时 GPU 纹理可能被重置成空白图（complete 但内容丢失）
+     或解码损坏。恢复可见时静默校验当前视口：未加载完、naturalWidth=0 或
+     decode() 拒绝的页面无感重载；单次唤醒最多修复 2 页，防止连环重取。 */
+  useEffect(() => {
+    let timer = 0;
+    const heal = () => {
+      if (document.hidden) return;
+      const root = canvasRef.current;
+      if (!root || !root.isConnected) return;
+      const candidates = Array.from(
+        root.querySelectorAll<HTMLImageElement>("img.reader-img[data-idx]"),
+      ).slice(0, 6);
+      void Promise.allSettled(
+        candidates.map(async (img) => {
+          if (img.complete && img.naturalWidth === 0) return img;
+          try {
+            await img.decode();
+            return null;
+          } catch {
+            return img;
+          }
+        }),
+      ).then((results) => {
+        if (!root.isConnected) return;
+        const broken = results
+          .map((r) => (r.status === "fulfilled" && r.value ? Number(r.value.dataset.idx) : NaN))
+          .filter(Number.isInteger);
+        for (const idx of broken.slice(0, 2)) healIdx(idx);
+      });
+    };
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(heal, 400);
+    };
+    document.addEventListener("visibilitychange", schedule);
+    window.addEventListener("focus", schedule);
+    return () => {
+      document.removeEventListener("visibilitychange", schedule);
+      window.removeEventListener("focus", schedule);
+      window.clearTimeout(timer);
+    };
+  }, [healIdx]);
+
   const toggleSettings = useCallback(() => {
     setSetOpen((o) => !o);
     setTocOpen(false);
@@ -1414,7 +1544,9 @@ export default function Reader() {
           />
         ) : (
           <div
-            className={`reader-pages${mode === "double" ? " reader-double" : ""}${solo ? " solo" : ""}`}
+            className={`reader-pages${mode === "double" ? " reader-double" : ""}${
+              solo ? (dirRtl ? " solo" : " solo-center") : ""
+            }${wideSolo ? " solo-center" : ""}`}
             style={{
               transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
             }}
@@ -1547,6 +1679,8 @@ export default function Reader() {
         webtoonReason={webtoonReason}
         modeLocked={safeMode}
         onMode={setMode}
+        coverOffset={coverOffset}
+        onCoverOffset={(value) => setPrefs((p) => ({ ...p, cover: value }))}
         tocOpen={tocOpen}
         onToc={openToc}
         moreOpen={moreOpen}
@@ -1833,6 +1967,40 @@ export default function Reader() {
                 </Button>
               </div>
             </div>
+
+            {mode === "double" ? (
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-muted-foreground">
+                  {t("reader.cover.label")}
+                </span>
+                <div
+                  className="flex items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
+                  role="group"
+                  aria-label={t("reader.cover.label")}
+                >
+                  <Button
+                    type="button"
+                    variant={!coverOffset ? "pill-primary" : "pill-ghost"}
+                    size="pill-sm"
+                    aria-pressed={!coverOffset}
+                    onClick={() => setPrefs((p) => ({ ...p, cover: false }))}
+                    className="h-8 whitespace-nowrap px-2.5 text-[11px]"
+                  >
+                    {t("reader.cover.off")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={coverOffset ? "pill-primary" : "pill-ghost"}
+                    size="pill-sm"
+                    aria-pressed={coverOffset}
+                    onClick={() => setPrefs((p) => ({ ...p, cover: true }))}
+                    className="h-8 whitespace-nowrap px-2.5 text-[11px]"
+                  >
+                    {t("reader.cover.on")}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
 
             {mode === "webtoon" ? (
               <div className="space-y-2.5">

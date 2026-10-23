@@ -1026,6 +1026,60 @@ const WebtoonView = memo(function WebtoonView({
     });
     void loadTile(i, tile);
   };
+  // 唤醒自愈 effect 是一次性挂载，经 ref 取最新闭包，避免调用过期的 loadTile。
+  const retryTileRef = useRef(retryTile);
+  retryTileRef.current = retryTile;
+
+  /* ---------- 休眠唤醒自愈：恢复可见时校验视口内切片 ----------
+     GPU 纹理重置会让已解码切片变空白；对 complete 且 naturalWidth=0 或
+     decode() 拒绝的切片丢缓存静默重取，单次唤醒最多修复 3 片。 */
+  useEffect(() => {
+    let timer = 0;
+    const heal = () => {
+      if (document.hidden) return;
+      const root = scrollerRef.current;
+      if (!root || !root.isConnected) return;
+      const imgs = Array.from(
+        root.querySelectorAll<HTMLImageElement>(".webtoon-tile img"),
+      ).slice(0, 8);
+      void Promise.allSettled(
+        imgs.map(async (img) => {
+          if (img.complete && img.naturalWidth === 0) return img;
+          try {
+            await img.decode();
+            return null;
+          } catch {
+            return img;
+          }
+        }),
+      ).then((results) => {
+        if (!root.isConnected) return;
+        const keys = results
+          .map((r) => {
+            if (r.status !== "fulfilled" || !r.value) return null;
+            const tile = (r.value as HTMLImageElement).closest(".webtoon-tile");
+            const key = tile?.getAttribute("data-key") ?? "";
+            return key || null;
+          })
+          .filter((key): key is string => Boolean(key));
+        for (const key of keys.slice(0, 3)) {
+          if (tilesRef.current[key]) retryTileRef.current(key);
+        }
+      });
+    };
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(heal, 400);
+    };
+    document.addEventListener("visibilitychange", schedule);
+    window.addEventListener("focus", schedule);
+    return () => {
+      document.removeEventListener("visibilitychange", schedule);
+      window.removeEventListener("focus", schedule);
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ---------- 只渲染窗口内切片（DOM 数量有界） ---------- */
   const tileNodes = useMemo<ReactNode>(() => {
@@ -1057,6 +1111,7 @@ const WebtoonView = memo(function WebtoonView({
         out.push(
           <div
             key={key}
+            data-key={key}
             className="webtoon-tile"
             style={{ top, height }}
           >

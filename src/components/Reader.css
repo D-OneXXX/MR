@@ -79,6 +79,9 @@
 .reader-double { gap: 10px; padding-left: 16px; padding-right: 16px; }
 .reader-double.solo { justify-content: flex-end; }
 .reader-double.solo .reader-cell { flex: 0 1 calc(50% - 6px); }
+/* 居中独占：LTR 封面单页 + 横向跨页大图（宽 > 高×1.1）独占一屏。 */
+.reader-double.solo-center { justify-content: center; }
+.reader-double.solo-center .reader-cell { flex: 1 1 100%; }
 
 .reader-img {
   max-width: 100%;

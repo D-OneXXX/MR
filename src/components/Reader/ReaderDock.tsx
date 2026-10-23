@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   Keyboard,
@@ -55,6 +56,9 @@ interface Props {
   webtoonReason: string;
   modeLocked?: boolean;
   onMode: (mode: PageMode) => void;
+  /** 双页模式「首页封面单独成页」开关（仅 double 模式显示）。 */
+  coverOffset: boolean;
+  onCoverOffset: (value: boolean) => void;
   tocOpen: boolean;
   onToc: () => void;
   moreOpen: boolean;
@@ -84,6 +88,8 @@ export default function ReaderDock({
   webtoonReason,
   modeLocked = false,
   onMode,
+  coverOffset,
+  onCoverOffset,
   tocOpen,
   onToc,
   moreOpen,
@@ -186,6 +192,21 @@ export default function ReaderDock({
             );
           })}
         </div>
+
+        {mode === "double" ? (
+          <Button
+            type="button"
+            variant={coverOffset ? "pill-primary" : "pill-ghost"}
+            size="pill-icon-sm"
+            onClick={() => onCoverOffset(!coverOffset)}
+            aria-pressed={coverOffset}
+            aria-label={t("reader.cover.toggle")}
+            title={t("reader.cover.toggle")}
+            className="h-8 shrink-0"
+          >
+            <BookOpen className="size-4" />
+          </Button>
+        ) : null}
 
         <span className="mx-0.5 h-5 w-px shrink-0 bg-border/60" aria-hidden />
 

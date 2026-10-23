@@ -114,6 +114,10 @@ const zhCN = {
   "reader.error.resolveNext": "解析下一话链接失败",
   "reader.error.probeNext": "查询下一话失败",
   "reader.error.detail": "{prefix}：{detail}",
+  "reader.cover.toggle": "首页封面单独成页（封面模式）",
+  "reader.cover.label": "首页封面",
+  "reader.cover.on": "单独成页",
+  "reader.cover.off": "成对拼合",
 } as const;
 
 type ReaderMessages = { [K in keyof typeof zhCN]: string };
@@ -230,6 +234,10 @@ const zhTW: ReaderMessages = {
   "reader.error.resolveNext": "解析下一話連結失敗",
   "reader.error.probeNext": "查詢下一話失敗",
   "reader.error.detail": "{prefix}：{detail}",
+  "reader.cover.toggle": "首頁封面單獨成頁（封面模式）",
+  "reader.cover.label": "首頁封面",
+  "reader.cover.on": "單獨成頁",
+  "reader.cover.off": "成對拼合",
 };
 
 const en: ReaderMessages = {
@@ -344,6 +352,10 @@ const en: ReaderMessages = {
   "reader.error.resolveNext": "Failed to resolve the next-chapter link",
   "reader.error.probeNext": "Failed to look up the next chapter",
   "reader.error.detail": "{prefix}: {detail}",
+  "reader.cover.toggle": "Show first page as a solo cover",
+  "reader.cover.label": "First page",
+  "reader.cover.on": "Solo cover",
+  "reader.cover.off": "Paired from page 1",
 };
 
 const es: ReaderMessages = {
@@ -458,6 +470,10 @@ const es: ReaderMessages = {
   "reader.error.resolveNext": "No se pudo resolver el enlace del siguiente capítulo",
   "reader.error.probeNext": "No se pudo buscar el siguiente capítulo",
   "reader.error.detail": "{prefix}: {detail}",
+  "reader.cover.toggle": "Mostrar la primera página como portada propia",
+  "reader.cover.label": "Primera página",
+  "reader.cover.on": "Portada sola",
+  "reader.cover.off": "En parejas desde la página 1",
 };
 
 const ja: ReaderMessages = {
@@ -572,6 +588,10 @@ const ja: ReaderMessages = {
   "reader.error.resolveNext": "次の話のリンクを解析できませんでした",
   "reader.error.probeNext": "次の話を取得できませんでした",
   "reader.error.detail": "{prefix}：{detail}",
+  "reader.cover.toggle": "最初のページを表紙として単独表示",
+  "reader.cover.label": "最初のページ",
+  "reader.cover.on": "単独ページ",
+  "reader.cover.off": "1 ページ目から見開き",
 };
 
 const ko: ReaderMessages = {
@@ -686,6 +706,10 @@ const ko: ReaderMessages = {
   "reader.error.resolveNext": "다음 화 링크를 확인하지 못했습니다",
   "reader.error.probeNext": "다음 화를 조회하지 못했습니다",
   "reader.error.detail": "{prefix}: {detail}",
+  "reader.cover.toggle": "첫 페이지를 표지로 단독 표시",
+  "reader.cover.label": "첫 페이지",
+  "reader.cover.on": "단독 페이지",
+  "reader.cover.off": "1페이지부터 짝으로 묶기",
 };
 
 export const readerMessages = {

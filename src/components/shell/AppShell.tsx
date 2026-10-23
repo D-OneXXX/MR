@@ -1,5 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import {
   api,
@@ -20,6 +26,7 @@ import {
 import TopBar from "./TopBar";
 import PrivacyDialog from "@/components/privacy/PrivacyDialog";
 import { useSafeMode } from "@/features/safeMode/SafeModeContext";
+import { useGlobalShortcuts } from "@/features/shortcuts/useGlobalShortcuts";
 
 export default function AppShell() {
   const nav = useNavigate();
@@ -134,9 +141,11 @@ export default function AppShell() {
   }, [loc.pathname]);
 
   // 阅读态不挂载 Shell；这里负责从书库侧切回后台阅读页签。
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
+  const onShellKey = useCallback(
+    (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      // Ctrl/Cmd+W 是窗口关闭保护：即使焦点在输入框里也必须拦截，
+      // 否则 WebView2 会直接关窗（因此它是唯一豁免输入态的键）。
       if (event.key === "w" || event.key === "W") {
         event.preventDefault();
         ws.closeActiveTab();
@@ -159,22 +168,28 @@ export default function AppShell() {
         return;
       }
       if (!/^[1-9]$/.test(event.key)) return;
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName ?? "";
-      if (
-        tag === "INPUT" ||
-        tag === "TEXTAREA" ||
-        tag === "SELECT" ||
-        (target?.isContentEditable ?? false)
-      ) {
-        return;
-      }
       event.preventDefault();
       ws.activateIndex(Number(event.key));
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [loc.pathname, nav, ws]);
+    },
+    [loc.pathname, nav, ws],
+  );
+
+  // 全局快捷键统一守卫：输入法组合中 / 输入框焦点一律放行，
+  // 数字键切页签与 Ctrl/Cmd+K 只在非输入态生效；
+  // w/W 例外（Ctrl+W 窗口关闭保护必须始终拦截）。
+  const shellShortcuts = useMemo(() => {
+    const map: Record<string, (event: KeyboardEvent) => void> = {};
+    map.k = onShellKey;
+    map.K = onShellKey;
+    map.w = onShellKey;
+    map.W = onShellKey;
+    for (const key of ["1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
+      map[key] = onShellKey;
+    }
+    return map;
+  }, [onShellKey]);
+
+  useGlobalShortcuts(shellShortcuts, { editableExempt: ["w", "W"] });
 
   return (
     <div className="flex h-screen w-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -196,7 +211,9 @@ export default function AppShell() {
             <Route path="/" element={<Library />} />
             <Route path="/browser" element={<Browser />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="*" element={<Library />} />
+            {/* 通配兜底：已下线/未知路由静默 replace 回书库首页，
+                避免历史栈残留废弃 URL 导致返回即白屏（AGENTS.md §2.1）。 */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
       </main>

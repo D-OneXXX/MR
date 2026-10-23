@@ -9,6 +9,7 @@ pub mod db;
 pub mod diagnostics;
 pub mod logging;
 mod online;
+mod paths;
 mod resilience;
 pub mod pipeline;
 pub mod render_cache;
@@ -21,7 +22,7 @@ mod versioning;
 pub use state::AppState;
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -252,33 +253,103 @@ fn hydrate_settings(conn: &rusqlite::Connection, s: &mut Settings) {
     }
 }
 
-fn resolve_data_dir(
-    mr_data_dir: Option<String>,
-    fallback: Option<PathBuf>,
-) -> Result<PathBuf, String> {
-    mr_data_dir
-        .filter(|p| !p.trim().is_empty())
-        .map(PathBuf::from)
-        .or(fallback)
-        .ok_or_else(|| "无法定位本地数据目录".to_string())
+/// 旧版数据根：`%LOCALAPPDATA%\com.local.manga-reader`（仅用于迁移与最终回落）。
+fn legacy_data_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("com.local.manga-reader"))
 }
 
+/// 统一数据目录解析：`MR_DATA_DIR`（测试隔离）> 已安装的 Tauri 数据根 >
+/// 旧版本地目录。绝不使用 CWD / exe 同级目录。
 pub(crate) fn data_dir() -> Result<PathBuf, String> {
-    resolve_data_dir(
-        std::env::var("MR_DATA_DIR").ok(),
-        dirs::data_local_dir().map(|d| d.join("com.local.manga-reader")),
+    if let Ok(raw) = std::env::var("MR_DATA_DIR") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+    if let Some(dir) = paths::data_dir() {
+        return Ok(dir.to_path_buf());
+    }
+    legacy_data_dir().ok_or_else(|| "无法定位本地数据目录".to_string())
+}
+
+/// setup 第一步：解析并落地数据/缓存根。
+///
+/// - 数据根：`MR_DATA_DIR` > Tauri `app_data_dir` > 旧 Local AppData；
+/// - 缓存根：`MR_DATA_DIR` 隔离模式下取 `<数据根>/cache`，否则 Tauri
+///   `app_cache_dir`；两者都 `create_dir_all`。
+/// 返回 `(data, cache, 是否 MR_DATA_DIR 隔离)`。
+fn install_app_paths<R: tauri::Runtime>(app: &tauri::App<R>) -> (PathBuf, PathBuf, bool) {
+    let env_override = std::env::var("MR_DATA_DIR")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .filter(|v| {
+            if std::path::Path::new(v).is_absolute() {
+                true
+            } else {
+                logging::log_error(
+                    "paths",
+                    "MR_DATA_DIR 不是绝对路径，已忽略并回落到 app_data_dir",
+                );
+                false
+            }
+        });
+    let legacy = legacy_data_dir();
+    let data = paths::resolve_data_root(
+        env_override.as_deref(),
+        app.path().app_data_dir().ok(),
+        legacy,
     )
+    .unwrap_or_else(|err| {
+        logging::log_error("paths", &format!("{err}；回落到系统临时目录"));
+        std::env::temp_dir().join("com.local.manga-reader")
+    });
+    let cache = if env_override.is_some() {
+        // 隔离模式不触碰真实用户缓存目录。
+        data.join("cache")
+    } else {
+        app.path()
+            .app_cache_dir()
+            .ok()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| data.join("cache"))
+    };
+    if let Err(err) = std::fs::create_dir_all(&data) {
+        logging::log_error("paths", &format!("创建数据目录失败：{err}"));
+    }
+    if let Err(err) = std::fs::create_dir_all(&cache) {
+        logging::log_error("paths", &format!("创建缓存目录失败：{err}"));
+    }
+    paths::install(data.clone(), cache.clone());
+    (data, cache, env_override.is_some())
+}
+
+/// 旧本地目录 → 新数据根一次性接续（仅补缺失文件，不删源、不复制缓存）。
+/// 日志只写文件名与字节数，不落任何本地绝对路径。
+fn migrate_legacy_into(data: &Path, isolated: bool) {
+    if isolated {
+        logging::log_error("paths", "MR_DATA_DIR 隔离模式：跳过旧数据目录迁移");
+        return;
+    }
+    let Some(legacy) = legacy_data_dir() else {
+        return;
+    };
+    let notes = paths::migrate_legacy_state(data, &legacy);
+    if !notes.is_empty() {
+        logging::log_error(
+            "paths",
+            &format!("旧数据目录迁移（仅补缺失文件）：{}", notes.join("；")),
+        );
+    }
 }
 
 fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
-    // Windows 优先：`dirs::data_local_dir` → …\AppData\Local\com.local.manga-reader。
-    // MR_DATA_DIR 用于测试/冒烟隔离；生产环境未设置时仍使用本地数据目录。
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let db_path = dir.join("library.db");
-    let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = db::open(&db_path).map_err(|e| e.to_string())?;
     db::init_schema(&conn).map_err(|e| e.to_string())?;
-    logging::init(dir.join("logs"));
     let current_version = env!("CARGO_PKG_VERSION");
     let previous_version = versioning::read_last_run_version(&conn).unwrap_or_else(|err| {
         logging::log_error("version", &format!("读取 last_run_version 失败：{err}"));
@@ -346,15 +417,20 @@ fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let state = Arc::new(AppState::new());
     let resilience_state = resilience::new_state();
     let app = tauri::Builder::default()
-        .manage(state)
         .manage(resilience_state.clone())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             diagnostics::install_panic_hook();
+            // 1) 先锚定数据/缓存根（app_data_dir / app_cache_dir），再初始化日志。
+            let (data_dir, _cache_dir, isolated) = install_app_paths(app);
+            logging::init(data_dir.join("logs"));
+            // 2) 旧 Local AppData 数据一次性接续（仅补缺失文件；隔离模式跳过）。
+            migrate_legacy_into(&data_dir, isolated);
+            // 3) AppState 的渲染/在线缓存根依赖已安装的 cache_dir，必须最后创建。
+            app.manage(Arc::new(AppState::new()));
             if let Err(e) = init_app(app) {
                 eprintln!("[backend] 初始化失败: {e}");
             }
@@ -457,24 +533,4 @@ pub fn run() {
             state.trim_disk_cache();
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn data_dir_override_wins_and_blank_falls_back() {
-        let fallback = PathBuf::from("fallback-data");
-        assert_eq!(
-            resolve_data_dir(Some("override-data".into()), Some(fallback.clone())).unwrap(),
-            PathBuf::from("override-data")
-        );
-        assert_eq!(
-            resolve_data_dir(Some("   ".into()), Some(fallback.clone())).unwrap(),
-            fallback
-        );
-        assert!(resolve_data_dir(None, None).is_err());
-    }
 }

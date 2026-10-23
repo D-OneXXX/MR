@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main window, the local recovery window (resilience.rs::RECOVERY_LABEL) and the embedded browser window (browser.rs::BROWSER_LABEL)",
+  "windows": ["main", "recovery", "browser"],
   "permissions": [
     "core:default",
     "opener:default",
@@ -11,6 +11,7 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-start-dragging",
-    "core:window:allow-is-maximized"
+    "core:window:allow-is-maximized",
+    "core:window:allow-set-title"
   ]
 }

@@ -1,4 +1,4 @@
-# 真机冒烟清单（v0.14.0）
+# 真机冒烟清单（v0.15.0）
 
 按顺序执行；异常时记录步骤、界面原文、`<数据目录>/logs/app.log` 最后若干行。
 
@@ -10,13 +10,13 @@
 - [ ] 准备一本本地 cbz/文件夹（20–60 页）和一本 100+ 页长条漫。
 - [ ] 准备一个字典序写入的 20 页 CBZ（`1.png … 20.png`，无前导零）。
 - [ ] 设置 → 实验性功能，按需开启「条漫模式」「在线直读」。
-- [ ] 记录当前版本：`package.json` 与窗口标题均为 `0.14.0`。
+- [ ] 记录当前版本：`package.json` 与窗口标题均为 `0.15.0`。
 
 ## 1. 启动与版本
 
 - [ ] `npm run tauri dev` 打开主窗口，无白屏。
 - [ ] 任务管理器无 `python` / `python3` / `:8500` 伴随进程；应用启动不拉起 sidecar。
-- [ ] 设置 → 关于显示 `v0.14.0` 与构建提交。
+- [ ] 设置 → 关于显示 `v0.15.0` 与构建提交。
 - [ ] 故意把 `tauri.conf.json` 版本改错，`npm run build` 应报告精确文件:行；改回后通过。
 
 ## 2. 外壳与书库
@@ -84,13 +84,48 @@
 - [ ] 安全模式文件损坏时在线功能被阻断；用户退出安全模式后恢复。
 - [ ] Windows 睡眠/唤醒不误弹恢复窗口。
 
+## 7.1 架构宪法回归（0.15.0 新增）
+
+- [ ] 地址栏输入 `#/translator`、`#/glossary`、`#/status`、`#/data`、`#/ocr`、`#/workbench`、
+      `#/library` 与乱码路径 → 全部平滑重定向到 `#/`，主区域正常显示，无控制台报错。
+- [ ] 手动往 localStorage 塞脏值（`mr-theme=dark-blue`、`mr-locale=xx-XX`、
+      `mr-glossary-queue=...`、`mr-ocr-page-1=...`、`mr-update-prefs={坏 json}`、任意未知键）后重启：
+      脏键被清理，**主题/语言等合法设置必须保留**。
+- [ ] 书库搜索框聚焦后按 Space / 方向键 / `M` / `Ctrl+2` → 只在输入框里打字，
+      不翻页、不切页签、不切模式；阅读器画布按 Space 仍正常翻页；
+      中文输入法候选过程中按方向键不触发任何动作。
+- [ ] 导入一张高度 > 20000px 的超长条漫：条漫模式切片完整显示（无黑块/白屏），
+      单页模式高度被钳制在 8192 以内。
+- [ ] 设置 → 隐私与安全 出现「Windows 安全与更新完整性」区块，说明临时目录下载、
+      SHA-256 + 签名校验、安装器事务替换与杀软白名单建议（数据 `%APPDATA%`、
+      缓存 `%LOCALAPPDATA%` 两个路径）。
+
+## 7.2 回溯缝合与生产排雷（0.15.0 封版）
+
+- [ ] 设置页只有 5 个分区；依次点击常规与外观 / 网络与在线源 / 存储与数据 /
+      隐私与安全 / 关于与维护，内容不串位；900px 窗口 + 西语/日语不折行、不横向溢出。
+- [ ] 旧深链 `?tab=online|cache|updates|support` 分别落到 network / storage / about / about。
+- [ ] 主窗切换 dark + en 后触发恢复窗：恢复窗立即为深海暗夜 `#0B111E`、英文文案，
+      原生标题随语言变化；主窗再切回浅色/中文时恢复窗同步。
+- [ ] 导入 800×21000 单页超长图：条漫总页数为 1，切片 > 1；拖动进度/滚动后重启，
+      阅读进度仍以逻辑页 1 保存，不因切片数虚增。
+- [ ] 打开 zip/cbz 后只读当前页；任务管理器无临时解压目录膨胀；中文/空格/`[ ] # %`
+      路径与在线 query 图片不裂图。
+- [ ] `%APPDATA%\com.local.manga-reader\library.db` 为数据根，缓存位于
+      `%LOCALAPPDATA%\com.local.manga-reader\render_cache|online_cache`；
+      首次启动可从旧 `%LOCALAPPDATA%` 库自动接续，旧缓存不删。
+- [ ] SQLite 为 WAL：应用运行中第二个连接写入不立即报 `database is locked`。
+- [ ] 拔掉副屏后重启/重载主窗或打开恢复窗：窗口回到主屏居中，不跑到屏幕外。
+
 ## 8. 自动回归
 
-- [ ] `cd src-tauri && cargo test --lib` 全绿（当前 233 项）。
+- [ ] `cd src-tauri && cargo test --lib` 全绿（当前 274 项）。
 - [ ] `npx tsc --noEmit` 零错误。
 - [ ] `npm run test:version` 全绿。
-- [ ] `npm run version:check` 为 0.14.0。
-- [ ] `node tests\qa\run-qa.mjs` 无 P0/P1；报告与静态 backlog 与 `docs/QA.md` 一致。
+- [ ] `npm run version:check` 为 0.15.0。
+- [ ] `node tests\qa\run-qa.mjs` 无 P0/P1；全量 222 项通过，报告与静态 backlog（6 条 P3）与
+      `docs/QA.md` 一致。
+- [ ] `npm run build` 产出 `dist/index.html` 与 `dist/recovery.html`；`cargo check` 通过。
 
 ## 常见问题
 

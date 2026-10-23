@@ -6,12 +6,16 @@
 - [README](../README.md)
 - [QA 摘要](QA.md)
 - [冒烟清单](smoke-test.md)
+- [架构宪法 AGENTS.md](../AGENTS.md)
 
 ## 1. 定位与边界
 
 本地优先的 Windows 漫画阅读器。书库、缓存、阅读进度、在线学习规则全部落在本机；
 不提供账号体系、云同步、漫画源订阅、云端 OCR/翻译。网络请求只发生在用户主动解析 /
 阅读在线书 / 检查更新时。
+
+> 全局工程红线写在仓库根目录的 [AGENTS.md](../AGENTS.md)：UI 形态、六语 i18n、日志脱敏、
+> 用户主权四条不变量，以及路由/存储兜底、能力墙、生产交付四道防线。改代码前先读它。
 
 ## 2. 技术栈
 
@@ -32,27 +36,36 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 ```
 
 - 阻塞工作（SQLite、zip、图片解码、网络同步请求）走 `spawn_blocking`。
+- 能力墙（`src-tauri/capabilities/default.json`）覆盖真实窗口标签
+  `main` / `recovery` / `browser`，权限只声明代码里真实用到的
+  `core:window:allow-*`、`opener:default`、`dialog:default`；自研命令不经 ACL。
 - 主窗口心跳每 1s；6s 无心跳由独立看门狗开恢复窗；系统休眠/唤醒按 tick gap 重置，
   不误判。
 - 恢复窗可重载或重建主窗口；重建返回真实结果，不伪造成功。
 - 安全模式文件损坏/不可读时 fail-closed；在线命令在 Rust 层再次校验。
 
-## 4. 数据目录
+## 4. 数据与缓存目录
 
-默认：`%LOCALAPPDATA%\com.local.manga-reader\`
-
-- `library.db`：书库、进度、设置、在线规则、app_meta。
-- `logs/app.log`：错误日志。
-- `render_cache/`：本地/在线页面的成品 JPEG、封面与条漫切片。
-- `online_cache/`：在线原图（按 book + URL + Referer 哈希命名，不含原始 URL）。
+- 数据根（Tauri `app.path().app_data_dir()`）：`%APPDATA%\com.local.manga-reader\`
+  - `library.db`：书库、进度、设置、在线规则、app_meta。
+  - `logs/app.log`：错误日志。
+  - `downloads/` / `downloads/telegram/`：内嵌浏览器 / Telegram 附件。
+  - `safe-mode.json`、`crash-guard.json`：安全模式与启动守卫。
+- 缓存根（Tauri `app.path().app_cache_dir()`）：`%LOCALAPPDATA%\com.local.manga-reader\`
+  - `render_cache/`：本地/在线页面的成品 JPEG、封面与条漫切片。
+  - `online_cache/`：在线原图（按 book + URL + Referer 哈希命名，不含原始 URL）。
+- 启动时对数据根与缓存根递归 `create_dir_all`；两者绝不使用 CWD 相对路径或 exe 同级目录。
+- 旧版 `%LOCALAPPDATA%\com.local.manga-reader\library.db`（及安全模式/启动守卫文件）在目标缺失时
+  一次性 best-effort 复制到新数据根；旧缓存目录不迁移、不删除。
 - 两个缓存目录共用 `diskCacheBudgetMb` 软上限（默认 2048 MB，可调 500–10240 MB）；
   读取时刷新文件 mtime，启动、累计写盘 256 MB、每 5 分钟与退出时按最旧优先 LRU 清理。
   清理只删除派生目录，绝不触碰 `library.db`、书库记录或阅读进度。
-- `downloads/` / `downloads/telegram/`：内嵌浏览器 / Telegram 附件。
-- `safe-mode.json`、`crash-guard.json`：安全模式与启动守卫。
+- SQLite 所有生产连接统一经 `db::open`：`journal_mode=WAL`、`busy_timeout=5000`、
+  `synchronous=NORMAL`、`foreign_keys=ON`，避免条漫滚动进度 / 规则落盘 / 缓存统计并发写入时锁库。
 
 环境变量：`MR_DATA_DIR`、`MR_RENDER_CACHE_DIR`、`MR_ONLINE_CACHE_DIR`、
-`WEBVIEW2_USER_DATA_FOLDER`（主要用于 QA 隔离）。
+`WEBVIEW2_USER_DATA_FOLDER`（主要用于 QA 隔离）。`MR_DATA_DIR` 隔离模式下缓存根为
+`<MR_DATA_DIR>/cache`，且跳过旧数据目录迁移。
 
 ## 5. 数据模型
 
@@ -77,7 +90,9 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 
 | 模块 | 职责 |
 |---|---|
-| `lib.rs` | 设置、启动迁移、命令注册、数据目录 |
+| `lib.rs` | 设置、启动迁移、命令注册、路径解析入口 |
+| `paths.rs` | `app_data_dir` / `app_cache_dir` 锚点、旧库原子迁移与 `quick_check` |
+| `db.rs` | SQLite schema、WAL + `busy_timeout=5000`、书库/进度/设置/统计 |
 | `commands.rs` | 书库/取页/进度/设置/在线导入/过滤标记恢复 |
 | `source.rs` | 文件夹/zip/在线源；自然排序、zip bomb 上限、CDN 刷新 |
 | `pipeline.rs` / `cache.rs` / `render_cache.rs` / `disk_cache.rs` | 解码缩放、三级内存缓存、渲染 L2、在线原图 L2 与统一 LRU |
@@ -88,7 +103,35 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 | `resilience.rs` | 心跳、连点、恢复窗、安全模式 |
 | `security.rs` / `versioning.rs` / `system_proxy.rs` | 隐私检查、版本迁移、系统代理 |
 
-### 6.1 自然序
+### 6.1 条漫巨图切片（WebView2 纹理上限防御）
+
+- WebView2 单张纹理高度上限约 16384px；巨图（>8000px）直送 `<img>` 会显存溢出成黑/白块。
+- Rust 侧常量（`src-tauri/src/pipeline.rs`）：
+  - `MAX_SAFE_TEXTURE_H = 8192`：单页渲染输出高度上限，超出即在缩放阶段直接落到该上限
+    （`orig_width/orig_height` 仍报源图尺寸，宽高比误差 <1%）；
+  - `MAX_SLICE_H = 4096`：单片源带行数上限；
+  - `WEBTOON_TILE_H = 2048`：输出切片高度上限。
+- 条漫走「先切后缩」：解码一次 → 按源图切带（每带 ≤4096 行）→ 逐带缩放到显示宽 → 输出连续切片；
+  峰值内存只多活「一条源带 + 一张切片栅格」，不再同时持有原图/整图副本/全部切片。
+- 切片边界与前端 `webtoon_tile_count` / `tileTopAt` 同一公式（`round(j*disp_h/n)`），
+  前后端几何一致，不出现缝隙或重叠。
+- 在线清单缺 `width/height`（典型：Telegram 相册只有 CDN URL）时，用户**显式进入条漫**
+  才按页读取探测尺寸并回写 `meta_json`；只探测缺失页，不后台爬取，后续布局/启动直接复用。
+
+### 6.2 辅助 WebView 上下文复用
+
+- 用户通过「辅助 WebView 验证交接」完成站点验证后，Rust 侧登记**辅助会话**
+  （`origin → { user_agent, headers }`），仅驻留进程内存（`AppState::assisted_sessions`）。
+- `UreqTransport::new_with_assisted` 按**当前 hop 的 origin** 查表：命中则用该会话的 UA
+  与请求头，未命中回落到标准桌面 Chrome UA。
+- 作用域：辅助会话的请求头**严格按 origin 绑定**——只发给当初登记它的那个站点，
+  其它 origin 一律不附带；交接得到的凭据**不写全局会话槽**，避免「上一站凭据被带给下一站」。
+- 降级：origin 非法（`file://` 页面 `location.origin === "null"` 等）或请求头非法时，
+  只跳过登记 / 忽略该头，**不阻断章节导入**。
+- 合规边界：脚本只回传 `location.origin` 与 `navigator.userAgent`，**不读 Cookie**；
+  注册表不写 SQLite、不写日志（只记脱敏 host）；停止交接或清理在线痕迹即作废。
+
+### 6.3 自然序
 
 - `natural_cmp` 用于卷/话标题：数字段按数值比较，数字与非数字结构不同时保持字典序，
   避免把「第10话」和「第2卷」混排。
@@ -181,8 +224,14 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 诊断包、错误、日志、描述、Prompt 均经 Rust 脱敏：Windows/Unix 路径、漫画名、
   Cookie/Token/JSON 引号键、URL query。
 - 在线书路径展示去掉 query/hash/userinfo。
-- 嵌入浏览器使用独立 WebView，无 IPC 权限；下载只允许 zip/cbz。
+- 嵌入浏览器使用独立 WebView，无 IPC 权限；下载只允许 zip/cbz；
+  导航只允许 http/https，并拦截跳回应用本地源（`tauri.localhost`、开发态 `localhost:1420`），
+  避免远程页借导航变成「本地 Origin」拿到窗口能力。
 - 独立恢复窗口与安全模式；不自动刷新、不静默重启、不上传。
+- 恢复窗继承主窗 `mr-theme` / `mr-locale`（storage 事件实时同步），原生标题按
+  `recovery.windowTitle` 调用 `setTitle`；`capabilities/default.json` 只补该权限。
+- 取页/缩略图/切片失败日志只写稳定书 ID 前缀 + 页码 + 脱敏错误，
+  不落书名、本地路径、完整 URL/query。
 - 睡眠唤醒按 tick gap 重置；最小化/隐藏不判死。
 - CBZ/ZIP 打开时限制 10000 页 / 4 GiB 声明解压体积，单页读取上限 32 MiB。
 
@@ -195,9 +244,25 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 | `/` | 书库 + Inspector |
 | `/reader/:id` | 沉浸阅读器（单页/双页/条漫） |
 | `/browser` | 地址栏、Telegram 章节、下载列表 |
-| `/settings` | 常规 / 更新 / 隐私 / 在线源 / 统计 / 缓存 / 支持 |
+| `/settings` | 常规与外观 / 网络与在线源 / 存储与数据 / 隐私与安全 / 关于与维护 |
 
 - `/reader/:id` 不挂 AppShell；阅读器以 bookId 为 key。
+- 设置页固定 5 个高内聚分区；旧 `?tab=online|reading|cache|updates|support` 分别映射到
+  `network` / `storage` / `storage` / `about` / `about`；`?tab=privacy` 保持直达。
+- 条漫进度以逻辑页 P 写入 SQLite：物理切片只用于渲染，`get_webtoon_layout` 长度、
+  HUD 分母与 scrubber 均以 `book.pageCount` 为准。
+- 路由只有 4 条：`/`、`/reader/:id`、`/browser`、`/settings`；`/library` 是历史别名。
+  两套路由表都带 `<Route path="*" element={<Navigate to="/" replace />} />`，
+  已下线路径（翻译台/词条/状态/数据等）与任意乱码深链静默 replace 回书库首页，
+  不留残 URL、不出现未匹配路由白屏。
+- 启动前（`src/main.tsx`）执行 `src/lib/storageSanitizer.ts`：
+  枚举越界修正、JSON 坏值删除、废弃键前缀（`mr-translator`/`mr-ocr`/`mr-glossary`/
+  `mr-batch`/`mr-sidecar`/`mr-status`/`mr-data`/`mr-pretranslate`）清除、
+  未知键清理；清洗幂等且 try/catch 包裹，localStorage 不可用时静默跳过。
+- 全局快捷键统一走 `src/features/shortcuts/useGlobalShortcuts.ts`：
+  先判 `isComposing`/`keyCode===229`（输入法候选），再判输入态
+  （input/textarea/select/contentEditable），最后才分发；阅读器、页签切换、
+  条漫画布共用同一守卫。
 - 六语种：zh-CN、zh-TW、en、es、ja、ko；所有 UI 文案走 `t()`。
 - 条漫：固定布局高度、DOM 窗口切片、滚动 120ms 空闲合流、最多 4 个在途请求；
   切换版式使用 Webtoon 实时中心页，避免 400ms 防抖导致进度回退。

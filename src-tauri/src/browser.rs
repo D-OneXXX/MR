@@ -251,6 +251,27 @@ fn handle_download_event(app: &AppHandle, event: DownloadEvent<'_>) -> bool {
     }
 }
 
+/// 浏览器窗导航白名单：只允许 http/https，且**禁止跳回应用自身的本地源**。
+///
+/// 内嵌浏览器加载的是远程页面；一旦远程页自跳到 `tauri.localhost`（或开发态的
+/// `localhost:1420`），它就会变成「本地 Origin」，从而可能拿到该窗口的本地能力。
+/// 这里在导航层直接拦掉，避免远程页借导航提权。
+fn navigation_allowed(url: &Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    if host == "tauri.localhost" || host.ends_with(".tauri.localhost") {
+        return false;
+    }
+    // 开发态应用源（Vite dev server）同样禁止：远程页跳到它就等于拿到应用 Origin。
+    if (host == "localhost" || host == "127.0.0.1" || host == "[::1]") && url.port() == Some(1420)
+    {
+        return false;
+    }
+    true
+}
+
 #[tauri::command]
 pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
     crate::resilience::ensure_online_allowed()?;
@@ -269,6 +290,7 @@ pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), Stri
             .title(BROWSER_TITLE)
             .inner_size(BROWSER_WIDTH, BROWSER_HEIGHT)
             .on_download(move |_webview, event| handle_download_event(&download_app, event))
+            .on_navigation(|target| navigation_allowed(&target))
             .build()
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -388,6 +410,29 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn navigation_blocks_app_local_origins_and_non_http() {
+        for raw in [
+            "http://tauri.localhost/index.html",
+            "https://sub.tauri.localhost/x",
+            "http://localhost:1420/",
+            "http://127.0.0.1:1420/",
+            "file:///c:/windows/system32/calc.exe",
+            "tauri://localhost",
+            "javascript:alert(1)",
+        ] {
+            let url = Url::parse(raw).expect("URL 应可解析");
+            assert!(!navigation_allowed(&url), "{raw} 必须被拦截");
+        }
+        for raw in [
+            "https://example.com/a",
+            "http://127.0.0.1:18080/pair", // 配对桥接的回环页必须放行
+        ] {
+            let url = Url::parse(raw).expect("URL 应可解析");
+            assert!(navigation_allowed(&url), "{raw} 应被放行");
+        }
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         static SEQ: AtomicU64 = AtomicU64::new(0);

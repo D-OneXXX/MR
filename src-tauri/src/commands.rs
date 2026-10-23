@@ -41,13 +41,10 @@ fn webtoon_ready(r: &db::BookRow) -> bool {
         return true;
     }
     match serde_json::from_str::<crate::online::StoredMeta>(&r.meta_json) {
-        Ok(meta) => {
-            !meta.pages.is_empty()
-                && meta
-                    .pages
-                    .iter()
-                    .all(|p| p.width.unwrap_or(0) > 0 && p.height.unwrap_or(0) > 0)
-        }
+        // 在线清单可能缺少 width/height（典型：Telegram 相册只给 CDN URL）。
+        // 条漫布局会在用户显式进入条漫时按页探测并回写尺寸，因此这里只要求
+        // 有页面；绝不因为缺尺寸就把整本书的条漫能力永久关死。
+        Ok(meta) => !meta.pages.is_empty(),
         Err(e) => {
             crate::logging::log_error("online_meta", &format!("书籍 {} 元数据损坏：{e}", r.id));
             false
@@ -380,7 +377,7 @@ pub(crate) fn import_local_archive(
     if !source::is_archive_path(path) {
         return Ok(None);
     }
-    let conn = rusqlite::Connection::open(db_path)?;
+    let conn = db::open(db_path)?;
     db::init_schema(&conn)?;
     let book = scan_single_book(&conn, path)?;
     Ok(Some(book.id))
@@ -425,7 +422,7 @@ fn blocking_scan(
     root: &str,
 ) -> Result<(Vec<BookInfo>, Vec<String>), BackendError> {
     let path = PathBuf::from(root);
-    let conn = rusqlite::Connection::open(db_path)?;
+    let conn = db::open(db_path)?;
     db::init_schema(&conn)?;
 
     let mut books = Vec::new();
@@ -534,7 +531,7 @@ fn import_blocking(
     db_path: PathBuf,
     paths: Vec<String>,
 ) -> Result<Vec<ImportItemResult>, BackendError> {
-    let conn = rusqlite::Connection::open(db_path)?;
+    let conn = db::open(db_path)?;
     db::init_schema(&conn)?;
     let mut out = Vec::new();
     for raw in paths {
@@ -642,7 +639,7 @@ pub async fn remove_books(
     let ids_for_db = ids.clone();
     let (removed, deleted_files, errors) = blocking(move || {
         let ids = ids_for_db;
-        let conn = rusqlite::Connection::open(db_path)?;
+        let conn = db::open(db_path)?;
         db::init_schema(&conn)?;
         let mut errors: Vec<String> = Vec::new();
         let mut deleted_files = 0usize;
@@ -756,6 +753,17 @@ pub async fn list_entries(
     .await
 }
 
+/// 日志里的书目标识：只保留稳定 ID 前 8 位，绝不写书名/路径。
+fn short_book_ref(book_id: &str) -> &str {
+    let end = book_id.len().min(8);
+    &book_id[..end]
+}
+
+/// 错误日志统一脱敏：底层错误可能带本地路径、完整 URL/query 或页面文本。
+fn safe_error_text(error: &impl std::fmt::Display) -> String {
+    crate::diagnostics::sanitize_text(&error.to_string(), true)
+}
+
 fn to_page_image(index: u32, rendered: pipeline::RenderedPage) -> PageImage {
     PageImage {
         index,
@@ -776,14 +784,22 @@ fn jpeg_dims(bytes: &[u8]) -> Result<(u32, u32), BackendError> {
     Ok((w, h))
 }
 
-fn assembled_page(bytes: Vec<u8>) -> Result<RenderedPage, BackendError> {
+/// L2 成品 JPEG 还原为 `RenderedPage`。
+///
+/// `orig_width/orig_height` 是**逻辑页**的源尺寸（条漫切片场景下由布局缓存提供），
+/// 不能回填成单片尺寸：否则 L2 冷/热路径会给出“这一页只有 2048px 高”的错误语义。
+/// 调用方拿不到源尺寸时才传 0，函数回落到成品尺寸。
+fn assembled_page(
+    bytes: Vec<u8>,
+    orig_width: u32,
+    orig_height: u32,
+) -> Result<RenderedPage, BackendError> {
     let (width, height) = jpeg_dims(&bytes)?;
     Ok(RenderedPage {
         width,
         height,
-        // L2 命中时源尺寸不可得；等比缩放保持纵横比，条漫建议只看比例，安全。
-        orig_width: width,
-        orig_height: height,
+        orig_width: if orig_width > 0 { orig_width } else { width },
+        orig_height: if orig_height > 0 { orig_height } else { height },
         mime: "image/jpeg".to_string(),
         data_url: format!("data:image/jpeg;base64,{}", B64.encode(&bytes)),
         bytes,
@@ -809,10 +825,10 @@ pub async fn get_page(
     if let Some(hit) = state.cache.get_page(&book_id, index, w, h) {
         return Ok(to_page_image(index, hit));
     }
-    let (title, is_online) = state.db.with(|conn| {
+    let is_online = state.db.with(|conn| {
         db::get_book(conn, &book_id)
             .map_err(err)?
-            .map(|b| (b.title, b.source_type != "local"))
+            .map(|b| b.source_type != "local")
             .ok_or_else(|| "书籍不存在".to_string())
     })?;
     let st = state.inner().clone();
@@ -820,7 +836,9 @@ pub async fn get_page(
     let rendered = match blocking(move || {
         // 2) L2 磁盘成品缓存。
         if let Some(bytes) = st.render.get(&book, index, w, h) {
-            match assembled_page(bytes) {
+            // 单页 L2 命中时源尺寸未随成品落盘；保持“成品尺寸”兜底，
+            // 条漫建议只依赖宽高比，不把这里当成逻辑页权威尺寸。
+            match assembled_page(bytes, 0, 0) {
                 Ok(page) => return Ok(page),
                 Err(e) => {
                     // 坏缓存自愈：删除后继续走全管线，而不是让该页永久失败。
@@ -845,8 +863,16 @@ pub async fn get_page(
     {
         Ok(r) => r,
         Err(e) => {
-            // 失败链路：含书名/页码/原因落盘留痕（P0 缩略图失败链路）。
-            crate::logging::log_error("get_page", &format!("《{title}》 第 {} 页：{e}", index + 1));
+            // 失败链路：只记稳定书 ID 前缀、页码与脱敏原因，绝不写书名/路径/query。
+            crate::logging::log_error(
+                "get_page",
+                &format!(
+                    "book={} 第 {} 页：{}",
+                    short_book_ref(&book_id),
+                    index + 1,
+                    safe_error_text(&e)
+                ),
+            );
             return Err(e);
         }
     };
@@ -896,7 +922,7 @@ fn prefetch_neighbors(
             let page = st
                 .render
                 .get(&book, t, w, h)
-                .map(assembled_page)
+                .map(|bytes| assembled_page(bytes, 0, 0))
                 .unwrap_or_else(|| {
                     handle.read_raw(t as usize).and_then(|raw| {
                         let p = pipeline::render_raw(&raw, mw, mh)?;
@@ -924,10 +950,10 @@ pub async fn get_thumbnail(
         return Ok(to_page_image(0, hit));
     }
     let edge = max_size.unwrap_or(240).clamp(64, 1024);
-    let title = state.db.with(|conn| {
+    state.db.with(|conn| {
         db::get_book(conn, &book_id)
             .map_err(err)?
-            .map(|b| b.title)
+            .map(|_| ())
             .ok_or_else(|| "书籍不存在".to_string())
     })?;
     let st = state.inner().clone();
@@ -935,7 +961,7 @@ pub async fn get_thumbnail(
     let rendered = match blocking(move || {
         // L2 磁盘复用同一套渲染缓存（键 = 首页 + edge 桶）。
         if let Some(bytes) = st.render.get(&book, 0, edge, edge) {
-            match assembled_page(bytes) {
+            match assembled_page(bytes, 0, 0) {
                 Ok(page) => return Ok(page),
                 Err(e) => {
                     st.render.remove_page(&book, 0, edge, edge);
@@ -960,7 +986,11 @@ pub async fn get_thumbnail(
         Err(e) => {
             crate::logging::log_error(
                 "get_thumbnail",
-                &format!("《{title}》 封面（第 1 页）：{e}"),
+                &format!(
+                    "book={} 封面（第 1 页）：{}",
+                    short_book_ref(&book_id),
+                    safe_error_text(&e)
+                ),
             );
             return Err(e);
         }
@@ -1193,21 +1223,67 @@ pub async fn get_webtoon_layout(
         .with(|conn| db::get_book(conn, &book_id).map_err(err))?
         .ok_or_else(|| "书籍不存在".to_string())?;
     if row.source_type != "local" {
-        let meta: crate::online::StoredMeta =
+        let mut meta: crate::online::StoredMeta =
             serde_json::from_str(&row.meta_json).map_err(|e| format!("在线书元数据损坏：{e}"))?;
-        if meta.pages.is_empty()
-            || meta
-                .pages
-                .iter()
-                .any(|p| p.width.unwrap_or(0) == 0 || p.height.unwrap_or(0) == 0)
-        {
-            return Err("该在线书籍缺少页面尺寸，无法使用条漫模式".into());
+        if meta.pages.is_empty() {
+            return Err("该在线书籍没有可阅读页面".into());
         }
-        let dims: Vec<(u32, u32)> = meta
+        let mut dims: Vec<(u32, u32)> = meta
             .pages
             .iter()
-            .map(|p| (p.width.unwrap(), p.height.unwrap()))
+            .map(|p| (p.width.unwrap_or(0), p.height.unwrap_or(0)))
             .collect();
+        // Telegram 相册等来源可能只有 CDN URL，没有 width/height。
+        // 用户显式进入条漫时按页读取（走在线 L2 / 网络）并探测尺寸，
+        // 只探测缺失页；结果回写 meta_json，后续布局/启动不再重复下载。
+        let missing: Vec<usize> = dims
+            .iter()
+            .enumerate()
+            .filter(|(_, (w, h))| *w == 0 || *h == 0)
+            .map(|(index, _)| index)
+            .collect();
+        if !missing.is_empty() {
+            let st = state.inner().clone();
+            let bid = book_id.clone();
+            let probed = blocking(move || {
+                let handle = st.source_handle_for_book(&bid)?;
+                let mut out: Vec<(usize, u32, u32)> = Vec::with_capacity(missing.len());
+                for index in missing {
+                    let raw = handle.read_raw(index)?;
+                    let (width, height) = image::ImageReader::new(std::io::Cursor::new(&raw.bytes))
+                        .with_guessed_format()?
+                        .into_dimensions()?;
+                    if width == 0 || height == 0 {
+                        return Err(BackendError::Msg(format!("第 {} 页尺寸无效", index + 1)));
+                    }
+                    out.push((index, width, height));
+                }
+                Ok(out)
+            })
+            .await?;
+            for (index, width, height) in probed {
+                dims[index] = (width, height);
+                if let Some(page) = meta.pages.get_mut(index) {
+                    page.width = Some(width);
+                    page.height = Some(height);
+                }
+            }
+            // best-effort 持久化：失败不影响本次布局，下次最多再探测一次。
+            if let Ok(json) = serde_json::to_string(&meta) {
+                let _ = state.db.with(|conn| {
+                    db::upsert_online_book(
+                        conn,
+                        &row.id,
+                        &row.path,
+                        &row.title,
+                        row.page_count,
+                        &row.source_type,
+                        &json,
+                    )
+                    .map_err(err)
+                });
+            }
+        }
         // 与本地分支一致写入布局缓存；清单变化/删书时由命令层失效。
         state
             .webtoon_layouts
@@ -1288,18 +1364,27 @@ pub async fn get_webtoon_tile(
     if let Some(hit) = state.cache.get_tile(&book_id, index, tile, w) {
         return Ok(to_page_image(index, hit));
     }
-    let title = state.db.with(|conn| {
+    state.db.with(|conn| {
         db::get_book(conn, &book_id)
             .map_err(err)?
-            .map(|b| b.title)
+            .map(|_| ())
             .ok_or_else(|| "书籍不存在".to_string())
     })?;
+    // 逻辑页源尺寸：条漫布局通常已由 get_webtoon_layout 写入缓存。
+    // L2 切片只有成品字节，必须借它把 orig_* 还原成**整页**尺寸，
+    // 不能让调用方把单片高度误认成逻辑页高度。
+    let orig_dims = state
+        .webtoon_layouts
+        .lock()
+        .get(&book_id)
+        .and_then(|dims| dims.get(index as usize).copied())
+        .unwrap_or((0, 0));
     let st = state.inner().clone();
     let book = book_id.clone();
     let rendered = match blocking(move || {
         // 2) L2 磁盘切片。
         if let Some(bytes) = st.render.get_tile(&book, index, tile, w) {
-            match assembled_page(bytes) {
+            match assembled_page(bytes, orig_dims.0, orig_dims.1) {
                 Ok(page) => return Ok(page),
                 Err(e) => {
                     st.render.remove_tile(&book, index, tile, w);
@@ -1321,7 +1406,7 @@ pub async fn get_webtoon_tile(
         let _guard = st.tile_lock.lock();
         // 双检：等锁期间可能已被别的请求物化。
         if let Some(bytes) = st.render.get_tile(&book, index, tile, w) {
-            return assembled_page(bytes);
+            return assembled_page(bytes, orig_dims.0, orig_dims.1);
         }
         let (tiles, pages) = pipeline::render_webtoon_tiles(&raw, w)?;
         if tile >= tiles {
@@ -1344,7 +1429,12 @@ pub async fn get_webtoon_tile(
         Err(e) => {
             crate::logging::log_error(
                 "get_webtoon_tile",
-                &format!("《{title}》 第 {} 页 切片 {tile}：{e}", index + 1),
+                &format!(
+                    "book={} 第 {} 页 切片 {tile}：{}",
+                    short_book_ref(&book_id),
+                    index + 1,
+                    safe_error_text(&e)
+                ),
             );
             return Err(e);
         }
@@ -1532,7 +1622,11 @@ pub async fn resolve_online_url(
         let session_headers = st.session_online_headers.lock().clone();
         let headers =
             crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
-        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let http = crate::online::http::UreqTransport::new_with_assisted(
+            &s.online_proxy,
+            &headers,
+            st.assisted_sessions.clone(),
+        )?;
         let host = crate::online::filter::url_host(&url);
         let memory = filter_memory_for(&st, &host)?;
         let thresholds = thresholds_from(memory.profile.as_ref());
@@ -1586,7 +1680,11 @@ pub async fn resolve_online_batch(
         let session_headers = st.session_online_headers.lock().clone();
         let headers =
             crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
-        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let http = crate::online::http::UreqTransport::new_with_assisted(
+            &s.online_proxy,
+            &headers,
+            st.assisted_sessions.clone(),
+        )?;
         let memory = FilterMemory::default();
         let thresholds = FilterThresholds::default();
         let metas = crate::online::direct::parse_batch_payload_with(
@@ -1622,7 +1720,11 @@ pub async fn test_online_connection(
         let session_headers = st.session_online_headers.lock().clone();
         let headers =
             crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
-        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let http = crate::online::http::UreqTransport::new_with_assisted(
+            &s.online_proxy,
+            &headers,
+            st.assisted_sessions.clone(),
+        )?;
         let host = crate::online::filter::url_host(&url);
         let memory = filter_memory_for(&st, &host)?;
         let thresholds = thresholds_from(memory.profile.as_ref());
@@ -2316,7 +2418,11 @@ pub async fn get_filtered_preview(
         let session_headers = st.session_online_headers.lock().clone();
         let headers =
             crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
-        let transport = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let transport = crate::online::http::UreqTransport::new_with_assisted(
+            &s.online_proxy,
+            &headers,
+            st.assisted_sessions.clone(),
+        )?;
         let mut url = page.url.clone();
         let mut resp = transport.get(
             &url,
@@ -2387,7 +2493,11 @@ pub async fn resolve_telegram_channel(
         let session_headers = st.session_online_headers.lock().clone();
         let headers =
             crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
-        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let http = crate::online::http::UreqTransport::new_with_assisted(
+            &s.online_proxy,
+            &headers,
+            st.assisted_sessions.clone(),
+        )?;
         let host = crate::online::filter::url_host(&url);
         let memory = filter_memory_for(&st, &host)?;
         let thresholds = thresholds_from(memory.profile.as_ref());
@@ -2455,7 +2565,11 @@ pub async fn download_telegram_document(
         let session_headers = st.session_online_headers.lock().clone();
         let headers =
             crate::state::effective_online_headers(&s.online_headers, session_headers.as_deref());
-        let http = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+        let http = crate::online::http::UreqTransport::new_with_assisted(
+            &s.online_proxy,
+            &headers,
+            st.assisted_sessions.clone(),
+        )?;
         let resp = http.get(
             canonical.as_str(),
             TELEGRAM_DOC_MAX_BYTES,
@@ -2480,7 +2594,7 @@ pub async fn download_telegram_document(
         std::fs::write(&path, &resp.body)?;
         let db_path = st.db_path();
         let imported = {
-            let conn = rusqlite::Connection::open(db_path)?;
+            let conn = db::open(db_path)?;
             db::init_schema(&conn)?;
             scan_single_book(&conn, &path)
         };
@@ -2781,7 +2895,7 @@ mod tests {
     }
 
     #[test]
-    fn book_info_webtoon_ready_depends_on_dims() {
+    fn book_info_webtoon_ready_allows_lazy_dimension_probe() {
         let local = db::BookRow {
             id: "l".into(),
             path: "p".into(),
@@ -2801,7 +2915,8 @@ mod tests {
             scroll_pct: -1.0, source_type: "generic_manga".into(),
             meta_json: r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg","width":800,"height":1200},{"url":"http://x/2.jpg"}]}"#.into(),
         };
-        assert!(!to_book_info(online).webtoon_ready);
+        // 缺尺寸不再永久关闭条漫：进入条漫时按页探测并回写。
+        assert!(to_book_info(online).webtoon_ready);
 
         let online_ok = db::BookRow {
             id: "o2".into(), path: "http://x/b".into(), title: "O2".into(),
@@ -3297,7 +3412,8 @@ mod tests {
         assert_eq!(info.title, "导入");
         assert_eq!(info.page_count, 2);
         assert_eq!(info.source_type, "generic_manga");
-        assert!(!info.webtoon_ready);
+        // 缺尺寸的在线书允许进入条漫，布局时按页探测尺寸（不再永久关闭）。
+        assert!(info.webtoon_ready);
         let book = st
             .db
             .with(|conn| db::get_book(conn, &id).map_err(|e| e.to_string()))

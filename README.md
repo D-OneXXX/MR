@@ -1,7 +1,7 @@
 # MangaReader
 
 本地优先的 Windows 桌面漫画阅读器：Tauri 2 + React 19 + TypeScript 5.8 + Rust + SQLite。
-当前版本 **0.14.0**。不登录、不上传书库、不内置漫画源订阅。
+当前版本 **0.15.0**。不登录、不上传书库、不内置漫画源订阅。
 
 ## 功能
 
@@ -20,7 +20,11 @@
 - **Telegram 公开频道**：免登录解析相册、Telegraph 章节、zip/cbz 附件；历史分页；
   CDN 临时链接过期后按消息锚点自愈。
 - **缓存管理**：设置中可查看磁盘占用/上限/分项，500 MB–10 GB 可调；一键清空临时缓存，
-  只删除可再生成的派生数据，书库、进度与设置保留。
+  只删除可再生成的派生数据，书库、进度与设置保留。数据库位于 Tauri `app_data_dir`
+  （`%APPDATA%\com.local.manga-reader`），缓存位于 `app_cache_dir`
+  （`%LOCALAPPDATA%\com.local.manga-reader`）。
+- **设置信息架构**：5 个高内聚分区（常规与外观 / 网络与在线源 / 存储与数据 /
+  隐私与安全 / 关于与维护），旧深链自动映射；SQLite 使用 WAL + 5s busy timeout。
 - **内嵌浏览器**：独立无 IPC 权限 WebView；下载 zip/cbz 自动导入并设为只读。
 - **更新与版本**：SemVer 单一事实源；PATCH 优先补丁、MINOR 可补丁、MAJOR 仅全量；
   清单与安装包签名校验；非 ASCII 路径兼容。
@@ -29,6 +33,7 @@
 
 ## 文档
 
+- [架构宪法 AGENTS.md](AGENTS.md)（全局红线：UI 形态 / i18n / 脱敏 / 用户主权 / 交付防线）
 - [技术文档](docs/TECHNICAL.md)
 - [QA 报告摘要](docs/QA.md)
 - [真机冒烟清单](docs/smoke-test.md)
@@ -44,7 +49,7 @@ npm run build           :: 版本门禁 + tsc + Vite 构建
 版本号只改 `package.json`，然后运行：
 
 ```bat
-npm run version:sync -- 0.14.1
+npm run version:sync -- 0.15.1
 npm run version:check
 ```
 

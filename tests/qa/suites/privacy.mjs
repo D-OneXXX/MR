@@ -218,9 +218,9 @@ export async function runPrivacySuite(ctx, report) {
   }
 
   const versionInfo = await invoke(page, "get_app_info");
-  await ctx.goto("#/settings");
+  // 版本与 Commit 基线已迁入「关于与维护」分区；直接命中保持稳定。
+  await ctx.goto("#/settings?tab=about");
   await page.waitFor("!!document.querySelector('[role=tab]')", { timeout: 8000 });
-  await page.eval(`(() => { const tab = [...document.querySelectorAll("[role=tab]")][0]; tab?.click(); return true; })()`);
   await new Promise((resolve) => setTimeout(resolve, 250));
   const versionText = await page.eval("document.body.innerText");
   const expectedVersion = JSON.parse(fs.readFileSync(path.join(ctx.root, "package.json"), "utf8")).version;

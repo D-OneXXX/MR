@@ -4,6 +4,7 @@ import {
   BookOpen,
   CalendarDays,
   Check,
+  Command,
   Cpu,
   Database,
   FolderOpen,
@@ -12,11 +13,10 @@ import {
   HardDrive,
   ImageOff,
   Info,
-  LifeBuoy,
+  Keyboard,
   Loader2,
   Monitor,
   Moon,
-  PackageOpen,
   Palette,
   RefreshCw,
   Save,
@@ -130,6 +130,48 @@ function normalizeTheme(value: string): ThemeMode {
     : "system";
 }
 
+/** 收敛后的五个高内聚分区。 */
+type SettingsTab = "general" | "network" | "storage" | "privacy" | "about";
+
+/**
+ * 深链 id 归一化：新 id 直通；历史 id（updates / support / reading /
+ * cache / online）静默映射到收敛后的分区，保证旧书签与 PrivacyDialog
+ * 的 /settings?tab=privacy 都不会落到空页。
+ */
+function normalizeSettingsTab(raw: string | null): SettingsTab | null {
+  switch (raw) {
+    case "general":
+    case "network":
+    case "storage":
+    case "privacy":
+    case "about":
+      return raw;
+    case "online":
+      return "network";
+    case "reading":
+    case "cache":
+      return "storage";
+    case "updates":
+    case "support":
+      return "about";
+    default:
+      return null;
+  }
+}
+
+/** 全局快捷键说明：键位保持原样，说明复用阅读器既有 i18n key。 */
+const GLOBAL_SHORTCUTS: ReadonlyArray<{
+  keys: string;
+  actionKey: MessageKey;
+}> = [
+  { keys: "Space / ← / →", actionKey: "reader.shortcut.pageTurn" },
+  { keys: "Shift + Space", actionKey: "reader.nav.prev" },
+  { keys: "F", actionKey: "reader.shortcut.mode" },
+  { keys: "Ctrl + 1…9", actionKey: "reader.shortcut.tabs" },
+  { keys: "Ctrl / Cmd + W", actionKey: "reader.shortcut.closeTab" },
+  { keys: "Esc", actionKey: "reader.shortcut.escape" },
+];
+
 function localDateKey(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -204,7 +246,7 @@ function MemoryTile({ label, value }: { label: string; value: string }) {
 }
 
 /**
- * 设置页：常规与主题 / 在线源网络 / 阅读统计 / 缓存。
+ * 设置页：常规与外观 / 网络与在线源 / 存储与数据 / 隐私与安全 / 关于与维护。
  * 保存时以「已加载设置 + 当前表单」整对象写回，保留当前页面未展示、
  * 但后端仍需要的字段（例如实验开关）。
  */
@@ -213,14 +255,9 @@ export default function SettingsPage() {
   const { locale, setLocale, t, formatNumber } = useI18n();
   const { active: safeMode } = useSafeMode();
   const [searchParams] = useSearchParams();
-  const [tab, setTab] = useState(() => {
-    const requested = searchParams.get("tab");
-    return requested === "updates" ||
-      requested === "privacy" ||
-      requested === "support"
-      ? requested
-      : "general";
-  });
+  const [tab, setTab] = useState<SettingsTab>(
+    () => normalizeSettingsTab(searchParams.get("tab")) ?? "general",
+  );
   const [form, setForm] = useState<Settings>(DEFAULT_FORM);
   const [mem, setMem] = useState<MemoryStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -327,14 +364,8 @@ export default function SettingsPage() {
   }, [load]);
 
   useEffect(() => {
-    const requested = searchParams.get("tab");
-    if (
-      requested === "updates" ||
-      requested === "privacy" ||
-      requested === "support"
-    ) {
-      setTab(requested);
-    }
+    const requested = normalizeSettingsTab(searchParams.get("tab"));
+    if (requested) setTab(requested);
   }, [searchParams]);
 
   // Each settings tab is a separate page-length surface; always start at the
@@ -710,59 +741,46 @@ export default function SettingsPage() {
           onValueChange={setTab}
           className="gap-4"
         >
+          {/* 单行 5 列：900px 最小窗口 + 六语长文案下不折行、不溢出。 */}
           <TabsList
             aria-label={t("settings.tabs.label")}
-            className="h-auto w-full flex-wrap justify-start gap-0.5 rounded-full border border-border bg-card p-1.5 shadow-hard group-data-horizontal/tabs:h-auto"
+            className="grid h-auto w-full grid-cols-5 gap-0.5 overflow-hidden rounded-full border border-border bg-card p-1.5 shadow-hard group-data-horizontal/tabs:h-auto"
           >
             <TabsTrigger
               value="general"
-              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              data-testid="settings-tab-general"
+              className="h-9 min-w-0 whitespace-nowrap rounded-full px-2 text-xs font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground lg:px-3 xl:px-3.5 xl:text-sm"
             >
-              <Palette className="size-4" />
               {t("settings.tabs.general")}
             </TabsTrigger>
             <TabsTrigger
-              value="updates"
-              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              value="network"
+              data-testid="settings-tab-network"
+              className="h-9 min-w-0 whitespace-nowrap rounded-full px-2 text-xs font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground lg:px-3 xl:px-3.5 xl:text-sm"
             >
-              <PackageOpen className="size-4" />
-              {t("updates.tab")}
+              {t("settings.tabs.network")}
+            </TabsTrigger>
+            {/* QA 回归依赖 settings-tab-cache，storage 分区的 testid 保持旧值。 */}
+            <TabsTrigger
+              value="storage"
+              data-testid="settings-tab-cache"
+              className="h-9 min-w-0 whitespace-nowrap rounded-full px-2 text-xs font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground lg:px-3 xl:px-3.5 xl:text-sm"
+            >
+              {t("settings.tabs.storage")}
             </TabsTrigger>
             <TabsTrigger
               value="privacy"
-              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              data-testid="settings-tab-privacy"
+              className="h-9 min-w-0 whitespace-nowrap rounded-full px-2 text-xs font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground lg:px-3 xl:px-3.5 xl:text-sm"
             >
-              <ShieldCheck className="size-4" />
-              {t("privacy.tab")}
+              {t("settings.tabs.privacy")}
             </TabsTrigger>
             <TabsTrigger
-              value="online"
-              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
+              value="about"
+              data-testid="settings-tab-about"
+              className="h-9 min-w-0 whitespace-nowrap rounded-full px-2 text-xs font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground lg:px-3 xl:px-3.5 xl:text-sm"
             >
-              <Wifi className="size-4" />
-              {t("settings.tabs.online")}
-            </TabsTrigger>
-            <TabsTrigger
-              value="reading"
-              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
-            >
-              <TrendingUp className="size-4" />
-              {t("settings.tabs.reading")}
-            </TabsTrigger>
-            <TabsTrigger
-              value="cache"
-              data-testid="settings-tab-cache"
-              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
-            >
-              <HardDrive className="size-4" />
-              {t("settings.tabs.cache")}
-            </TabsTrigger>
-            <TabsTrigger
-              value="support"
-              className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
-            >
-              <LifeBuoy className="size-4" />
-              {t("support.tab")}
+              {t("settings.tabs.about")}
             </TabsTrigger>
           </TabsList>
 
@@ -857,76 +875,42 @@ export default function SettingsPage() {
             </SettingsSection>
 
             <SettingsSection
-              icon={FolderOpen}
-              title={t("settings.library.title")}
-              description={t("settings.library.description")}
+              icon={Keyboard}
+              title={t("settings.shortcuts.title")}
+              description={t("settings.shortcuts.description")}
             >
-              <div className="space-y-2">
-                <Label htmlFor="library-dir">
-                  {t("settings.library.dirLabel")}
-                </Label>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input
-                    id="library-dir"
-                    value={form.libraryDir}
-                    onChange={(event) =>
-                      set("libraryDir", event.currentTarget.value)
-                    }
-                    placeholder={t("settings.library.dirPlaceholder")}
-                    className="min-w-0 font-mono text-xs sm:flex-1"
-                    spellCheck={false}
-                    disabled={saving}
-                  />
-                  <div className="flex shrink-0 gap-2">
-                    <Button
-                      type="button"
-                      variant="pill"
-                      size="pill"
-                      className="whitespace-nowrap"
-                      onClick={() => void onPickDir()}
-                      disabled={scanning || saving}
+              <div className="grid gap-2 sm:grid-cols-2">
+                {GLOBAL_SHORTCUTS.map((row) => (
+                  <div
+                    key={row.keys}
+                    className="flex min-w-0 items-center justify-between gap-3 rounded-2xl border border-border bg-background/60 px-3 py-2.5"
+                  >
+                    <span className="min-w-0 text-xs font-medium text-muted-foreground">
+                      {t(row.actionKey)}
+                    </span>
+                    <Badge
+                      variant="secondary"
+                      className="shrink-0 px-2.5 py-0.5 font-mono text-[11px]"
                     >
-                      <FolderOpen />
-                      {t("settings.library.pick")}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="pill"
-                      size="pill-icon"
-                      aria-label={t("settings.library.clearDir")}
-                      title={t("settings.library.clearDir")}
-                      onClick={() => set("libraryDir", "")}
-                      disabled={!form.libraryDir || saving}
-                    >
-                      <Trash2 />
-                    </Button>
+                      {row.keys}
+                    </Badge>
                   </div>
-                </div>
+                ))}
               </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <Button
-                  type="button"
-                  variant="pill-primary"
-                  size="pill"
-                  className="whitespace-nowrap"
-                  onClick={() => void onScanLibrary()}
-                  disabled={scanning || saving || !form.libraryDir.trim()}
-                >
-                  {scanning ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <ScanLine />
-                  )}
-                  {scanning
-                    ? t("settings.library.scanning")
-                    : t("settings.library.scanNow")}
-                </Button>
-                <span className="text-xs text-muted-foreground">
-                  {t("settings.library.scanHint")}
+              {/* 命令中心：文案自带键位，单独一行避免与键位胶囊重复。 */}
+              <div className="flex min-w-0 items-center gap-2 rounded-2xl border border-border bg-background/60 px-3 py-2.5">
+                <Command className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 text-xs font-medium">
+                  {t("settings.shortcuts.command")}
                 </span>
               </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {t("settings.shortcuts.note")}
+              </p>
             </SettingsSection>
+          </TabsContent>
 
+          <TabsContent value="about" className="mt-2 space-y-4">
             <SettingsSection
               icon={Info}
               title={t("settings.about.title")}
@@ -970,17 +954,16 @@ export default function SettingsPage() {
                 {t("settings.about.note")}
               </p>
             </SettingsSection>
-          </TabsContent>
 
-          <TabsContent value="updates" className="mt-2 space-y-4">
             <UpdatesPanel />
+            <SupportPanel />
           </TabsContent>
 
           <TabsContent value="privacy" className="mt-2 space-y-4">
             <PrivacyPanel />
           </TabsContent>
 
-          <TabsContent value="online" className="mt-2 space-y-4">
+          <TabsContent value="network" className="mt-2 space-y-4">
             {safeMode ? (
               <Card className="items-start gap-3 p-5">
                 <span className="grid size-10 shrink-0 place-items-center rounded-2xl border border-border bg-warning text-background shadow-hard-sm">
@@ -1278,7 +1261,7 @@ export default function SettingsPage() {
             )}
           </TabsContent>
 
-          <TabsContent value="reading" className="mt-2 space-y-4">
+          <TabsContent value="storage" className="mt-2 space-y-4">
             {dashError ? (
               <Card className="items-start gap-3 p-5">
                 <div className="flex items-start gap-2.5">
@@ -1337,9 +1320,78 @@ export default function SettingsPage() {
                 {t("settings.stats.note")}
               </p>
             </Card>
-          </TabsContent>
 
-          <TabsContent value="cache" className="mt-2 space-y-4">
+            <SettingsSection
+              icon={FolderOpen}
+              title={t("settings.library.title")}
+              description={t("settings.library.description")}
+            >
+              <div className="space-y-2">
+                <Label htmlFor="library-dir">
+                  {t("settings.library.dirLabel")}
+                </Label>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    id="library-dir"
+                    value={form.libraryDir}
+                    onChange={(event) =>
+                      set("libraryDir", event.currentTarget.value)
+                    }
+                    placeholder={t("settings.library.dirPlaceholder")}
+                    className="min-w-0 font-mono text-xs sm:flex-1"
+                    spellCheck={false}
+                    disabled={saving}
+                  />
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      type="button"
+                      variant="pill"
+                      size="pill"
+                      className="whitespace-nowrap"
+                      onClick={() => void onPickDir()}
+                      disabled={scanning || saving}
+                    >
+                      <FolderOpen />
+                      {t("settings.library.pick")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="pill"
+                      size="pill-icon"
+                      aria-label={t("settings.library.clearDir")}
+                      title={t("settings.library.clearDir")}
+                      onClick={() => set("libraryDir", "")}
+                      disabled={!form.libraryDir || saving}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  variant="pill-primary"
+                  size="pill"
+                  className="whitespace-nowrap"
+                  onClick={() => void onScanLibrary()}
+                  disabled={scanning || saving || !form.libraryDir.trim()}
+                >
+                  {scanning ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <ScanLine />
+                  )}
+                  {scanning
+                    ? t("settings.library.scanning")
+                    : t("settings.library.scanNow")}
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {t("settings.library.scanHint")}
+                </span>
+              </div>
+            </SettingsSection>
+
             <SettingsSection
               icon={Gauge}
               title={t("settings.cache.budgetTitle")}
@@ -1596,13 +1648,10 @@ export default function SettingsPage() {
             </SettingsSection>
           </TabsContent>
 
-          <TabsContent value="support" className="mt-2 space-y-4">
-            <SupportPanel />
-          </TabsContent>
         </Tabs>
       )}
 
-      {tab !== "updates" && tab !== "privacy" && tab !== "support" ? (
+      {tab === "general" || tab === "network" || tab === "storage" ? (
       <div className="sticky bottom-4 z-30 mt-6">
         <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-hard">
           <div className="flex min-w-0 flex-1 items-center gap-2 text-xs font-medium text-muted-foreground">

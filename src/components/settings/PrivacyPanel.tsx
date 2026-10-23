@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
+  ArrowRight,
   Database,
+  FolderCheck,
   Globe2,
+  HardDriveDownload,
   Loader2,
   LockKeyhole,
+  PackageCheck,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
   Wifi,
@@ -33,6 +38,13 @@ import {
 } from "@/components/privacy/PrivacyDialog";
 
 const TRACE_KEYS = new Set(["mr-browser-recents", "mr-online-last-test"]);
+
+/** 应用数据目录（Tauri `app_data_dir`：library.db / 日志 / 下载）。 */
+const APP_DATA_DIR = "%APPDATA%\\com.local.manga-reader";
+/** 应用缓存目录（Tauri `app_cache_dir`：render_cache / online_cache）。 */
+const CACHE_DIR = "%LOCALAPPDATA%\\com.local.manga-reader";
+/** 更新暂存目录：Rust 侧 std::env::temp_dir() 下的 mangareader-updates。 */
+const UPDATE_STAGING_DIR = "%TEMP%\\mangareader-updates";
 
 function statusVariant(
   status: SecurityStatus,
@@ -125,6 +137,84 @@ function AuditCard({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * 胶囊风格说明卡：圆角胶囊图标 + 硬阴影卡片，沿用 --sh-* 语义 token。
+ * 仅承载静态指引文案，不触发任何网络请求或后端命令。
+ */
+function CapsuleCard({
+  icon: Icon,
+  title,
+  tone = "default",
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  tone?: "default" | "success" | "warning";
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-background/60 p-4 shadow-hard-sm">
+      <div className="flex flex-wrap items-start gap-3">
+        <span
+          className={cn(
+            "grid size-9 shrink-0 place-items-center rounded-full border border-border shadow-hard-sm",
+            tone === "success" && "bg-success/10 text-success",
+            tone === "warning" && "bg-warning/10 text-warning",
+            tone === "default" && "bg-secondary text-secondary-foreground",
+          )}
+        >
+          <Icon className="size-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="break-words text-sm font-semibold">{title}</p>
+          <div className="mt-1.5 space-y-2 text-xs leading-relaxed text-muted-foreground">
+            {children}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 操作步骤链：全圆角胶囊串联，最后一步为主色强调。 */
+function StepChain({ steps }: { steps: string[] }) {
+  return (
+    <ol className="flex flex-wrap items-center gap-1.5">
+      {steps.map((step, index) => (
+        <li key={step} className="flex min-w-0 max-w-full items-center gap-1.5">
+          {index > 0 ? (
+            <ArrowRight
+              className="size-3 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+          ) : null}
+          <span
+            className={cn(
+              "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-[11px] font-semibold shadow-hard-sm",
+              index === steps.length - 1
+                ? "border-border bg-primary text-primary-foreground"
+                : "border-border bg-card text-foreground",
+            )}
+          >
+            <span className="font-mono text-[10px] opacity-70">{index + 1}</span>
+            <span className="break-words">{step}</span>
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** 路径胶囊：等宽字体展示产品级固定路径（非用户私有路径）。 */
+function PathCapsule({ path }: { path: string }) {
+  return (
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[11px] shadow-hard-sm">
+      <FolderCheck className="size-3 shrink-0 text-muted-foreground" />
+      <span className="break-words font-mono">{path}</span>
+    </span>
   );
 }
 
@@ -541,6 +631,64 @@ export default function PrivacyPanel() {
             />
           </div>
         ) : null}
+      </SettingsSection>
+
+      <SettingsSection
+        icon={ShieldAlert}
+        title={t("privacy.security.windowsTitle")}
+        description={t("privacy.security.windowsBody")}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="success" className="gap-1.5 px-3 py-1">
+            <ShieldCheck className="size-3" />
+            {t("privacy.security.windowsBadgeIntegrity")}
+          </Badge>
+          <Badge variant="secondary" className="gap-1.5 px-3 py-1">
+            <PackageCheck className="size-3" />
+            {t("privacy.security.windowsBadgeTransaction")}
+          </Badge>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <CapsuleCard
+            icon={ShieldAlert}
+            tone="warning"
+            title={t("privacy.security.windowsSmartScreenTitle")}
+          >
+            <p className="break-words">
+              {t("privacy.security.windowsSmartScreen")}
+            </p>
+            <StepChain
+              steps={[
+                t("privacy.security.windowsStepLaunch"),
+                t("privacy.security.windowsStepInfo"),
+                t("privacy.security.windowsStepRun"),
+              ]}
+            />
+          </CapsuleCard>
+
+          <CapsuleCard
+            icon={HardDriveDownload}
+            title={t("privacy.security.windowsTempTitle")}
+          >
+            <p className="break-words">{t("privacy.security.windowsTemp")}</p>
+            <PathCapsule path={UPDATE_STAGING_DIR} />
+          </CapsuleCard>
+        </div>
+
+        <CapsuleCard
+          icon={FolderCheck}
+          tone="success"
+          title={t("privacy.security.windowsAllowlistTitle")}
+        >
+          <p className="break-words">
+            {t("privacy.security.windowsAllowlist")}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <PathCapsule path={APP_DATA_DIR} />
+            <PathCapsule path={CACHE_DIR} />
+          </div>
+        </CapsuleCard>
       </SettingsSection>
 
       <SettingsSection

@@ -49,11 +49,216 @@ pub(crate) fn effective_online_headers(saved: &str, session: Option<&str>) -> St
         .to_string()
 }
 
-/// 缓存根环境变量只接受绝对路径，且不得等于数据目录或它的祖先；
-/// 否则回退到数据目录下的安全子目录，避免清理命令误删 `library.db`。
-fn safe_cache_root(raw: &str, fallback: std::path::PathBuf) -> std::path::PathBuf {
+// ---------- 辅助会话注册表（受控 WebView 验证交接） ----------
+
+/// 辅助会话 origin 的字节上限。
+pub(crate) const MAX_ASSISTED_ORIGIN_BYTES: usize = 256;
+/// 辅助会话 User-Agent 的字节上限。
+pub(crate) const MAX_ASSISTED_USER_AGENT_BYTES: usize = 512;
+/// 辅助会话请求头长度上限（Cookie 串可能较长，但必须有界）。
+pub(crate) const MAX_ASSISTED_HEADERS_BYTES: usize = 8 * 1024;
+
+/// 辅助会话（origin → 上下文）的进程内存态快照。
+///
+/// 合规红线（与 `session_online_headers` 同级）：
+/// - 只驻留内存，绝不写 SQLite、绝不写日志；
+/// - `headers` 只来自用户显式提供的那份，绝不从 WebView 抓取 Cookie；
+/// - `user_agent` 非机密，可按 origin 复用到同源直读请求。
+#[derive(Clone, Default)]
+pub struct AssistedSession {
+    /// 受控 WebView 自己的 User-Agent 字符串（非机密）。
+    pub user_agent: Option<String>,
+    /// 用户显式提供的请求头原文（机密，仅内存）。
+    pub headers: Option<String>,
+}
+
+/// 手工实现 Debug：请求头是机密，调试输出里只显示「是否携带」，绝不打印内容。
+impl std::fmt::Debug for AssistedSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AssistedSession")
+            .field("user_agent", &self.user_agent)
+            .field(
+                "headers",
+                &if self.headers.is_some() {
+                    Some("<redacted>")
+                } else {
+                    None
+                },
+            )
+            .finish()
+    }
+}
+
+/// 归一化并校验辅助会话 origin：仅 http/https、无控制字符（含 CRLF）、无 userinfo、长度受限。
+///
+/// 返回规范化的 origin（`scheme://host[:port]`，默认端口已归一）。
+/// WHATWG URL 解析会吞掉 `\t`/`\r`/`\n`，因此必须先显式拒绝控制字符。
+pub(crate) fn normalize_assisted_origin(raw: &str) -> Result<String, String> {
+    if raw.len() > MAX_ASSISTED_ORIGIN_BYTES {
+        return Err(format!(
+            "origin 过长（上限 {MAX_ASSISTED_ORIGIN_BYTES} 字节）"
+        ));
+    }
+    if raw.chars().any(|c| c.is_control()) {
+        return Err("origin 含非法字符".into());
+    }
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("origin 不能为空".into());
+    }
+    let u = url::Url::parse(trimmed).map_err(|_| "origin 无效".to_string())?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return Err("origin 仅支持 http/https".into());
+    }
+    if !u.username().is_empty() || u.password().is_some() {
+        return Err("origin 不得包含用户名或密码".into());
+    }
+    if u.host_str().map(str::is_empty).unwrap_or(true) {
+        return Err("origin 缺少主机名".into());
+    }
+    Ok(u.origin().ascii_serialization())
+}
+
+/// 校验辅助会话 User-Agent：非空、无控制字符（含 CRLF）、长度受限。
+pub(crate) fn normalize_assisted_user_agent(raw: &str) -> Result<String, String> {
+    if raw.len() > MAX_ASSISTED_USER_AGENT_BYTES {
+        return Err(format!(
+            "userAgent 过长（上限 {MAX_ASSISTED_USER_AGENT_BYTES} 字节）"
+        ));
+    }
+    if raw.chars().any(|c| c.is_control()) {
+        return Err("userAgent 含非法字符".into());
+    }
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("userAgent 不能为空".into());
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 辅助会话注册表：origin → 辅助会话（进程内存，绝不持久化）。
+pub struct AssistedSessionRegistry {
+    sessions: Mutex<HashMap<String, AssistedSession>>,
+}
+
+impl Default for AssistedSessionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AssistedSessionRegistry {
+    pub fn new() -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 登记（或覆盖）某 origin 的辅助会话；origin 与 UA 均先校验。
+    /// 返回规范化后的 origin。注册表只在内存里，绝不写库、绝不记日志。
+    pub fn register(&self, origin: &str, session: AssistedSession) -> Result<String, String> {
+        let canonical = normalize_assisted_origin(origin)?;
+        let user_agent = match session.user_agent.as_deref() {
+            Some(ua) => Some(normalize_assisted_user_agent(ua)?),
+            None => None,
+        };
+        let headers = session
+            .headers
+            .map(|raw| raw.trim().to_string())
+            .filter(|raw| !raw.is_empty());
+        // 注册表自己再兜一层：长度上限 + 复用在线请求头的合法性校验
+        // （拒绝 CRLF / 非法头名 / Host 等危险头），避免上游漏检把畸形头带进请求。
+        if let Some(raw) = headers.as_deref() {
+            if raw.len() > MAX_ASSISTED_HEADERS_BYTES {
+                return Err(format!(
+                    "请求头过长（上限 {MAX_ASSISTED_HEADERS_BYTES} 字节）"
+                ));
+            }
+            crate::online::validate_headers(raw).map_err(|e| format!("请求头非法：{e}"))?;
+        }
+        let mut guard = self.sessions.lock();
+        // 合并语义：本次没带的字段沿用旧值。
+        // 否则一次「只带 UA、不带头」的登记会把已登记的会话头清空。
+        let previous = guard.get(&canonical);
+        let user_agent = user_agent.or_else(|| {
+            previous
+                .and_then(|session| session.user_agent.clone())
+        });
+        let headers = headers.or_else(|| previous.and_then(|session| session.headers.clone()));
+        guard.insert(
+            canonical.clone(),
+            AssistedSession {
+                user_agent,
+                headers,
+            },
+        );
+        Ok(canonical)
+    }
+
+    /// 取某 origin 的辅助会话快照；origin 非法或未登记时返回 None。
+    pub fn get(&self, origin: &str) -> Option<AssistedSession> {
+        let canonical = normalize_assisted_origin(origin).ok()?;
+        self.sessions.lock().get(&canonical).cloned()
+    }
+
+    /// 目标 URL 命中的辅助会话 UA；未命中返回 None（调用方回落到标准桌面 UA）。
+    pub fn user_agent_for_url(&self, url: &url::Url) -> Option<String> {
+        let origin = url.origin().ascii_serialization();
+        self.sessions
+            .lock()
+            .get(&origin)
+            .and_then(|session| session.user_agent.clone())
+    }
+
+    /// 目标 origin 命中的用户自备请求头（仅内存，不落库、不记日志）。
+    pub fn headers_for_origin(&self, origin: &str) -> Option<String> {
+        self.get(origin).and_then(|session| session.headers)
+    }
+
+    /// 目标 URL 的 origin 命中的用户自备请求头。
+    ///
+    /// 这是「按 origin 复用」的唯一入口：请求头只发给**当初登记它的那个站点**，
+    /// 其它 origin 一律拿不到，避免上一站凭据泄漏到下一站。
+    pub fn headers_for_url(&self, url: &url::Url) -> Option<String> {
+        let origin = url.origin().ascii_serialization();
+        self.sessions
+            .lock()
+            .get(&origin)
+            .and_then(|session| session.headers.clone())
+    }
+
+    /// 已登记的 origin 数量（不含任何会话内容，仅计数）。
+    pub fn len(&self) -> usize {
+        self.sessions.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// 清空注册表：停止 handoff 或清理在线痕迹时调用，确保上下文不残留。
+    pub fn clear(&self) {
+        self.sessions.lock().clear();
+    }
+}
+
+/// 缓存根环境变量只接受绝对路径、末级目录名必须与缓存类型一致
+/// （`render_cache` / `online_cache`），且不得等于数据目录或它的祖先。
+/// 清理命令会 `remove_dir_all` 整个根，因此必须把误配挡在构造阶段。
+fn safe_cache_root(
+    raw: &str,
+    fallback: std::path::PathBuf,
+    expected_leaf: &str,
+) -> std::path::PathBuf {
     let candidate = std::path::PathBuf::from(raw.trim());
     if !candidate.is_absolute() || candidate.parent().is_none() {
+        return fallback;
+    }
+    if candidate.file_name().and_then(|name| name.to_str()) != Some(expected_leaf) {
+        crate::logging::log_error(
+            "cache",
+            &format!("缓存根末级目录必须是 {expected_leaf}，已回落到默认目录"),
+        );
         return fallback;
     }
     let candidate = std::fs::canonicalize(&candidate).unwrap_or(candidate);
@@ -66,14 +271,18 @@ fn safe_cache_root(raw: &str, fallback: std::path::PathBuf) -> std::path::PathBu
     candidate
 }
 
-/// 渲染缓存根目录：环境变量优先（测试隔离），否则默认本地数据目录。
+/// 渲染缓存根目录：环境变量优先（测试隔离），否则 Tauri `app_cache_dir()`
+/// 下的 `render_cache`；路径尚未安装时回落到旧本地目录（不丢历史缓存）。
 fn default_render_root() -> std::path::PathBuf {
-    let fallback = dirs::data_local_dir()
-        .map(|d| d.join("com.local.manga-reader").join("render_cache"))
+    let fallback = crate::paths::cache_dir()
+        .map(|c| c.join("render_cache"))
+        .or_else(|| {
+            dirs::data_local_dir().map(|d| d.join("com.local.manga-reader").join("render_cache"))
+        })
         .unwrap_or_else(|| std::env::temp_dir().join("manga-reader-render-cache"));
     if let Ok(p) = std::env::var("MR_RENDER_CACHE_DIR") {
         if !p.trim().is_empty() {
-            return safe_cache_root(&p, fallback);
+            return safe_cache_root(&p, fallback, "render_cache");
         }
     }
     fallback
@@ -81,12 +290,15 @@ fn default_render_root() -> std::path::PathBuf {
 
 /// 在线原图缓存根目录：与渲染缓存同级，便于统一统计与 LRU 淘汰。
 fn default_online_cache_root() -> std::path::PathBuf {
-    let fallback = dirs::data_local_dir()
-        .map(|d| d.join("com.local.manga-reader").join("online_cache"))
+    let fallback = crate::paths::cache_dir()
+        .map(|c| c.join("online_cache"))
+        .or_else(|| {
+            dirs::data_local_dir().map(|d| d.join("com.local.manga-reader").join("online_cache"))
+        })
         .unwrap_or_else(|| std::env::temp_dir().join("manga-reader-online-cache"));
     if let Ok(p) = std::env::var("MR_ONLINE_CACHE_DIR") {
         if !p.trim().is_empty() {
-            return safe_cache_root(&p, fallback);
+            return safe_cache_root(&p, fallback, "online_cache");
         }
     }
     fallback
@@ -114,6 +326,8 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     /// 进程内会话临时请求头；优先于 Settings.online_headers，绝不持久化/记日志。
     pub session_online_headers: Mutex<Option<String>>,
+    /// 辅助会话注册表（origin → UA / 用户自备请求头）；只在内存，绝不写库、绝不记日志。
+    pub assisted_sessions: Arc<AssistedSessionRegistry>,
     pub db: DbSlot,
     pub cache: ImageCache,
     /// 阶段三:OCR/翻译共用一个连接池化的 HTTP 客户端。
@@ -146,6 +360,7 @@ impl AppState {
         Self {
             settings: Mutex::new(Settings::default()),
             session_online_headers: Mutex::new(None),
+            assisted_sessions: Arc::new(AssistedSessionRegistry::new()),
             db: DbSlot::new(),
             cache: ImageCache::new(),
             http: reqwest::Client::new(),
@@ -164,7 +379,7 @@ impl AppState {
         }
     }
 
-    /// 开始新的 handoff 会话；旧会话会被取消，计数归零。
+    /// 开始新的 handoff 会话；旧会话会被取消，计数归零，辅助会话上下文一并清空。
     pub(crate) fn begin_handoff(&self, runtime: HandoffRuntime) -> Arc<AtomicBool> {
         let cancel = runtime.cancel.clone();
         let mut slot = self.handoff_runtime.lock();
@@ -172,17 +387,23 @@ impl AppState {
             previous.cancel.store(true, Ordering::SeqCst);
         }
         self.handoff_received.store(0, Ordering::SeqCst);
+        // 新会话不复用旧会话的辅助上下文（UA/用户自备请求头只在内存里）。
+        self.assisted_sessions.clear();
         cancel
     }
 
     /// 仅当当前会话仍是该 flag 时清理，避免新会话被旧线程误清。
-    pub(crate) fn finish_handoff(&self, flag: &Arc<AtomicBool>) {
+    /// 返回 true 表示清理的就是当前会话（调用方据此清空辅助会话上下文）。
+    pub(crate) fn finish_handoff(&self, flag: &Arc<AtomicBool>) -> bool {
         let mut slot = self.handoff_runtime.lock();
         if slot
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(&current.cancel, flag))
         {
             *slot = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -214,6 +435,35 @@ impl AppState {
         {
             self.handoff_received.fetch_add(count, Ordering::SeqCst);
         }
+    }
+
+    // ---------- 辅助会话（受控 WebView 验证交接） ----------
+
+    /// 登记辅助会话（origin → UA / 用户自备请求头）。
+    ///
+    /// 只驻留内存：绝不写 SQLite、绝不写日志；请求头只接受用户显式提供的那份。
+    /// 返回规范化后的 origin。
+    pub fn register_assisted_session(
+        &self,
+        origin: &str,
+        session: AssistedSession,
+    ) -> Result<String, String> {
+        self.assisted_sessions.register(origin, session)
+    }
+
+    /// 取某 origin 的辅助会话快照；未登记返回 None。
+    pub fn assisted_session(&self, origin: &str) -> Option<AssistedSession> {
+        self.assisted_sessions.get(origin)
+    }
+
+    /// 目标 URL 命中的辅助会话 UA；未命中返回 None（回落到标准桌面 Chrome UA）。
+    pub fn assisted_user_agent(&self, url: &url::Url) -> Option<String> {
+        self.assisted_sessions.user_agent_for_url(url)
+    }
+
+    /// 清空辅助会话注册表：停止 handoff 或清理在线痕迹时调用。
+    pub fn clear_assisted_sessions(&self) {
+        self.assisted_sessions.clear();
     }
 
     /// 取（或打开）某书的常开句柄；池满 16 本时整体清空重开（廉价兜底驱逐）。
@@ -279,7 +529,12 @@ impl AppState {
             let s = self.settings.lock().clone();
             let session_headers = self.session_online_headers.lock().clone();
             let headers = effective_online_headers(&s.online_headers, session_headers.as_deref());
-            let transport = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
+            // 带辅助会话上下文：命中已注册 origin 时复用该会话的 UA（内存态，不落库）。
+            let transport = crate::online::http::UreqTransport::new_with_assisted(
+                &s.online_proxy,
+                &headers,
+                self.assisted_sessions.clone(),
+            )?;
             Arc::new(SourceHandle::open_online(
                 book_id.to_string(),
                 path,
@@ -410,7 +665,11 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::{effective_online_headers, safe_cache_root, AppState};
+    use super::{
+        effective_online_headers, normalize_assisted_origin, safe_cache_root, AppState,
+        AssistedSession, AssistedSessionRegistry, MAX_ASSISTED_ORIGIN_BYTES,
+        MAX_ASSISTED_USER_AGENT_BYTES,
+    };
     use crate::source::{BackendError, SourceHandle};
 
     fn test_state() -> AppState {
@@ -457,12 +716,34 @@ mod tests {
     fn cache_root_override_rejects_relative_and_file_system_root() {
         let fallback = std::path::PathBuf::from("safe-fallback");
         assert_eq!(
-            safe_cache_root("relative/cache", fallback.clone()),
+            safe_cache_root("relative/cache", fallback.clone(), "render_cache"),
             fallback
         );
-        assert_eq!(safe_cache_root("   ", fallback.clone()), fallback);
+        assert_eq!(
+            safe_cache_root("   ", fallback.clone(), "render_cache"),
+            fallback
+        );
         #[cfg(windows)]
-        assert_eq!(safe_cache_root(r"C:\", fallback.clone()), fallback);
+        assert_eq!(
+            safe_cache_root(r"C:\", fallback.clone(), "render_cache"),
+            fallback
+        );
+        // 末级目录不是缓存类型 → 拒绝（防止把任意目录交给 remove_dir_all）。
+        #[cfg(windows)]
+        assert_eq!(
+            safe_cache_root(r"C:\Users\public\Documents", fallback.clone(), "render_cache"),
+            fallback
+        );
+        // 末级目录匹配的绝对路径才接受。
+        #[cfg(windows)]
+        assert_eq!(
+            safe_cache_root(
+                r"C:\Users\public\render_cache",
+                fallback.clone(),
+                "render_cache"
+            ),
+            std::path::PathBuf::from(r"C:\Users\public\render_cache")
+        );
     }
 
     #[test]
@@ -706,5 +987,192 @@ mod tests {
 
         let err = err_text(state.source_handle_for_book("weird-book"));
         assert_eq!(err, "未知来源类型：epub");
+    }
+
+    // ---------- 辅助会话注册表 ----------
+
+    fn assisted_session(user_agent: &str) -> AssistedSession {
+        AssistedSession {
+            user_agent: Some(user_agent.to_string()),
+            headers: Some("Cookie: sid=secret".to_string()),
+        }
+    }
+
+    #[test]
+    fn assisted_registry_rejects_invalid_origin_and_user_agent() {
+        let state = AppState::new();
+        // 非 http/https 一律拒绝。
+        for bad in [
+            "ftp://example.com",
+            "file:///c:/tmp",
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "",
+        ] {
+            assert!(
+                state.register_assisted_session(bad, assisted_session("UA/1.0")).is_err(),
+                "非法 origin 必须被拒绝：{bad}"
+            );
+        }
+        // 含 CRLF（WHATWG 解析会吞掉，必须显式拒绝）。
+        for bad in [
+            "https://example.com\r\nX-Injected: 1",
+            "https://example.com\n",
+            "https://example.com\r",
+        ] {
+            assert!(
+                state.register_assisted_session(bad, assisted_session("UA/1.0")).is_err(),
+                "含控制字符的 origin 必须被拒绝：{bad:?}"
+            );
+        }
+        // 超长。
+        let long = format!("https://{}.com", "a".repeat(MAX_ASSISTED_ORIGIN_BYTES));
+        assert!(state.register_assisted_session(&long, assisted_session("UA/1.0")).is_err());
+        // UA 含 CRLF / 超长同样拒绝。
+        assert!(state
+            .register_assisted_session("https://example.com", assisted_session("UA/1.0\r\nX: 1"))
+            .is_err());
+        assert!(state
+            .register_assisted_session(
+                "https://example.com",
+                AssistedSession {
+                    user_agent: Some("U".repeat(MAX_ASSISTED_USER_AGENT_BYTES + 1)),
+                    headers: None,
+                }
+            )
+            .is_err());
+        // 非法输入不得留下任何注册记录。
+        assert_eq!(state.assisted_sessions.len(), 0);
+    }
+
+    #[test]
+    fn assisted_registry_normalizes_origin_and_matches_only_same_origin() {
+        let state = AppState::new();
+        let canonical = state
+            .register_assisted_session(
+                "https://Gallery.Example/gallery/1?x=1",
+                assisted_session("Assisted-UA/1.0"),
+            )
+            .expect("合法 origin 应登记");
+        assert_eq!(canonical, "https://gallery.example");
+        assert_eq!(state.assisted_sessions.len(), 1);
+
+        let hit = url::Url::parse("https://gallery.example/chapter/2").unwrap();
+        assert_eq!(
+            state.assisted_user_agent(&hit).as_deref(),
+            Some("Assisted-UA/1.0")
+        );
+        // 跨 origin（不同 host / 不同 scheme / 不同端口）都不命中。
+        for miss in [
+            "https://other.example/chapter/2",
+            "http://gallery.example/chapter/2",
+            "https://gallery.example:8443/chapter/2",
+        ] {
+            let url = url::Url::parse(miss).unwrap();
+            assert_eq!(state.assisted_user_agent(&url), None, "{miss}");
+        }
+    }
+
+    #[test]
+    fn assisted_sessions_are_memory_only_and_never_persisted() {
+        let state = test_state();
+        state
+            .register_assisted_session("https://gallery.example", assisted_session("Assisted-UA/9.9"))
+            .expect("登记辅助会话");
+        // 内存里可见。
+        let session = state
+            .assisted_session("https://gallery.example")
+            .expect("应能取回辅助会话");
+        assert_eq!(session.user_agent.as_deref(), Some("Assisted-UA/9.9"));
+        assert_eq!(session.headers.as_deref(), Some("Cookie: sid=secret"));
+
+        // 但 SQLite 的 settings 表里不得出现任何相关 key/值。
+        let dump = state
+            .db
+            .with(|conn| {
+                let mut stmt = conn
+                    .prepare("SELECT k, v FROM settings")
+                    .map_err(|e| e.to_string())?;
+                let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+                let mut out = String::new();
+                while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                    let k: String = row.get(0).map_err(|e| e.to_string())?;
+                    let v: String = row.get(1).map_err(|e| e.to_string())?;
+                    out.push_str(&k);
+                    out.push('=');
+                    out.push_str(&v);
+                    out.push('\n');
+                }
+                Ok(out)
+            })
+            .unwrap();
+        assert!(
+            !dump.contains("Assisted-UA") && !dump.contains("sid=secret"),
+            "辅助会话内容不得写入 SQLite：{dump}"
+        );
+        assert!(
+            !dump.to_lowercase().contains("assist")
+                && !dump.to_lowercase().contains("user_agent")
+                && !dump.to_lowercase().contains("gallery.example"),
+            "settings 表不得出现辅助会话相关 key：{dump}"
+        );
+        assert!(
+            state
+                .db
+                .with(|conn| crate::db::get_setting(conn, "online_headers").map_err(|e| e.to_string()))
+                .unwrap()
+                .is_none(),
+            "辅助会话不得顺带落库任何设置项"
+        );
+    }
+
+    #[test]
+    fn clear_assisted_sessions_empties_the_registry() {
+        let state = AppState::new();
+        state
+            .register_assisted_session("https://gallery.example", assisted_session("Assisted-UA/1.0"))
+            .expect("登记辅助会话");
+        assert_eq!(state.assisted_sessions.len(), 1);
+        state.clear_assisted_sessions();
+        assert_eq!(state.assisted_sessions.len(), 0);
+        assert!(state.assisted_session("https://gallery.example").is_none());
+        let url = url::Url::parse("https://gallery.example/chapter/2").unwrap();
+        assert_eq!(state.assisted_user_agent(&url), None);
+    }
+
+    #[test]
+    fn assisted_registry_validates_origin_helper() {
+        assert_eq!(
+            normalize_assisted_origin("https://example.com").unwrap(),
+            "https://example.com"
+        );
+        assert_eq!(
+            normalize_assisted_origin("http://127.0.0.1:8080/x").unwrap(),
+            "http://127.0.0.1:8080"
+        );
+        assert!(normalize_assisted_origin("ftp://example.com").is_err());
+        assert!(normalize_assisted_origin("https://example.com\r\n").is_err());
+    }
+
+    #[test]
+    fn assisted_registry_can_be_used_standalone() {
+        let registry = AssistedSessionRegistry::new();
+        assert!(registry.is_empty());
+        registry
+            .register(
+                "https://gallery.example",
+                AssistedSession {
+                    user_agent: Some("UA/1.0".into()),
+                    headers: Some("Cookie: sid=abc".into()),
+                },
+            )
+            .unwrap();
+        assert_eq!(registry.len(), 1);
+        assert_eq!(
+            registry.headers_for_origin("https://gallery.example").as_deref(),
+            Some("Cookie: sid=abc")
+        );
+        registry.clear();
+        assert!(registry.is_empty());
     }
 }

@@ -54,9 +54,33 @@ async function waitForRecovery(ctx, timeout = 16_000) {
   return { page, target };
 }
 
+/**
+ * 韧性 invoke：安全模式阶段会重建主窗口，新 WebView 可能在几秒内不响应 CDP。
+ * 这里对「CDP Runtime.evaluate 超时」做有限重试——只消除**时序抖动**，
+ * 断言强度不变（重试后仍失败照样判失败）。
+ */
+async function invokeResilient(page, command, args = {}, attempts = 3) {
+  let lastError = null;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      return await invoke(page, command, args);
+    } catch (error) {
+      lastError = error;
+      if (!String(error).includes("超时")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+  throw lastError;
+}
+
 export async function runChaosSuite(ctx, report) {
   let page = ctx.page;
   await ctx.setLocale("en");
+  page = ctx.page;
+  // 恢复窗必须继承主窗主题/语言：先落盘 dark 偏好再触发恢复窗。
+  // 同窗口 localStorage.setItem 不触发 StorageEvent，因此这里验证恢复窗
+  // 启动期的跨窗口读取，不额外派发伪造事件。
+  await ctx.setTheme("dark");
   page = ctx.page;
   await ctx.goto("#/");
   await page.waitFor("!!document.querySelector('main')", { timeout: 8000 });
@@ -136,6 +160,45 @@ export async function runChaosSuite(ctx, report) {
           title: "Rage Click 唤起独立恢复窗口且未静默处理",
         });
       }
+
+      // 恢复窗跨窗口偏好：主窗 mr-theme=dark / mr-locale=en 必须被继承。
+      const prefs = await recovery.page.eval(`(() => {
+        const text = document.body.innerText || "";
+        return {
+          theme: document.documentElement.dataset.theme,
+          themeMode: document.documentElement.dataset.themeMode,
+          lang: document.documentElement.lang,
+          english: /Recovery & diagnostics|Isolated recovery window|Repeated clicks with no response/.test(text),
+          storedTheme: localStorage.getItem("mr-theme"),
+          storedLocale: localStorage.getItem("mr-locale"),
+          text: text.slice(0, 300),
+        };
+      })()`);
+      if (prefs.theme !== "dark" || prefs.lang !== "en" || !prefs.english) {
+        fail(report, {
+          id: "chaos:recovery-prefs",
+          suite: "chaos",
+          layer: "chaos",
+          title: "恢复窗未继承主窗主题/语言",
+          severity: "P1",
+          details: JSON.stringify(prefs, null, 2),
+          location: "src/recovery/main.tsx / recovery.html",
+          expected:
+            "主窗 mr-theme=dark、mr-locale=en 后打开的恢复窗 dataset.theme=dark、lang=en，正文为英文 Recovery 文案",
+          actual: JSON.stringify(prefs),
+          rootCause: "恢复窗入口未挂载主题/语言 Provider，或只读取默认 zh-CN/light",
+          fix: "恢复窗挂载 ThemeProvider/I18nProvider（或等价启动同步），监听 storage 事件",
+        });
+      } else {
+        ok(report, {
+          id: "chaos:recovery-prefs",
+          suite: "chaos",
+          layer: "chaos",
+          title: "恢复窗继承主窗 dark 主题与 en 语言",
+          details: `theme=${prefs.theme} lang=${prefs.lang} stored=${prefs.storedTheme}/${prefs.storedLocale}`,
+        });
+      }
+
       // "Keep waiting" must not close the recovery window.
       const buttons = await recovery.page.eval(`[...document.querySelectorAll("button")].map((button) => (button.textContent || "").trim())`);
       if (buttons.some((text) => text === "Keep waiting")) {
@@ -169,16 +232,21 @@ export async function runChaosSuite(ctx, report) {
 
   note(report, "chaos stage: freeze");
   // ---------- Freeze → independent recovery → user-authorized reload ----------
+  let freezeStage = "reconnect-before-freeze";
   try {
     await ctx.reconnectMain();
     page = ctx.page;
+    freezeStage = "targets-before";
     const targetsBefore = await targetsOnPort(ctx);
     const mainBefore = targetsBefore.find((target) => target.url.includes("localhost:1420/") && !target.url.includes("recovery.html"));
+    freezeStage = "freeze-main";
     await freezeMain(page);
     await sleep(7200);
+    freezeStage = "wait-recovery";
     const targetsAfter = await targetsOnPort(ctx);
     const mainAfter = targetsAfter.find((target) => target.url.includes("localhost:1420/") && !target.url.includes("recovery.html"));
     const recovery = await waitForRecovery(ctx, 6000);
+    freezeStage = "assert-recovery";
     const body = await recovery.page.eval("document.body.innerText");
     const autoRestarted = mainAfter && mainBefore && mainAfter.id !== mainBefore.id;
     if (!body.includes("Main reader window timed out") || autoRestarted) {
@@ -204,6 +272,7 @@ export async function runChaosSuite(ctx, report) {
         details: `main target unchanged=${mainAfter?.id === mainBefore?.id}`,
       });
     }
+    freezeStage = "reload-view";
     await recovery.page.clickText("Reload view only");
     await sleep(2200);
     const frozenMainId = mainAfter?.id;
@@ -236,8 +305,10 @@ export async function runChaosSuite(ctx, report) {
         title: "仅重载当前视图可恢复冻结主窗口",
       });
     }
+    freezeStage = "close-recovery";
     await recovery.page.close().catch(() => {});
     await closeRecovery(ctx);
+    freezeStage = "reconnect-after-reload";
     await ctx.reconnectMain();
   } catch (error) {
     fail(report, {
@@ -246,7 +317,7 @@ export async function runChaosSuite(ctx, report) {
       layer: "chaos",
       title: "主线程死锁自动恢复链路无法完成",
       severity: "P0",
-      details: error.stack || error.message,
+      details: `stage=${freezeStage}\n${error.stack || error.message}`,
       location: "src-tauri/src/resilience.rs / src/recovery/RecoveryApp.tsx",
       rootCause: "恢复窗口、CDP 或主窗口重建异常",
       fix: "查看 QA artifact 与应用日志",
@@ -259,7 +330,7 @@ export async function runChaosSuite(ctx, report) {
   try {
     await ctx.reconnectMain();
     await ctx.goto("#/");
-    const safeBefore = await invoke(ctx.page, "get_safe_mode_state");
+    const safeBefore = await invokeResilient(ctx.page, "get_safe_mode_state");
     if (safeBefore.active) {
       fail(report, {
         id: "chaos:safe-mode-baseline",
@@ -281,7 +352,7 @@ export async function runChaosSuite(ctx, report) {
       "document.documentElement.dataset.safeMode === 'true'",
       { timeout: 10_000, label: "safe mode dataset" },
     );
-    const safe = await invoke(ctx.page, "get_safe_mode_state");
+    const safe = await invokeResilient(ctx.page, "get_safe_mode_state");
     const ui = await ctx.page.eval(`({
       safePill: !!document.querySelector("[data-safe-mode-pill]"),
       browserVisible: [...document.querySelectorAll("a")].some((a) => (a.getAttribute("href") || "").includes("/browser")),
@@ -432,4 +503,8 @@ export async function runChaosSuite(ctx, report) {
   }
 
   note(report, "混沌测试通过 CDP 注入 while(true) 与真实鼠标连点；主窗口重建经独立恢复窗点击触发");
+  note(
+    report,
+    "恢复窗偏好：触发前主窗已落盘 mr-theme=dark / mr-locale=en，验证恢复窗启动期跨窗口读取（未派发伪造 StorageEvent）",
+  );
 }

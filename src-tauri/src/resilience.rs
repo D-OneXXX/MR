@@ -20,7 +20,9 @@ use crate::AppState;
 
 const RECOVERY_LABEL: &str = "recovery";
 const RECOVERY_PAGE: &str = "recovery.html";
-const RECOVERY_TITLE: &str = "MangaReader · 恢复与诊断";
+/// 原生窗口标题只做中性兜底；实际语言由恢复窗前端按 `recovery.windowTitle`
+/// 调用 `setTitle` 同步，避免无装饰窗口在非中文环境出现中文标题。
+const RECOVERY_TITLE: &str = "MangaReader";
 const HEARTBEAT_STALE: Duration = Duration::from_secs(6);
 const BOOT_GRACE: Duration = Duration::from_secs(12);
 const WATCHDOG_TICK: Duration = Duration::from_secs(1);
@@ -303,6 +305,99 @@ fn should_replace_main(main_exists: bool, responsive: bool) -> bool {
     !main_exists || !responsive
 }
 
+/// 窗口必须与某个显示器矩形有至少 64×64 像素的交集，才算“用户看得见”。
+/// 显示器矩形是整个屏幕（物理像素）；窗口位置与尺寸同样取物理像素，
+/// 因此多显示器不同 DPI 缩放下也无需换算。全部使用 i64 计算，避免
+/// 副屏负坐标或超大分辨率下的整数溢出。
+const MIN_VISIBLE_EDGE: i64 = 64;
+
+fn rect_visible_on_any_monitor(
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    monitors: &[(i32, i32, u32, u32)],
+) -> bool {
+    if w == 0 || h == 0 {
+        return false;
+    }
+    let win_x0 = x as i64;
+    let win_y0 = y as i64;
+    let win_x1 = win_x0 + w as i64;
+    let win_y1 = win_y0 + h as i64;
+    monitors.iter().any(|&(mx, my, mw, mh)| {
+        if mw == 0 || mh == 0 {
+            return false;
+        }
+        let mon_x0 = mx as i64;
+        let mon_y0 = my as i64;
+        let overlap_w = (win_x1.min(mon_x0 + mw as i64)) - win_x0.max(mon_x0);
+        let overlap_h = (win_y1.min(mon_y0 + mh as i64)) - win_y0.max(mon_y0);
+        overlap_w >= MIN_VISIBLE_EDGE && overlap_h >= MIN_VISIBLE_EDGE
+    })
+}
+
+fn monitor_rects(monitors: &[tauri::Monitor]) -> Vec<(i32, i32, u32, u32)> {
+    monitors
+        .iter()
+        .map(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            (position.x, position.y, size.width, size.height)
+        })
+        .collect()
+}
+
+/// 兜底：把完全跑到所有显示器可见区域之外的窗口拉回屏幕中央。
+/// 没有显示器信息（远程会话/驱动异常）时直接返回，绝不误 center。
+fn ensure_window_on_screen(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let monitors = window
+        .available_monitors()
+        .map_err(|err| format!("无法读取显示器列表：{err}"))?;
+    if monitors.is_empty() {
+        return Ok(());
+    }
+    let rects = monitor_rects(&monitors);
+    let position = window
+        .outer_position()
+        .map_err(|err| format!("无法读取窗口位置：{err}"))?;
+    let size = window
+        .outer_size()
+        .map_err(|err| format!("无法读取窗口尺寸：{err}"))?;
+    if rect_visible_on_any_monitor(position.x, position.y, size.width, size.height, &rects) {
+        return Ok(());
+    }
+    crate::logging::log_error(
+        "window_guard",
+        &format!(
+            "窗口 {} 不在任何显示器可见区域内（{}x{} @ {},{}），重新居中",
+            window.label(),
+            size.width,
+            size.height,
+            position.x,
+            position.y
+        ),
+    );
+    window
+        .center()
+        .map_err(|err| format!("窗口居中失败：{err}"))?;
+    if let (Ok(after_pos), Ok(after_size)) = (window.outer_position(), window.outer_size()) {
+        if !rect_visible_on_any_monitor(
+            after_pos.x,
+            after_pos.y,
+            after_size.width,
+            after_size.height,
+            &rects,
+        ) {
+            crate::logging::log_error(
+                "window_guard",
+                &format!("窗口 {} 居中后仍不可见，等待用户手动移动", window.label()),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn heartbeat_readiness(state: &ResilienceState) -> (Option<String>, u64, bool) {
     let last = *state.last_heartbeat.lock();
     let route = state.last_route.lock().clone();
@@ -354,22 +449,31 @@ fn open_recovery(
     if let Some(window) = app.get_webview_window(RECOVERY_LABEL) {
         window.show().map_err(|err| err.to_string())?;
         window.set_focus().map_err(|err| err.to_string())?;
+        // 恢复窗可能是上次留在已断开的副屏上的隐藏窗口：先确认可见再推送现场。
+        if let Err(err) = ensure_window_on_screen(&window) {
+            crate::logging::log_error("recovery", &format!("恢复窗口位置校验失败：{err}"));
+        }
         emit_context(app, &context);
         return Ok(false);
     }
 
-    WebviewWindowBuilder::new(app, RECOVERY_LABEL, WebviewUrl::App(RECOVERY_PAGE.into()))
-        .title(RECOVERY_TITLE)
-        .inner_size(620.0, 680.0)
-        .min_inner_size(480.0, 560.0)
-        .resizable(true)
-        .decorations(false)
-        .shadow(true)
-        .center()
-        .focused(true)
-        .always_on_top(true)
-        .build()
-        .map_err(|err| format!("无法打开恢复窗口：{err}"))?;
+    let window =
+        WebviewWindowBuilder::new(app, RECOVERY_LABEL, WebviewUrl::App(RECOVERY_PAGE.into()))
+            .title(RECOVERY_TITLE)
+            .inner_size(620.0, 680.0)
+            .min_inner_size(480.0, 560.0)
+            .resizable(true)
+            .decorations(false)
+            .shadow(true)
+            .center()
+            .focused(true)
+            .always_on_top(true)
+            .build()
+            .map_err(|err| format!("无法打开恢复窗口：{err}"))?;
+    // builder.center() 只按当前/主显示器估算，副屏拓扑变化后仍可能越界。
+    if let Err(err) = ensure_window_on_screen(&window) {
+        crate::logging::log_error("recovery", &format!("恢复窗口位置校验失败：{err}"));
+    }
     emit_context(app, &context);
     Ok(true)
 }
@@ -593,17 +697,47 @@ async fn replace_main_window(app: AppHandle) -> Result<(), String> {
 
 fn rebuild_main_window(app: &AppHandle) -> Result<(), String> {
     let existing = app.get_webview_window("main");
-    let (url, scale, size, position, maximized) = if let Some(main) = existing.as_ref() {
+    let (url, scale, size, position, maximized, monitors) = if let Some(main) = existing.as_ref() {
         (
             main.url().ok(),
             main.scale_factor().unwrap_or(1.0),
             main.inner_size().ok(),
             main.outer_position().ok(),
             main.is_maximized().unwrap_or(false),
+            main.available_monitors()
+                .map(|list| monitor_rects(&list))
+                .unwrap_or_default(),
         )
     } else {
-        (None, 1.0, None, None, false)
+        (
+            None,
+            1.0,
+            None,
+            None,
+            false,
+            app.available_monitors()
+                .map(|list| monitor_rects(&list))
+                .unwrap_or_default(),
+        )
     };
+    // 先从原窗口取出显示器拓扑：窗口一旦销毁，旧坐标就无从校验。
+    // 原位置若已越界（副屏被拔掉/分辨率变化），宁可不设 position 让系统居中，
+    // 也不要把它先放到屏幕外再 center，避免出现一闪而过的空白窗口。
+    let safe_position = position.filter(|pos| {
+        if monitors.is_empty() {
+            return true;
+        }
+        let (width, height) = size
+            .map(|size| (size.width, size.height))
+            .unwrap_or((1200, 820));
+        rect_visible_on_any_monitor(pos.x, pos.y, width, height, &monitors)
+    });
+    if position.is_some() && safe_position.is_none() {
+        crate::logging::log_error(
+            "recovery",
+            "原主窗口位置已越界（显示器拓扑变化），交由系统重新居中",
+        );
+    }
     if let Some(main) = existing {
         main.destroy()
             .map_err(|err| format!("销毁卡死主窗口失败：{err}"))?;
@@ -632,12 +766,15 @@ fn rebuild_main_window(app: &AppHandle) -> Result<(), String> {
     }
     if maximized {
         builder = builder.maximized(true);
-    } else if let Some(position) = position {
+    } else if let Some(position) = safe_position {
         builder = builder.position(position.x as f64 / scale, position.y as f64 / scale);
     }
     let window = builder
         .build()
         .map_err(|err| format!("重建主窗口失败：{err}"))?;
+    if let Err(err) = ensure_window_on_screen(&window) {
+        crate::logging::log_error("recovery", &format!("主窗口位置校验失败：{err}"));
+    }
     let _ = window.set_focus();
     crate::logging::log_error("recovery", "主窗口已重建，等待心跳恢复");
     Ok(())
@@ -761,6 +898,61 @@ mod tests {
             "mr-resilience-{}-{tag}-{nanos}.json",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn rect_visibility_requires_64px_overlap() {
+        let primary = [(0, 0, 1920, 1080)];
+        let visible =
+            |x: i32, y: i32, w: u32, h: u32| rect_visible_on_any_monitor(x, y, w, h, &primary);
+        assert!(visible(100, 100, 800, 600));
+        assert!(!visible(2000, 100, 800, 600));
+        // 右边/下边只留 64px 算可见，63px 不算。
+        assert!(visible(1920 - 64, 100, 800, 600));
+        assert!(!visible(1920 - 63, 100, 800, 600));
+        assert!(visible(100, 1080 - 64, 800, 600));
+        assert!(!visible(100, 1080 - 63, 800, 600));
+        // 完全盖住显示器也只算“可见”，不要求交集小于显示器。
+        assert!(visible(-500, -500, 4000, 3000));
+    }
+
+    #[test]
+    fn rect_visibility_handles_negative_and_multiple_monitors() {
+        // 主屏左侧的副屏：坐标为负。
+        let left_secondary = [(-1920, 0, 1920, 1080), (0, 0, 1920, 1080)];
+        let on_secondary = |x: i32, y: i32, w: u32, h: u32| {
+            rect_visible_on_any_monitor(x, y, w, h, &left_secondary)
+        };
+        assert!(on_secondary(-1800, 200, 800, 600));
+        assert!(!on_secondary(-2100, 200, 100, 600));
+        // 副屏在主屏上方：坐标同样为负。
+        let above = [(0, -1080, 1920, 1080), (0, 0, 1920, 1080)];
+        let on_above =
+            |x: i32, y: i32, w: u32, h: u32| rect_visible_on_any_monitor(x, y, w, h, &above);
+        assert!(on_above(200, -1000, 800, 600));
+        assert!(!on_above(200, -1400, 800, 300));
+        // 并排两屏的接缝：每侧各 32px 不算可见，单侧满 64px 才算。
+        let side_by_side = [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)];
+        let on_pair =
+            |x: i32, y: i32, w: u32, h: u32| rect_visible_on_any_monitor(x, y, w, h, &side_by_side);
+        assert!(!on_pair(1920 - 32, 100, 64, 600));
+        assert!(on_pair(1920 - 64, 100, 128, 600));
+        assert!(on_pair(1950, 100, 800, 600));
+    }
+
+    #[test]
+    fn rect_visibility_rejects_empty_geometry_and_avoids_overflow() {
+        let no_monitors: [(i32, i32, u32, u32); 0] = [];
+        let primary = [(0, 0, 1920, 1080)];
+        let tiny_monitor = [(0, 0, 0, 1080)];
+        assert!(!rect_visible_on_any_monitor(0, 0, 800, 600, &no_monitors));
+        assert!(!rect_visible_on_any_monitor(0, 0, 0, 600, &primary));
+        assert!(!rect_visible_on_any_monitor(0, 0, 800, 600, &tiny_monitor));
+        // 高 DPI 副屏的远端坐标不能溢出 i32 边界导致误判为可见。
+        let far = [(16000, 9000, 3840, 2160)];
+        let on_far = |x: i32, y: i32, w: u32, h: u32| rect_visible_on_any_monitor(x, y, w, h, &far);
+        assert!(on_far(16100, 9100, 800, 600));
+        assert!(!on_far(i32::MAX, 9100, 800, 600));
     }
 
     #[test]

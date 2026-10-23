@@ -945,6 +945,104 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    /// 递归快照目录（相对路径 + 文件字节数）：用于断言读取过程不落盘。
+    fn dir_snapshot(root: &Path) -> Vec<(String, u64)> {
+        fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, u64)>) {
+            let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+                .unwrap()
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .collect();
+            entries.sort();
+            for path in entries {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let meta = std::fs::metadata(&path).unwrap();
+                if meta.is_dir() {
+                    out.push((format!("{rel}/"), 0));
+                    walk(root, &path, out);
+                } else {
+                    out.push((rel, meta.len()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, root, &mut out);
+        out
+    }
+
+    /// 打开只读中央目录 + 按需解压单条：中文名不乱码、页数正确、绝不落盘。
+    #[test]
+    fn zip_source_reads_on_demand_without_extracting() {
+        use std::io::Write as _;
+        use zip::write::SimpleFileOptions;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("mr-zip-stream-{}-{nanos}", std::process::id()));
+        // 归档放在子目录里，旁边再放一个空目录：任何“解压到磁盘”都会破坏快照。
+        let archive_dir = root.join("archive");
+        std::fs::create_dir_all(&archive_dir).unwrap();
+        std::fs::create_dir_all(root.join("outside")).unwrap();
+
+        let path = archive_dir.join("中文 名.cbz");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        // 写入顺序故意打乱；内容各不相同，便于验证“只取命中条目”。
+        for (name, body) in [
+            ("10.jpg", b"ten-page".as_slice()),
+            ("1.jpg", b"one-page".as_slice()),
+            ("notes.txt", b"not-an-image".as_slice()),
+            ("2.png", b"two-page".as_slice()),
+            ("子目录/中文 名.png", b"nested-chinese".as_slice()),
+        ] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(body).unwrap();
+        }
+        // 显式目录条目必须被忽略（既不算页，也不触发解压）。
+        zip.add_directory("空目录/", options).unwrap();
+        zip.finish().unwrap();
+
+        let before = dir_snapshot(&root);
+        let source = super::ZipSource::open(&path).unwrap();
+        let names = source.entry_names().unwrap();
+        assert_eq!(
+            names,
+            vec!["1.jpg", "2.png", "10.jpg", "子目录/中文 名.png"],
+            "中文名不得乱码，且 1/2/10 必须按数值自然序"
+        );
+        assert_eq!(
+            source.page_count().unwrap(),
+            4,
+            "页数 = 图片条目数（忽略目录条目与非图片文件）"
+        );
+
+        // 只读取 index=2（自然序即 10.jpg），字节必须与写入内容一致。
+        let raw = source.read_raw(2).unwrap();
+        assert_eq!(raw.bytes, b"ten-page");
+        assert_eq!(raw.ext, "jpg");
+        assert!(source.read_raw(4).is_err(), "越界页码必须报错");
+
+        // 生产热路径的常开句柄同样只能按需读取。
+        let handle = super::SourceHandle::open(&path).unwrap();
+        assert_eq!(handle.page_count().unwrap(), 4);
+        assert_eq!(handle.read_raw(2).unwrap().bytes, b"ten-page");
+        drop(handle);
+
+        assert_eq!(
+            dir_snapshot(&root),
+            before,
+            "打开/单页读取不得在归档目录内外产生任何解压文件"
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
     #[test]
     fn online_source_reuses_disk_page_cache() {
         let nanos = std::time::SystemTime::now()

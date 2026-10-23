@@ -1,9 +1,11 @@
 //! 阻塞 HTTP Transport：ureq + 代理 + 重试 + 响应大小上限。
 
 use std::io::Read;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::online::{validate_proxy, OnlineError, ONLINE_UA};
+use crate::state::AssistedSessionRegistry;
 
 /// 一次 HTTP 请求的最终结果（含重定向后的最终 URL）。
 pub struct HttpResponse {
@@ -117,6 +119,9 @@ impl RequestHeaders {
 pub struct UreqTransport {
     agent: ureq::Agent,
     headers: RequestHeaders,
+    /// 辅助会话注册表（进程内存）：命中已注册 origin 时复用该会话的 UA。
+    /// `None` 表示没有辅助上下文，一律使用标准桌面 Chrome UA。
+    assisted: Option<Arc<AssistedSessionRegistry>>,
 }
 
 struct RawResponse {
@@ -218,13 +223,48 @@ impl UreqTransport {
         Ok(Self {
             agent: builder.build(),
             headers,
+            assisted: None,
         })
+    }
+
+    /// 构造带辅助会话上下文的传输：请求目标命中已注册 origin 时复用该会话的 UA，
+    /// 否则回落到标准桌面 Chrome UA。注册表只在内存里，绝不落库、绝不记日志。
+    pub fn new_with_assisted(
+        proxy: &str,
+        headers: &str,
+        assisted: Arc<AssistedSessionRegistry>,
+    ) -> Result<Self, OnlineError> {
+        let mut transport = Self::new(proxy, headers)?;
+        transport.assisted = Some(assisted);
+        Ok(transport)
+    }
+
+    /// 目标 origin 命中的辅助会话 UA；未命中返回 None（回落到标准桌面 Chrome UA）。
+    ///
+    /// UA 本身不是机密，可按 origin 复用；请求头仍只允许用户显式提供的那份。
+    fn assisted_user_agent(&self, target: &url::Url) -> Option<String> {
+        self.assisted
+            .as_ref()
+            .and_then(|registry| registry.user_agent_for_url(target))
+    }
+
+    /// 目标 origin 命中的辅助会话请求头（用户显式提供的那份）。
+    ///
+    /// **严格按 origin 绑定**：只有当初登记该请求头的站点才拿得到它，
+    /// 其它站点一律不附带，避免上一站凭据泄漏到下一站。
+    fn assisted_headers(&self, target: &url::Url) -> Option<String> {
+        self.assisted
+            .as_ref()
+            .and_then(|registry| registry.headers_for_url(target))
     }
 
     /// 单次请求：应用手动请求头与派生的 Referer/Origin。
     /// 用户请求头只在目标与 header_scope 同 origin（scheme+host+port）时发送；
     /// 跨 origin 丢弃全部用户请求头（含 Cookie/Authorization/自定义密钥头），
     /// 只保留由页面 URL 派生的 Referer/Origin。
+    ///
+    /// User-Agent 另走辅助会话：目标 origin 命中已注册辅助会话时复用该会话的 UA，
+    /// 未命中则沿用标准桌面 Chrome UA；用户显式提供的 UA 头优先。
     fn execute(
         &self,
         target: &url::Url,
@@ -234,6 +274,20 @@ impl UreqTransport {
     ) -> Result<RawResponse, OnlineError> {
         let within_scope = scope.is_some_and(|s| same_origin(target, s));
         let mut req = self.agent.get(target.as_str());
+        // 辅助会话请求头：只在目标 origin 与登记 origin 完全一致时附带。
+        // 放在用户请求头之前，保证用户显式设置优先。
+        if let Some(headers) = self.assisted_headers(target) {
+            if let Ok(parsed) = RequestHeaders::parse(&headers) {
+                for (k, v) in &parsed.values {
+                    req = req.set(k, v);
+                }
+            }
+        }
+        if !self.headers.has("user-agent") {
+            if let Some(user_agent) = self.assisted_user_agent(target) {
+                req = req.set("User-Agent", &user_agent);
+            }
+        }
         if within_scope {
             for (k, v) in &self.headers.values {
                 req = req.set(k, v);
@@ -1008,6 +1062,96 @@ mod tests {
         );
     }
 
+    /// 百分号编码的在线 URL 必须在请求行原样送出：既不二次编码，也不解码，query 不截断。
+    #[test]
+    fn request_line_preserves_percent_encoded_path_and_query() {
+        let (base, h) = spawn_hop(None);
+        let origin = url::Url::parse(&base)
+            .unwrap()
+            .origin()
+            .ascii_serialization();
+        let path = "/%E6%BC%AB%E7%94%BB%20one/%5B1%5D%23x%25.jpg?a=%2Fb%20c";
+        let target = format!("{origin}{path}");
+        // 纯函数层：url crate 的解析/序列化必须幂等，不得解码既有转义。
+        assert_eq!(url::Url::parse(&target).unwrap().as_str(), target);
+
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t.get(&target, 1024, None, None).unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        let line = req.lines().next().unwrap_or_default();
+        assert_eq!(line, format!("GET {path} HTTP/1.1"), "{req}");
+        assert!(!req.contains("%2520"), "路径/query 不得被二次编码：{req}");
+    }
+
+    /// 原始中文/空格 URL 只在传输层编码一次（UTF-8 → 大写百分号），不双写。
+    #[test]
+    fn raw_chinese_path_is_percent_encoded_once() {
+        let (base, h) = spawn_hop(None);
+        let origin = url::Url::parse(&base)
+            .unwrap()
+            .origin()
+            .ascii_serialization();
+        let target = format!("{origin}/漫画 one/第1话.jpg?q=中文 值");
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t.get(&target, 1024, None, None).unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        let line = req.lines().next().unwrap_or_default();
+        assert_eq!(
+            line,
+            "GET /%E6%BC%AB%E7%94%BB%20one/%E7%AC%AC1%E8%AF%9D.jpg?q=%E4%B8%AD%E6%96%87%20%E5%80%BC HTTP/1.1",
+            "{req}"
+        );
+        assert!(
+            !req.contains("漫画"),
+            "请求行不得出现未编码的原始中文：{req}"
+        );
+    }
+
+    /// 同源 Referer：保留 query 与既有百分号编码（含中文路径）。
+    #[test]
+    fn same_origin_referer_keeps_percent_encoded_query() {
+        let (base, h) = spawn_hop(None);
+        let origin = url::Url::parse(&base)
+            .unwrap()
+            .origin()
+            .ascii_serialization();
+        let target = format!("{origin}/%E6%BC%AB%E7%94%BB%20one/%5B1%5D%23x%25.jpg?a=%2Fb%20c");
+        let page = format!("{origin}/%E6%BC%AB%E7%94%BB%20one/?token=%2Fsecret%20x#frag");
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t.get(&target, 1024, Some(&page), Some(&page)).unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        assert_eq!(
+            header_value(&req, "referer"),
+            Some(page.as_str()),
+            "同源 Referer 必须保留 query/百分号编码：{req}"
+        );
+        let referer = header_value(&req, "referer").unwrap();
+        assert!(referer.contains("/%E6%BC%AB%E7%94%BB%20one/"), "{referer}");
+        assert!(referer.contains("?token=%2Fsecret%20x"), "{referer}");
+        assert!(!referer.contains("%2520"), "不得二次编码：{referer}");
+    }
+
+    /// 跨源 Referer：去掉 query/fragment，但路径中的百分号编码原样保留。
+    #[test]
+    fn cross_origin_referer_drops_query_without_decoding_path() {
+        let (base, h) = spawn_hop(None);
+        let page = "http://gallery.example/%E6%BC%AB%E7%94%BB%20one/?token=%2Fsecret%20x#frag";
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t.get(&base, 1024, Some(page), Some(page)).unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        assert_eq!(
+            header_value(&req, "referer"),
+            Some("http://gallery.example/%E6%BC%AB%E7%94%BB%20one/"),
+            "{req}"
+        );
+        assert!(!req.contains("token"), "跨源不得泄漏 page query：{req}");
+        assert!(!req.contains("#frag"), "{req}");
+    }
+
     #[test]
     fn redirect_from_cross_scope_to_same_scope_restores_user_headers() {
         let (same_scope_url, same_scope_h) = spawn_hop(None);
@@ -1025,6 +1169,139 @@ mod tests {
             header_value(&second, "authorization"),
             Some("Bearer secret"),
             "{second}"
+        );
+    }
+
+    /// 命中已注册辅助会话的 origin：复用该会话的 UA（UA 非机密，可按 origin 复用）。
+    #[test]
+    fn assisted_origin_uses_registered_user_agent() {
+        let (url, h) = spawn_hop(None);
+        let origin = url::Url::parse(&url).unwrap().origin().ascii_serialization();
+        let registry = Arc::new(crate::state::AssistedSessionRegistry::new());
+        registry
+            .register(
+                &origin,
+                crate::state::AssistedSession {
+                    user_agent: Some("Assisted-UA/1.0".into()),
+                    headers: None,
+                },
+            )
+            .unwrap();
+        let t = UreqTransport::new_with_assisted("", "", registry).unwrap();
+        let r = t.get(&url, 1024, None, Some(url.as_str())).unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        assert_eq!(
+            header_value(&req, "user-agent"),
+            Some("Assisted-UA/1.0"),
+            "{req}"
+        );
+    }
+
+    /// 未命中辅助会话的 origin：一律回落到标准桌面 Chrome UA。
+    #[test]
+    fn other_origin_falls_back_to_standard_user_agent() {
+        let (url, h) = spawn_hop(None);
+        let registry = Arc::new(crate::state::AssistedSessionRegistry::new());
+        registry
+            .register(
+                "https://other.example",
+                crate::state::AssistedSession {
+                    user_agent: Some("Assisted-UA/1.0".into()),
+                    headers: None,
+                },
+            )
+            .unwrap();
+        let t = UreqTransport::new_with_assisted("", "", registry).unwrap();
+        let r = t.get(&url, 1024, None, Some(url.as_str())).unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        assert_eq!(
+            header_value(&req, "user-agent"),
+            Some(crate::online::ONLINE_UA),
+            "{req}"
+        );
+    }
+
+    /// 没有辅助上下文时（默认构造）：始终使用标准桌面 Chrome UA。
+    #[test]
+    fn transport_without_assisted_sessions_uses_standard_user_agent() {
+        let (url, h) = spawn_hop(None);
+        let t = UreqTransport::new("", "").unwrap();
+        let r = t.get(&url, 1024, None, Some(url.as_str())).unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        assert_eq!(
+            header_value(&req, "user-agent"),
+            Some(crate::online::ONLINE_UA),
+            "{req}"
+        );
+    }
+
+    /// 辅助会话不放大**用户请求头**作用域：scope 指向别的 origin 时用户头全部丢弃；
+    /// 辅助会话自己的请求头按「目标 origin 命中」附带。
+    #[test]
+    fn assisted_session_does_not_widen_user_header_scope() {
+        let (url, h) = spawn_hop(None);
+        let origin = url::Url::parse(&url).unwrap().origin().ascii_serialization();
+        let registry = Arc::new(crate::state::AssistedSessionRegistry::new());
+        registry
+            .register(
+                &origin,
+                crate::state::AssistedSession {
+                    user_agent: Some("Assisted-UA/1.0".into()),
+                    headers: Some(r#"{"Cookie":"sid=assisted"}"#.into()),
+                },
+            )
+            .unwrap();
+        let t = UreqTransport::new_with_assisted(
+            "",
+            r#"{"Cookie":"sid=user-scope","Authorization":"Bearer user"}"#,
+            registry,
+        )
+        .unwrap();
+        // scope 指向别的 origin：用户请求头必须全部丢弃。
+        let r = t
+            .get(&url, 1024, None, Some("http://gallery.example/g/1"))
+            .unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        assert_eq!(
+            header_value(&req, "cookie"),
+            Some("sid=assisted"),
+            "只有辅助会话自己的（按 origin 绑定的）头可以出现：{req}"
+        );
+        assert_eq!(header_value(&req, "authorization"), None, "{req}");
+        assert_eq!(
+            header_value(&req, "user-agent"),
+            Some("Assisted-UA/1.0"),
+            "{req}"
+        );
+    }
+
+    /// 辅助会话的请求头**严格按 origin 绑定**：目标 origin 不是登记 origin 时一律不附带，
+    /// 避免上一站凭据泄漏到下一站。
+    #[test]
+    fn assisted_headers_never_cross_origins() {
+        let (url, h) = spawn_hop(None);
+        let registry = Arc::new(crate::state::AssistedSessionRegistry::new());
+        registry
+            .register(
+                "https://other.example",
+                crate::state::AssistedSession {
+                    user_agent: Some("Assisted-UA/1.0".into()),
+                    headers: Some(r#"{"Cookie":"sid=other-site"}"#.into()),
+                },
+            )
+            .unwrap();
+        let t = UreqTransport::new_with_assisted("", "", registry).unwrap();
+        let r = t.get(&url, 1024, None, Some(url.as_str())).unwrap();
+        assert_eq!(r.status, 200);
+        let req = h.join().unwrap();
+        assert_eq!(
+            header_value(&req, "cookie"),
+            None,
+            "其它 origin 不得拿到辅助会话的请求头：{req}"
         );
     }
 }

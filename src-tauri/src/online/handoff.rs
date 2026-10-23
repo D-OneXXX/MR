@@ -12,7 +12,7 @@ use url::Url;
 
 use crate::commands;
 use crate::source::BackendError;
-use crate::state::HandoffRuntime;
+use crate::state::{AssistedSession, HandoffRuntime};
 use crate::AppState;
 
 const HANDOFF_PATH: &str = "/handoff";
@@ -114,19 +114,22 @@ fn build_script(callback_url: &str) -> String {
   const MR_SERIES_ID = ''; // 可选：固定系列 ID
   const MR_SERIES_TITLE = ''; // 可选：固定系列名
   const MR_SESSION_HEADERS = ''; // 可选：填入请求头后随请求携带；仅内存，不落盘、不记日志
+  const MR_SEND_USER_AGENT = true; // 可选：随回传附带当前浏览器 UA（非机密），供同源直读复用
+  // 只在当前标签页的 sessionStorage 暂存章节：关闭标签页即清除，
+  // 不向第三方站点 localStorage 写入任何长期痕迹。
   const load = () => {
     try {
-      const value = JSON.parse(localStorage.getItem(MR_BUCKET) || '[]');
+      const value = JSON.parse(sessionStorage.getItem(MR_BUCKET) || '[]');
       return Array.isArray(value) ? value : [];
     } catch (_) { return []; }
   };
   const save = (chapters) => {
-    try { localStorage.setItem(MR_BUCKET, JSON.stringify(chapters)); } catch (_) {}
+    try { sessionStorage.setItem(MR_BUCKET, JSON.stringify(chapters)); } catch (_) {}
   };
   window.MR_BRIDGE = {
     list: () => load(),
     reset: () => {
-      try { localStorage.removeItem(MR_BUCKET); } catch (_) {}
+      try { sessionStorage.removeItem(MR_BUCKET); } catch (_) {}
       alert('MangaReader：已清空当前站点的章节收集');
     },
   };
@@ -155,6 +158,11 @@ fn build_script(callback_url: &str) -> String {
   if (MR_SERIES_ID.trim()) payload.seriesId = MR_SERIES_ID.trim();
   if (MR_SERIES_TITLE.trim()) payload.seriesTitle = MR_SERIES_TITLE.trim();
   if (MR_SESSION_HEADERS.trim()) payload.sessionHeaders = MR_SESSION_HEADERS;
+  // 只回传 origin 与 UA（UA 非机密）；不读取、不回传 Cookie。
+  if (MR_SEND_USER_AGENT) {
+    payload.origin = location.origin;
+    payload.userAgent = navigator.userAgent;
+  }
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -358,6 +366,83 @@ fn parse_target(target: &str) -> Option<Url> {
     }
 }
 
+/// 读取回传载荷里的可选文本字段；存在但不是字符串时报错。
+fn optional_text_field(value: &serde_json::Value, name: &str) -> Result<Option<String>, HandoffError> {
+    match value.get(name) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Some(_) => Err(HandoffError::BadRequest(format!("{name} 必须为字符串"))),
+    }
+}
+
+/// 登记辅助会话（origin → UA / 用户自备请求头）。
+///
+/// 合规边界：
+/// - 只接受 http/https origin、长度受限、UA 不得含 CRLF（校验在注册表里）；
+/// - UA 非机密，可按 origin 复用到同源直读请求；
+/// - 请求头只来自用户显式提供的那份，绝不从 WebView 抓取 Cookie；
+/// - 注册表只在内存里，日志只允许出现脱敏后的 host。
+fn register_assisted_context(
+    state: &Arc<AppState>,
+    value: &serde_json::Value,
+    session_headers: Option<&str>,
+) {
+    let origin = optional_text_field(value, "origin").unwrap_or(None);
+    let user_agent = optional_text_field(value, "userAgent").unwrap_or(None);
+    if origin.is_none() && user_agent.is_none() {
+        return;
+    }
+    let Some(origin) = origin else {
+        crate::logging::log_error(
+            "online_handoff",
+            "缺少 origin，跳过辅助会话登记（章节导入不受影响）",
+        );
+        return;
+    };
+    let session = AssistedSession {
+        user_agent,
+        headers: session_headers.map(str::to_string),
+    };
+    match state.register_assisted_session(&origin, session) {
+        Ok(canonical) => {
+            // 日志只写脱敏后的 host：不得出现 UA 全文、请求头值或 Cookie。
+            crate::logging::log_error(
+                "online_handoff",
+                &format!("已登记辅助会话：{}", masked_host(&canonical)),
+            );
+        }
+        Err(error) => {
+            // origin 非法（file:// → "null"、沙箱 iframe 等）时降级：只跳过登记。
+            crate::logging::log_error(
+                "online_handoff",
+                &format!("辅助会话登记失败，已跳过（章节导入不受影响）：{error}"),
+            );
+        }
+    }
+}
+
+/// 日志脱敏：只保留 host 的首字符与顶级域，其余以 * 代替。
+fn masked_host(origin: &str) -> String {
+    let host = crate::online::filter::url_host(origin);
+    if host.is_empty() {
+        return "unknown".into();
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    let first = host.chars().next().unwrap_or('-');
+    if labels.len() >= 2 {
+        format!("{first}***.{}", labels[labels.len() - 1])
+    } else {
+        format!("{first}***")
+    }
+}
+
 /// 校验 sessionHeaders（若存在），再解析单本/合集并批量入库。
 pub(crate) fn process_handoff_value(
     state: &Arc<AppState>,
@@ -367,17 +452,32 @@ pub(crate) fn process_handoff_value(
     if !state.settings.lock().experimental_online {
         return Err(HandoffError::BadRequest("在线直读未开启".into()));
     }
+    // 用户显式提供的会话头：受开关控制；**只登记到该 origin 的辅助会话**，
+    // 绝不写进全局会话槽——全局槽会随「当前书同 origin」下发，
+    // 那样上一站点的凭据会被带到下一站点。
+    let mut session_headers: Option<String> = None;
     if allow_session_headers {
         if let Some(headers) = value.get("sessionHeaders") {
-            let raw = headers
-                .as_str()
-                .ok_or_else(|| HandoffError::BadRequest("sessionHeaders 必须为字符串".into()))?;
-            if !raw.trim().is_empty() {
-                commands::apply_session_online_headers(state, Some(raw.to_string()))
-                    .map_err(HandoffError::BadRequest)?;
+            if let Some(raw) = headers.as_str() {
+                let trimmed = raw.trim();
+                if !trimmed.is_empty() {
+                    match crate::online::validate_headers(trimmed) {
+                        Ok(()) => session_headers = Some(trimmed.to_string()),
+                        Err(error) => {
+                            // 头非法只降级不阻断：章节仍然入库。
+                            crate::logging::log_error(
+                                "online_handoff",
+                                &format!("会话请求头校验失败，已忽略：{error}"),
+                            );
+                        }
+                    }
+                }
             }
         }
     }
+    // 辅助会话登记：origin + 可选 UA。origin 非法（例如 file:// 页面返回 "null"）
+    // 时降级为「跳过登记」，**不阻断章节导入**。
+    register_assisted_context(state, value, session_headers.as_deref());
     let body =
         serde_json::to_vec(value).map_err(|error| HandoffError::Internal(error.to_string()))?;
     let metas = crate::online::direct::parse_batch_payload(&body).map_err(HandoffError::from)?;
@@ -551,7 +651,10 @@ pub fn start_browser_handoff(
         if matches!(outcome, HandoffOutcome::Disabled) || !thread_cancel.load(Ordering::SeqCst) {
             let _ = thread_app.emit("online-handoff-stopped", ());
         }
-        thread_state.finish_handoff(&thread_cancel);
+        // 只有当结束的仍是当前会话时才清空辅助上下文，避免旧线程误清新会话。
+        if thread_state.finish_handoff(&thread_cancel) {
+            thread_state.clear_assisted_sessions();
+        }
     });
 
     Ok(HandoffStatus {
@@ -589,9 +692,18 @@ pub fn get_browser_handoff_status(
 
 #[tauri::command]
 pub fn stop_browser_handoff(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.cancel_handoff();
+    stop_handoff_state(state.inner());
     let _ = app.emit("online-handoff-stopped", ());
     Ok(())
+}
+
+/// 停止 handoff：取消桥接并清空辅助会话注册表。
+///
+/// 辅助会话（UA / 用户自备请求头）只驻留内存，停止后必须立刻清空，
+/// 避免残留的上下文被后续请求继续复用。
+fn stop_handoff_state(state: &Arc<AppState>) {
+    state.cancel_handoff();
+    state.clear_assisted_sessions();
 }
 
 #[cfg(test)]
@@ -677,7 +789,7 @@ mod tests {
         let callback = "http://127.0.0.1:1234/handoff?token=abc";
         let script = build_script(callback);
         for needle in [
-            "localStorage",
+            "sessionStorage",
             "mangareader.bridge.chapters",
             "window.MR_BRIDGE",
             "MR_SESSION_HEADERS",
@@ -837,7 +949,7 @@ mod tests {
     }
 
     #[test]
-    fn session_headers_are_memory_only_and_validated() {
+    fn session_headers_are_memory_only_origin_scoped_and_validated() {
         let st = test_state();
         st.settings.lock().online_headers = "Cookie: saved".into();
         st.db
@@ -854,13 +966,29 @@ mod tests {
             processor(st.clone(), true),
         );
 
-        let valid = r#"{"sessionHeaders":"Cookie: bridge","url":"http://e/h1","title":"H","pages":["http://x/1.jpg"]}"#;
+        let valid = r#"{"sessionHeaders":"Cookie: bridge","origin":"http://e","userAgent":"Mozilla/5.0 QA","url":"http://e/h1","title":"H","pages":["http://x/1.jpg"]}"#;
         let response = post_json(port, &test_token(), valid);
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(!response.contains("Cookie: bridge"), "{response}");
+        // 交接得到的会话头**只登记到该 origin**，绝不写进全局会话槽：
+        // 全局槽会随「当前书同 origin」下发，会把上一站凭据带到下一站。
         assert_eq!(
             st.session_online_headers.lock().as_deref(),
-            Some("Cookie: bridge")
+            None,
+            "交接请求头不得进入全局会话槽"
+        );
+        assert_eq!(
+            st.assisted_sessions
+                .headers_for_origin("http://e")
+                .as_deref(),
+            Some("Cookie: bridge"),
+            "会话头应按 origin 登记在辅助会话注册表"
+        );
+        assert_eq!(
+            st.assisted_sessions
+                .headers_for_origin("http://other"),
+                None,
+            "其它 origin 不得拿到该会话头"
         );
         let stored = st
             .db
@@ -872,21 +1000,51 @@ mod tests {
             "会话头不得写入 SQLite"
         );
 
-        let invalid = r#"{"sessionHeaders":"Host: example.com","url":"http://e/h2","title":"H2","pages":["http://x/1.jpg"]}"#;
+        // 非法头（Host 等）只降级不阻断：忽略该头，章节照常入库。
+        let invalid = r#"{"sessionHeaders":"Host: example.com","origin":"http://e","url":"http://e/h2","title":"H2","pages":["http://x/1.jpg"]}"#;
         let response = post_json(port, &test_token(), invalid);
-        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(!response.contains("Host: example.com"), "{response}");
         assert_eq!(
-            st.session_online_headers.lock().as_deref(),
+            st.assisted_sessions
+                .headers_for_origin("http://e")
+                .as_deref(),
             Some("Cookie: bridge"),
-            "非法头不得覆盖当前会话头"
+            "非法头不得覆盖已登记的会话头"
         );
         let id = crate::db::book_id_for_path("http://e/h2");
         assert!(st
             .db
             .with(|conn| crate::db::get_book(conn, &id).map_err(|e| e.to_string()))
             .unwrap()
-            .is_none());
+            .is_some());
+
+        cancel.store(true, Ordering::SeqCst);
+        assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
+    }
+
+    #[test]
+    fn invalid_origin_skips_registration_but_keeps_import() {
+        let st = test_state();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), true),
+        );
+
+        // file:// / 沙箱 iframe 里 location.origin === "null"：登记必须降级而不是 400。
+        let body = r#"{"sessionHeaders":"Cookie: x","origin":"null","url":"http://e/h3","title":"H3","pages":["http://x/1.jpg"]}"#;
+        let response = post_json(port, &test_token(), body);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(st.assisted_sessions.is_empty(), "非法 origin 不得登记");
+        let id = crate::db::book_id_for_path("http://e/h3");
+        assert!(st
+            .db
+            .with(|conn| crate::db::get_book(conn, &id).map_err(|e| e.to_string()))
+            .unwrap()
+            .is_some(), "origin 非法不得阻断章节导入");
 
         cancel.store(true, Ordering::SeqCst);
         assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
@@ -936,13 +1094,18 @@ mod tests {
             processor(st.clone(), false),
         );
 
-        let body = r#"{"sessionHeaders":"Cookie: disallowed","url":"http://e/ignored","title":"I","pages":["http://x/1.jpg"]}"#;
+        let body = r#"{"sessionHeaders":"Cookie: disallowed","origin":"http://e","url":"http://e/ignored","title":"I","pages":["http://x/1.jpg"]}"#;
         let response = post_json(port, &test_token(), body);
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(!response.contains("Cookie: disallowed"), "{response}");
         assert_eq!(
             st.session_online_headers.lock().as_deref(),
             Some("Cookie: existing")
+        );
+        assert_eq!(
+            st.assisted_sessions.headers_for_origin("http://e"),
+            None,
+            "未授权时不得登记任何会话头"
         );
         let id = crate::db::book_id_for_path("http://e/ignored");
         assert!(st
@@ -1036,5 +1199,173 @@ mod tests {
         );
         enabled.store(false, Ordering::SeqCst);
         assert!(matches!(handle.join().unwrap(), HandoffOutcome::Disabled));
+    }
+
+    // ---------- 辅助会话（受控 WebView 验证交接） ----------
+
+    #[test]
+    fn script_reports_origin_and_user_agent_without_reading_cookies() {
+        let script = build_script("http://127.0.0.1:1234/handoff?token=abc");
+        assert!(script.contains("location.origin"), "脚本应回传 origin");
+        assert!(script.contains("navigator.userAgent"), "脚本应回传 UA");
+        assert!(!script.contains("document.cookie"));
+        assert!(!script.contains("document.cookie"));
+    }
+
+    #[test]
+    fn handoff_registers_assisted_session_with_user_agent() {
+        let st = test_state();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), true),
+        );
+
+        let body = r#"{"origin":"https://gallery.example","userAgent":"Assisted-UA/1.0","sessionHeaders":"Cookie: sid=abc","url":"http://e/au1","title":"AU","pages":["http://x/1.jpg"]}"#;
+        let response = post_json(port, &test_token(), body);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(!response.contains("Assisted-UA"), "{response}");
+        assert!(!response.contains("sid=abc"), "{response}");
+
+        let session = st
+            .assisted_session("https://gallery.example")
+            .expect("应登记辅助会话");
+        assert_eq!(session.user_agent.as_deref(), Some("Assisted-UA/1.0"));
+        assert_eq!(session.headers.as_deref(), Some("Cookie: sid=abc"));
+        // 同 origin 命中 UA，跨 origin 不命中。
+        let hit = url::Url::parse("https://gallery.example/chapter/2").unwrap();
+        assert_eq!(
+            st.assisted_user_agent(&hit).as_deref(),
+            Some("Assisted-UA/1.0")
+        );
+        let miss = url::Url::parse("https://other.example/chapter/2").unwrap();
+        assert_eq!(st.assisted_user_agent(&miss), None);
+
+        // 注册表只在内存里：SQLite 不得留下任何痕迹。
+        let stored = st
+            .db
+            .with(|conn| crate::db::get_setting(conn, "online_headers").map_err(|e| e.to_string()))
+            .unwrap();
+        assert!(stored.is_none(), "辅助会话不得写入 SQLite");
+
+        cancel.store(true, Ordering::SeqCst);
+        assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
+    }
+
+    #[test]
+    fn handoff_registers_assisted_session_without_session_headers() {
+        let st = test_state();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), false),
+        );
+
+        // allow_session_headers = false：只登记 origin + UA，不带任何请求头。
+        let body = r#"{"origin":"https://gallery.example","userAgent":"Assisted-UA/2.0","sessionHeaders":"Cookie: sid=leak","url":"http://e/au2","title":"AU2","pages":["http://x/1.jpg"]}"#;
+        let response = post_json(port, &test_token(), body);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let session = st
+            .assisted_session("https://gallery.example")
+            .expect("应登记辅助会话");
+        assert_eq!(session.user_agent.as_deref(), Some("Assisted-UA/2.0"));
+        assert_eq!(session.headers, None, "未授权时不得保存请求头");
+        assert!(st.session_online_headers.lock().is_none());
+
+        cancel.store(true, Ordering::SeqCst);
+        assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
+    }
+
+    #[test]
+    fn handoff_skips_invalid_assisted_origin_but_keeps_import() {
+        let st = test_state();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), true),
+        );
+
+        let bad_bodies = [
+            // 非 http/https
+            r#"{"origin":"ftp://gallery.example","userAgent":"UA/1.0","url":"http://e/b1","title":"B","pages":["http://x/1.jpg"]}"#.to_string(),
+            r#"{"origin":"file:///c:/tmp","userAgent":"UA/1.0","url":"http://e/b2","title":"B","pages":["http://x/1.jpg"]}"#.to_string(),
+            // 含 CRLF（JSON 转义后是真实控制字符）
+            r#"{"origin":"https://gallery.example\r\nX-Injected: 1","userAgent":"UA/1.0","url":"http://e/b3","title":"B","pages":["http://x/1.jpg"]}"#.to_string(),
+            // 超长
+            format!(
+                r#"{{"origin":"https://{}.com","userAgent":"UA/1.0","url":"http://e/b4","title":"B","pages":["http://x/1.jpg"]}}"#,
+                "a".repeat(300)
+            ),
+        ];
+        // 非法 origin 只降级为「跳过登记」，**不得阻断章节导入**。
+        for body in bad_bodies {
+            let response = post_json(port, &test_token(), &body);
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        }
+        assert_eq!(st.assisted_sessions.len(), 0, "非法 origin 不得留下注册记录");
+
+        // 章节仍应入库（降级不影响主流程）。
+        for canonical in ["http://e/b1", "http://e/b2", "http://e/b3", "http://e/b4"] {
+            let id = crate::db::book_id_for_path(canonical);
+            assert!(st
+                .db
+                .with(|conn| crate::db::get_book(conn, &id).map_err(|e| e.to_string()))
+                .unwrap()
+                .is_some(), "origin 非法不得阻断章节导入");
+        }
+
+        cancel.store(true, Ordering::SeqCst);
+        assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
+    }
+
+    #[test]
+    fn handoff_skips_user_agent_without_origin() {
+        let st = test_state();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (port, handle) = spawn_server(
+            test_token(),
+            cancel.clone(),
+            || true,
+            processor(st.clone(), true),
+        );
+
+        // 缺 origin 时同样降级：跳过登记但照常导入。
+        let body = r#"{"userAgent":"UA/1.0","url":"http://e/noorigin","title":"N","pages":["http://x/1.jpg"]}"#;
+        let response = post_json(port, &test_token(), body);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert_eq!(st.assisted_sessions.len(), 0);
+        let id = crate::db::book_id_for_path("http://e/noorigin");
+        assert!(st
+            .db
+            .with(|conn| crate::db::get_book(conn, &id).map_err(|e| e.to_string()))
+            .unwrap()
+            .is_some());
+
+        cancel.store(true, Ordering::SeqCst);
+        assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
+    }
+
+    #[test]
+    fn stopping_handoff_clears_assisted_sessions() {
+        let st = test_state();
+        st.register_assisted_session(
+            "https://gallery.example",
+            crate::state::AssistedSession {
+                user_agent: Some("Assisted-UA/1.0".into()),
+                headers: Some("Cookie: sid=abc".into()),
+            },
+        )
+        .expect("登记辅助会话");
+        assert_eq!(st.assisted_sessions.len(), 1);
+
+        stop_handoff_state(&st);
+        assert_eq!(st.assisted_sessions.len(), 0, "停止 handoff 必须清空辅助会话");
+        assert!(st.assisted_session("https://gallery.example").is_none());
     }
 }

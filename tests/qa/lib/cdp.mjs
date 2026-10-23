@@ -14,10 +14,26 @@ const KEY_CODES = {
   " ": 32,
   f: 70,
   F: 70,
+  m: 77,
+  M: 77,
   w: 87,
   W: 87,
   k: 75,
   K: 75,
+};
+
+/** DOM `code` 名称（非单字符键必须用真实 code，否则宿主可能不产生 keydown）。 */
+const DOM_CODES = {
+  " ": "Space",
+  Escape: "Escape",
+  Enter: "Enter",
+  Tab: "Tab",
+  ArrowLeft: "ArrowLeft",
+  ArrowRight: "ArrowRight",
+  ArrowUp: "ArrowUp",
+  ArrowDown: "ArrowDown",
+  Home: "Home",
+  End: "End",
 };
 
 export async function listTargets(port, timeout = 3000) {
@@ -57,6 +73,8 @@ export class CdpPage {
     this.socket = null;
     this.sequence = 0;
     this.pending = new Map();
+    /** CDP 事件（无 id 的消息）订阅表：method → handler 集合。 */
+    this.eventHandlers = new Map();
   }
 
   static async connect(target, port) {
@@ -80,6 +98,11 @@ export class CdpPage {
     });
     this.socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
+      // 事件消息（无 id）：分发给订阅者（未捕获异常 / console.error 监听）。
+      if (message.method) {
+        this.emitEvent(message.method, message.params || {});
+        return;
+      }
       const pending = message.id ? this.pending.get(message.id) : null;
       if (!pending) return;
       this.pending.delete(message.id);
@@ -89,6 +112,30 @@ export class CdpPage {
     };
     await this.send("Runtime.enable");
     await this.send("Page.enable");
+  }
+
+  /** 订阅 CDP 事件，返回取消订阅函数。 */
+  on(method, handler) {
+    if (!this.eventHandlers.has(method)) {
+      this.eventHandlers.set(method, new Set());
+    }
+    const handlers = this.eventHandlers.get(method);
+    handlers.add(handler);
+    return () => {
+      handlers.delete(handler);
+    };
+  }
+
+  emitEvent(method, params) {
+    const handlers = this.eventHandlers.get(method);
+    if (!handlers) return;
+    for (const handler of [...handlers]) {
+      try {
+        handler(params);
+      } catch {
+        /* 监听器自身异常不得影响 CDP 连接 */
+      }
+    }
   }
 
   send(method, params = {}, timeout = 10_000) {
@@ -224,7 +271,7 @@ export class CdpPage {
     const code = KEY_CODES[key] ?? 0;
     const base = {
       key,
-      code: key.length === 1 ? `Key${key.toUpperCase()}` : key,
+      code: DOM_CODES[key] ?? (key.length === 1 ? `Key${key.toUpperCase()}` : key),
       windowsVirtualKeyCode: code,
       nativeVirtualKeyCode: code,
       modifiers,

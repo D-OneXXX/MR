@@ -62,6 +62,7 @@ import ProgressScrubber, {
 import TabSwitcher from "../components/Reader/TabSwitcher";
 import { useWorkspace } from "../features/workspace/WorkspaceContext";
 import { useSafeMode } from "../features/safeMode/SafeModeContext";
+import { useGlobalShortcuts } from "../features/shortcuts/useGlobalShortcuts";
 import { localizeBackendError } from "../features/errors/localize";
 import {
   recordBreadcrumb,
@@ -875,9 +876,12 @@ export default function Reader() {
     return () => window.clearTimeout(timer);
   }, [book, mode, page]);
 
-  /* ---------- keyboard ---------- */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+  /* ---------- keyboard（统一守卫：IME / 输入态 豁免） ----------
+     全部走 useGlobalShortcuts：输入法组合中（isComposing / keyCode 229）
+     与输入框焦点（input / textarea / select / contenteditable）一律放行，
+     行为语义与迁移前完全一致。 */
+  const onReaderKey = useCallback(
+    (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       // Ctrl+W 在输入框内也必须拦截，避免 WebView2 直接关窗。
       if (
@@ -887,15 +891,6 @@ export default function Reader() {
       ) {
         e.preventDefault();
         ws.closeActiveTab();
-        return;
-      }
-      const tag = el?.tagName ?? "";
-      if (
-        tag === "INPUT" ||
-        tag === "TEXTAREA" ||
-        tag === "SELECT" ||
-        (el?.isContentEditable ?? false)
-      ) {
         return;
       }
       // 弹层/弹窗打开时，HUD 内的按键不再穿透到画布翻页（Esc 仍可关闭）。
@@ -916,6 +911,9 @@ export default function Reader() {
           return;
         }
       }
+      // Ctrl/Cmd/Alt 组合不是阅读快捷键（Ctrl+1…9 已在上方处理）；
+      // 放行给浏览器/系统，避免 Ctrl+F、Ctrl+Space、Ctrl+← 被误当成翻页/切版式。
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const t = trackRef.current;
       // 注意：底部 <button> 聚焦时按空格会原生触发 click（=下一页），
       // 此时不再额外 go()，否则一次空格翻两页。
@@ -976,19 +974,57 @@ export default function Reader() {
           if (t.book) jumpTo(t.book.pageCount - 1);
           break;
       }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [
-    go,
-    jumpTo,
-    toggleMode,
-    nav,
-    showNextChapter,
-    goNextChapter,
-    ws,
-    tabsMenuOpen,
-  ]);
+    },
+    [
+      go,
+      jumpTo,
+      toggleMode,
+      nav,
+      showNextChapter,
+      goNextChapter,
+      ws,
+      tabsMenuOpen,
+    ],
+  );
+
+  // 快捷键表：m/M 目前没有绑定行为（速查表只列 f），但同样纳入守卫，
+  // 保证输入态与输入法组合中不会触发任何全局动作。
+  const readerShortcuts = useMemo(() => {
+    const map: Record<string, (event: KeyboardEvent) => void> = {};
+    for (const key of [
+      " ",
+      "ArrowLeft",
+      "ArrowRight",
+      "ArrowUp",
+      "ArrowDown",
+      "Home",
+      "End",
+      "?",
+      "Escape",
+      "f",
+      "F",
+      "m",
+      "M",
+      "w",
+      "W",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+    ]) {
+      map[key] = onReaderKey;
+    }
+    return map;
+  }, [onReaderKey]);
+
+  // 统一守卫：输入法组合中 / 输入框焦点一律放行；
+  // w/W 例外（Ctrl+W 是窗口关闭保护，输入框内也必须拦截）。
+  useGlobalShortcuts(readerShortcuts, { editableExempt: ["w", "W"] });
 
   /* ---------- zoom / pan / pinch (non-passive wheel) ---------- */
   const pointers = useRef(new Map<number, { x: number; y: number }>());

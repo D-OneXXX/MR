@@ -71,6 +71,33 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [system, setSystem] = useState<ResolvedTheme>(systemTheme);
   const resolved = resolve(mode, system);
 
+  // 跨窗口同步：其它窗口改写 mr-theme 时只更新内存状态，绝不回写
+  // localStorage / SQLite，否则会与来源窗口形成回环。
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null) {
+        // clear()：本地键被清空，回落到跟随系统
+        setModeState("system");
+        return;
+      }
+      if (event.key !== STORAGE_KEY) return;
+      if (event.newValue === null) {
+        // removeItem：与 readMode 的默认值保持一致
+        setModeState("system");
+        return;
+      }
+      if (
+        event.newValue === "light" ||
+        event.newValue === "dark" ||
+        event.newValue === "system"
+      ) {
+        setModeState(event.newValue);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
   useEffect(() => {
     if (mode !== "system") return;
     const query = window.matchMedia(DARK_QUERY);

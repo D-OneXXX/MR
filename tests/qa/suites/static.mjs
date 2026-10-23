@@ -495,6 +495,343 @@ export async function runStaticSuite(ctx, report) {
   if (dictionary["zh-CN"]) {
     note(report, `字典共 ${Object.keys(dictionary["zh-CN"]).length} 个键 × 6 语种`);
   }
+
+  checkCapabilityWall(root, report);
+  checkStorageWhitelist(root, report);
+  checkWebtoonTextureGuard(root, report);
+  checkProductionBundle(root, report);
+  checkNoUnusedCustomProtocol(root, report);
+  checkPostI18nHardcodedText(root, report);
+  checkAntiMockGuards(root, report);
+}
+
+/* ------------------------------------------------------------------ */
+/* §3 Tauri 2 权限能力墙                                             */
+/* ------------------------------------------------------------------ */
+
+/** 真实窗口标签：主窗 / 独立恢复窗 / 内嵌浏览器窗。 */
+const REQUIRED_WINDOW_LABELS = ["main", "recovery", "browser"];
+
+/** 过宽权限黑名单：全量 fs / shell / process 一律禁止。 */
+const FORBIDDEN_PERMISSION_PATTERNS = [
+  { name: "fs 全量权限", regex: /^fs:/ },
+  { name: "shell 权限", regex: /^shell:/ },
+  { name: "process 权限", regex: /^process:/ },
+  { name: "http 权限", regex: /^http:/ },
+];
+
+export function checkCapabilityWall(root, report) {
+  const dir = path.join(root, "src-tauri", "capabilities");
+  const defaultFile = path.join(dir, "default.json");
+  const errors = [];
+  let defaultCapability = null;
+
+  if (!fs.existsSync(defaultFile)) {
+    fail(report, {
+      id: "static:capability-wall",
+      suite: "static",
+      layer: "static",
+      title: "Tauri 能力墙文件缺失",
+      severity: "P1",
+      details: "src-tauri/capabilities/default.json 不存在",
+      location: "src-tauri/capabilities/default.json",
+      expected: "default.json 覆盖 main/recovery/browser 三个窗口标签",
+      actual: "文件缺失",
+    });
+    return;
+  }
+
+  const capabilityFiles = fs
+    .readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => path.join(dir, name));
+
+  for (const file of capabilityFiles) {
+    let capability = null;
+    try {
+      capability = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (error) {
+      errors.push(`${path.basename(file)} 不是合法 JSON: ${error.message}`);
+      continue;
+    }
+    if (file === defaultFile) defaultCapability = capability;
+    const permissions = Array.isArray(capability.permissions)
+      ? capability.permissions
+      : [];
+    for (const permission of permissions) {
+      for (const pattern of FORBIDDEN_PERMISSION_PATTERNS) {
+        if (pattern.regex.test(String(permission))) {
+          errors.push(
+            `${path.basename(file)} 含过宽权限 ${permission}（${pattern.name}）`,
+          );
+        }
+      }
+    }
+    const windows = Array.isArray(capability.windows) ? capability.windows : [];
+    if (windows.length === 0) {
+      errors.push(`${path.basename(file)} 未声明任何窗口标签`);
+    }
+  }
+
+  if (defaultCapability) {
+    const windows = Array.isArray(defaultCapability.windows)
+      ? defaultCapability.windows
+      : [];
+    const missing = REQUIRED_WINDOW_LABELS.filter(
+      (label) => !windows.includes(label),
+    );
+    if (missing.length) {
+      errors.push(`default.json 的 windows 缺少 ${missing.join(",")}`);
+    }
+    // 恢复窗使用 @tauri-apps/api/window 的 setTitle() 同步原生标题时，
+    // 必须显式声明 core:window:allow-set-title（core:default 不包含）。
+    const recoverySource = path.join(root, "src", "recovery", "RecoveryApp.tsx");
+    const recoveryUsesSetTitle =
+      fs.existsSync(recoverySource) &&
+      /\bsetTitle\s*\(/.test(fs.readFileSync(recoverySource, "utf8"));
+    if (recoveryUsesSetTitle) {
+      const permissions = Array.isArray(defaultCapability.permissions)
+        ? defaultCapability.permissions
+        : [];
+      if (!permissions.includes("core:window:allow-set-title")) {
+        errors.push(
+          "RecoveryApp 使用 setTitle()，但 default.json 缺少 core:window:allow-set-title",
+        );
+      }
+    }
+    // 恢复窗 / 浏览器窗的真实标签必须与 Rust 常量一致。
+    const rustSources = ["resilience.rs", "browser.rs"]
+      .map((name) => path.join(root, "src-tauri", "src", name))
+      .filter((file) => fs.existsSync(file))
+      .map((file) => fs.readFileSync(file, "utf8"))
+      .join("\n");
+    const labelMatch = rustSources.match(
+      /const\s+(?:RECOVERY|BROWSER)_LABEL\s*:\s*&str\s*=\s*"([^"]+)"/g,
+    );
+    for (const match of labelMatch || []) {
+      const label = match.match(/"([^"]+)"/)?.[1];
+      if (!label) continue;
+      const covered = capabilityFiles.some((file) => {
+        const capability = JSON.parse(fs.readFileSync(file, "utf8"));
+        return (capability.windows || []).includes(label);
+      });
+      if (!covered) {
+        errors.push(`窗口标签 ${label} 未被任何 capability 覆盖`);
+      }
+    }
+  }
+
+  if (errors.length) {
+    fail(report, {
+      id: "static:capability-wall",
+      suite: "static",
+      layer: "static",
+      title: "Tauri 能力墙缺失窗口标签或声明了过宽权限",
+      severity: "P1",
+      details: errors.join(" | "),
+      location: "src-tauri/capabilities/default.json",
+      expected:
+        "default.json 的 windows = [main, recovery, browser]；权限只允许 core:window:allow-* / opener:default / dialog:default 等真实调用项",
+      actual: errors.join(" | "),
+      rootCause: "新增窗口未补齐 capability，或声明了 fs/shell/process 全量权限",
+      fix: "补齐 windows 数组；删除过宽权限，改用精确 allow-* 授权",
+    });
+  } else {
+    ok(report, {
+      id: "static:capability-wall",
+      suite: "static",
+      layer: "static",
+      title: "能力墙覆盖 main/recovery/browser 且无过宽权限",
+      details: `检查 ${capabilityFiles.length} 个 capability 文件`,
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* §2.2 存储清洗白名单必须覆盖前端实际使用的全部 mr-* 键            */
+/* ------------------------------------------------------------------ */
+function collectMrLiterals(root) {
+  const found = new Map();
+  const srcRoot = path.join(root, "src");
+  const skip = path.join("lib", "storageSanitizer.ts");
+  for (const file of walk(srcRoot)) {
+    if (!/\.(tsx?|jsx?)$/.test(file)) continue;
+    if (path.normalize(file).endsWith(skip)) continue;
+    const source = fs.readFileSync(file, "utf8");
+    for (const match of source.matchAll(/"(mr-[A-Za-z0-9_-]+)"/g)) {
+      const key = match[1];
+      if (!found.has(key)) {
+        found.set(key, path.relative(root, file));
+      }
+    }
+  }
+  return found;
+}
+
+export function checkStorageWhitelist(root, report) {
+  const sanitizerPath = path.join(root, "src", "lib", "storageSanitizer.ts");
+  const errors = [];
+  let known = [];
+  let dynamic = [];
+  let deprecated = [];
+  if (fs.existsSync(sanitizerPath)) {
+    const source = fs.readFileSync(sanitizerPath, "utf8");
+    known = loadTsObject(source, "KNOWN_STORAGE_KEYS") || [];
+    dynamic = loadTsObject(source, "DYNAMIC_KEY_PREFIXES") || [];
+    deprecated = loadTsObject(source, "DEPRECATED_KEY_PREFIXES") || [];
+  } else {
+    errors.push("缺少 src/lib/storageSanitizer.ts");
+  }
+
+  // 非存储用途的 mr-* 标识（事件名 / 状态名 / 广播名），不属于 localStorage 键。
+  const nonStorage = new Set([
+    "mr-focus-library-search",
+    "mr-online-handoff-state",
+    "mr-online-last-test-updated",
+    "mr-online-library-refresh",
+    "mr-privacy-open",
+    "mr-settings-changed",
+    "mr-settings-updated",
+    "mr-storage-sanitized",
+  ]);
+
+  const used = collectMrLiterals(root);
+  for (const [key, file] of used) {
+    if (nonStorage.has(key)) continue;
+    if (deprecated.some((prefix) => key.startsWith(prefix))) {
+      errors.push(`${file}: 仍在使用已废弃键 ${key}`);
+      continue;
+    }
+    if (known.includes(key)) continue;
+    if (dynamic.some((prefix) => key.startsWith(prefix))) continue;
+    errors.push(
+      `${file}: ${key} 未登记到存储清洗白名单，启动清洗时会被当作未知键删除`,
+    );
+  }
+
+  if (errors.length) {
+    fail(report, {
+      id: "static:storage-whitelist",
+      suite: "static",
+      layer: "static",
+      title: "前端 localStorage 键未与存储清洗白名单对齐",
+      severity: "P1",
+      details: errors.join(" | "),
+      location: "src/lib/storageSanitizer.ts",
+      expected:
+        "src/ 下出现的每个 mr-* 键都必须在 KNOWN_STORAGE_KEYS / DYNAMIC_KEY_PREFIXES 中登记",
+      actual: errors.join(" | "),
+      rootCause: "新增 localStorage 键时没有同步清洗器白名单，用户状态会在启动时被静默删除",
+      fix: "把新键登记进 storageSanitizer.ts 的 KEY_RULES（或加入 DYNAMIC 前缀）",
+    });
+  } else {
+    ok(report, {
+      id: "static:storage-whitelist",
+      suite: "static",
+      layer: "static",
+      title: "前端存储键与清洗白名单完全对齐",
+      details: `扫描 ${used.size} 个 mr-* 标识`,
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* §4.2 超高分辨率条漫纹理安全线                                     */
+/* ------------------------------------------------------------------ */
+export function checkWebtoonTextureGuard(root, report) {
+  const pipelineFile = path.join(root, "src-tauri", "src", "pipeline.rs");
+  const errors = [];
+  let details = "";
+
+  if (!fs.existsSync(pipelineFile)) {
+    fail(report, {
+      id: "static:webtoon-texture-guard",
+      suite: "static",
+      layer: "static",
+      title: "图片管线源文件缺失",
+      severity: "P1",
+      details: "src-tauri/src/pipeline.rs 不存在",
+      location: "src-tauri/src/pipeline.rs",
+    });
+    return;
+  }
+
+  const source = fs.readFileSync(pipelineFile, "utf8");
+  const safeMatch = source.match(
+    /pub const MAX_SAFE_TEXTURE_H\s*:\s*u32\s*=\s*(\d+)\s*;/,
+  );
+  const sliceMatch = source.match(
+    /pub const MAX_SLICE_H\s*:\s*u32\s*=\s*(\d+)\s*;/,
+  );
+  const tileMatch = source.match(
+    /pub const WEBTOON_TILE_H\s*:\s*u32\s*=\s*(\d+)\s*;/,
+  );
+
+  if (!safeMatch) {
+    errors.push("pipeline.rs 未定义 MAX_SAFE_TEXTURE_H");
+  } else if (Number(safeMatch[1]) < 4096) {
+    errors.push(`MAX_SAFE_TEXTURE_H=${safeMatch[1]} < 4096`);
+  }
+  if (!sliceMatch) {
+    errors.push("pipeline.rs 未定义 MAX_SLICE_H");
+  } else if (Number(sliceMatch[1]) < 2048) {
+    errors.push(`MAX_SLICE_H=${sliceMatch[1]} < 2048`);
+  }
+  if (!tileMatch) {
+    errors.push("pipeline.rs 未定义 WEBTOON_TILE_H");
+  }
+  // 钳制必须真的被单页渲染路径使用，而不只是定义了常量。
+  if (safeMatch && !/safe_fit\(|clamp_texture_safe\(/.test(source)) {
+    errors.push("MAX_SAFE_TEXTURE_H 未被 safe_fit/clamp_texture_safe 使用");
+  }
+  if (!/render_webtoon_tiles/.test(source)) {
+    errors.push("pipeline.rs 缺少 render_webtoon_tiles（条漫先切后缩入口）");
+  }
+
+  // 前后端切片高度常量必须一致（AGENTS.md §4.2）。
+  const tauriFile = path.join(root, "src", "lib", "tauri.ts");
+  if (fs.existsSync(tauriFile)) {
+    const tsSource = fs.readFileSync(tauriFile, "utf8");
+    const tsMatch = tsSource.match(
+      /export const WEBTOON_TILE_H\s*=\s*(\d+)\s*;/,
+    );
+    if (!tsMatch) {
+      errors.push("src/lib/tauri.ts 未导出 WEBTOON_TILE_H");
+    } else if (tileMatch && Number(tsMatch[1]) !== Number(tileMatch[1])) {
+      errors.push(
+        `切片高度常量不一致：Rust=${tileMatch[1]} vs TS=${tsMatch[1]}`,
+      );
+    } else {
+      details = `WEBTOON_TILE_H=${tileMatch ? tileMatch[1] : "?"}`;
+    }
+  }
+
+  if (errors.length) {
+    fail(report, {
+      id: "static:webtoon-texture-guard",
+      suite: "static",
+      layer: "static",
+      title: "超高条漫纹理安全线常量缺失或前后端不一致",
+      severity: "P1",
+      details: errors.join(" | "),
+      location: "src-tauri/src/pipeline.rs",
+      expected:
+        "MAX_SAFE_TEXTURE_H ≥ 4096、MAX_SLICE_H ≥ 2048、WEBTOON_TILE_H 前后端一致",
+      actual: errors.join(" | "),
+      rootCause: "巨图防线常量被删除/改名或前后端漂移",
+      fix: "恢复常量并保持 pipeline.rs 与 src/lib/tauri.ts 同值",
+    });
+  } else {
+    ok(report, {
+      id: "static:webtoon-texture-guard",
+      suite: "static",
+      layer: "static",
+      title: "超高条漫纹理安全线常量齐备且前后端一致",
+      details: `MAX_SAFE_TEXTURE_H=${safeMatch ? safeMatch[1] : "?"}，MAX_SLICE_H=${
+        sliceMatch ? sliceMatch[1] : "?"
+      }，${details}`,
+    });
+  }
 }
 
 function recordDictionaryResult(report, errors, keys, locales) {
@@ -519,6 +856,598 @@ function recordDictionaryResult(report, errors, keys, locales) {
       layer: "unit",
       title: "六语种字典完整性与占位符一致",
       details: `${keys} keys × ${locales} locales`,
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* §6 生产构建：不得携带 sidecar / externalBin / 资源外挂            */
+/* ------------------------------------------------------------------ */
+
+function nonEmptyBundleEntry(value) {
+  if (value === undefined || value === null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+export function checkProductionBundle(root, report) {
+  const errors = [];
+  let conf = null;
+  try {
+    conf = JSON.parse(
+      fs.readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8"),
+    );
+  } catch (error) {
+    fail(report, {
+      id: "static:production-bundle",
+      suite: "static",
+      layer: "static",
+      title: "生产构建清单无法解析",
+      severity: "P1",
+      details: String(error),
+      location: "src-tauri/tauri.conf.json",
+    });
+    return;
+  }
+
+  const bundle = conf?.bundle || {};
+  if (nonEmptyBundleEntry(bundle.externalBin)) {
+    errors.push(`bundle.externalBin 非空：${JSON.stringify(bundle.externalBin)}`);
+  }
+  if (nonEmptyBundleEntry(bundle.resources)) {
+    errors.push(`bundle.resources 非空：${JSON.stringify(bundle.resources)}`);
+  }
+
+  let scripts = {};
+  try {
+    scripts = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    ).scripts || {};
+  } catch (error) {
+    errors.push(`package.json 无法解析：${error.message}`);
+  }
+  const sidecarScriptPatterns = [
+    { name: "python 启动", regex: /(^|[^a-z])python(?:3(?:\.\d+)?)?(?:\.exe)?([^a-z]|$)/i },
+    { name: "sidecar 启动", regex: /\bsidecar\b/i },
+    { name: "OCR 服务", regex: /(^|[^a-z])ocr([^a-z]|$)/i },
+    { name: "8500 端口", regex: /\b8500\b/ },
+  ];
+  for (const [name, command] of Object.entries(scripts)) {
+    const text = `${name} ${String(command)}`;
+    for (const pattern of sidecarScriptPatterns) {
+      if (pattern.regex.test(text)) {
+        errors.push(`npm script "${name}" 含 ${pattern.name}：${command}`);
+      }
+    }
+  }
+
+  if (errors.length) {
+    fail(report, {
+      id: "static:production-bundle",
+      suite: "static",
+      layer: "static",
+      title: "生产构建携带 sidecar/外部资源痕迹",
+      severity: "P1",
+      details: errors.join(" | "),
+      location: "src-tauri/tauri.conf.json / package.json",
+      expected:
+        "bundle.externalBin / bundle.resources 为空或不存在；npm scripts 不拉起 Python/OCR sidecar、不监听 8500",
+      actual: errors.join(" | "),
+      rootCause: "生产构建配置重新引入了外部二进制或 sidecar 启动脚本",
+      fix: "删除 externalBin/resources 条目与 python/ocr 启动脚本",
+    });
+  } else {
+    ok(report, {
+      id: "static:production-bundle",
+      suite: "static",
+      layer: "static",
+      title: "生产构建不含 externalBin/resources 与 sidecar 启动脚本",
+      details: `bundle 键：${Object.keys(bundle).join(", ") || "空"}；scripts=${Object.keys(scripts).length}`,
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* §4.3 自定义图片协议：要么完全不存在，要么有编解码测试 + CSP      */
+/* ------------------------------------------------------------------ */
+
+/** 去掉 JS/TS 注释但保留字符串，避免文档性注释误报。 */
+function stripJsComments(source) {
+  let out = "";
+  let index = 0;
+  let inString = null;
+  while (index < source.length) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (inString) {
+      out += char;
+      if (char === "\\") {
+        out += next ?? "";
+        index += 2;
+        continue;
+      }
+      if (char === inString) inString = null;
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      inString = char;
+      out += char;
+      index += 1;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      while (index < source.length && source[index] !== "\n") {
+        out += " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      while (
+        index < source.length &&
+        !(source[index] === "*" && source[index + 1] === "/")
+      ) {
+        out += source[index] === "\n" ? "\n" : " ";
+        index += 1;
+      }
+      out += "  ";
+      index += 2;
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
+}
+
+function collectProtocolHits(root) {
+  const patterns = [/register_uri_scheme_protocol/, /manga-proxy:\/\//];
+  const hits = [];
+  const rustRoot = path.join(root, "src-tauri", "src");
+  if (fs.existsSync(rustRoot)) {
+    for (const file of walk(rustRoot).filter((name) => name.endsWith(".rs"))) {
+      const code = stripRustComments(fs.readFileSync(file, "utf8"));
+      for (const pattern of patterns) {
+        for (const match of code.matchAll(
+          new RegExp(pattern.source, "g"),
+        )) {
+          hits.push({
+            file: path.relative(root, file),
+            line: code.slice(0, match.index).split("\n").length,
+            snippet: match[0],
+          });
+        }
+      }
+    }
+  }
+  const frontRoot = path.join(root, "src");
+  if (fs.existsSync(frontRoot)) {
+    for (const file of walk(frontRoot).filter((name) => /\.(tsx?|jsx?|mjs)$/.test(name))) {
+      const code = stripJsComments(fs.readFileSync(file, "utf8"));
+      for (const pattern of patterns) {
+        for (const match of code.matchAll(
+          new RegExp(pattern.source, "g"),
+        )) {
+          hits.push({
+            file: path.relative(root, file),
+            line: code.slice(0, match.index).split("\n").length,
+            snippet: match[0],
+          });
+        }
+      }
+    }
+  }
+  return hits;
+}
+
+function collectRustTestSources(root) {
+  const sourceRoot = path.join(root, "src-tauri", "src");
+  if (!fs.existsSync(sourceRoot)) return [];
+  const sources = [];
+  for (const file of walk(sourceRoot).filter((name) => name.endsWith(".rs"))) {
+    const source = fs.readFileSync(file, "utf8");
+    const index = source.indexOf("#[cfg(test)]");
+    if (index >= 0) sources.push(source.slice(index));
+  }
+  return sources;
+}
+
+export function checkNoUnusedCustomProtocol(root, report) {
+  let hits = [];
+  try {
+    hits = collectProtocolHits(root);
+  } catch (error) {
+    fail(report, {
+      id: "static:no-custom-protocol",
+      suite: "static",
+      layer: "static",
+      title: "自定义协议扫描失败",
+      severity: "P2",
+      details: String(error),
+      location: "src / src-tauri/src",
+    });
+    return;
+  }
+
+  if (hits.length === 0) {
+    ok(report, {
+      id: "static:no-custom-protocol",
+      suite: "static",
+      layer: "static",
+      title: "无 manga-proxy 自定义协议（图片经命令通道）",
+      details: "未发现 register_uri_scheme_protocol / manga-proxy:// 引用",
+    });
+    note(report, "图片经命令通道，无需自定义协议（static:no-custom-protocol）");
+    return;
+  }
+
+  const testSources = collectRustTestSources(root);
+  const testRoot = path.join(root, "tests");
+  if (fs.existsSync(testRoot)) {
+    for (const file of walk(testRoot).filter((name) => /\.(mjs|js|ts)$/.test(name))) {
+      testSources.push(fs.readFileSync(file, "utf8"));
+    }
+  }
+  const combinedTests = testSources.join("\n");
+  const hasProtocolTest =
+    /manga-proxy|register_uri_scheme_protocol/i.test(combinedTests) &&
+    /\bencode\b/i.test(combinedTests) &&
+    /\bdecode\b/i.test(combinedTests) &&
+    /\bassert|expect\(|deepEqual|strictEqual/i.test(combinedTests);
+
+  let csp = null;
+  try {
+    csp = JSON.parse(
+      fs.readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8"),
+    )?.app?.security?.csp;
+  } catch {
+    csp = null;
+  }
+  const hasCsp = typeof csp === "string" && csp.trim().length > 0;
+
+  const problems = [];
+  if (!hasProtocolTest) {
+    problems.push("缺少自定义协议的编码/解码测试（需同时包含 encode/decode 与断言）");
+  }
+  if (!hasCsp) {
+    problems.push("tauri.conf.json app.security.csp 为空，自定义协议缺少 CSP 约束");
+  }
+
+  if (problems.length) {
+    fail(report, {
+      id: "static:no-custom-protocol",
+      suite: "static",
+      layer: "static",
+      title: "自定义图片协议缺少编解码测试或 CSP 配置",
+      severity: "P1",
+      details: `${problems.join(" | ")}；命中：${hits
+        .map((hit) => `${hit.file}:${hit.line}`)
+        .join(", ")}`,
+      location: `${hits[0].file}:${hits[0].line}`,
+      expected:
+        "manga-proxy 协议要么完全不存在；存在时必须有 encode/decode round-trip 测试与非空 CSP",
+      actual: problems.join(" | "),
+      rootCause: "绕过命令通道直接注册自定义协议，且缺少配套安全/回归约束",
+      fix: "恢复图片命令通道；如确需自定义协议，补编解码测试并配置 CSP",
+    });
+  } else {
+    ok(report, {
+      id: "static:no-custom-protocol",
+      suite: "static",
+      layer: "static",
+      title: "自定义图片协议具备编解码测试与 CSP 约束",
+      details: `${hits.length} 处协议引用，CSP 已配置`,
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* §1.2 设置/诊断/隐私/恢复窗：不得残留硬编码 JSX 文案              */
+/* ------------------------------------------------------------------ */
+
+const HARDCODED_TEXT_DIRS = [
+  path.join("src", "components", "settings"),
+  path.join("src", "components", "diagnostics"),
+  path.join("src", "components", "privacy"),
+  path.join("src", "recovery"),
+];
+
+/** 设置页主体（5 分区标题/说明）同样属于本轮后置 i18n 覆盖范围。 */
+const HARDCODED_TEXT_FILES = [path.join("src", "pages", "Settings.tsx")];
+
+/** 技术缩写/专有名词/单位：不视为待翻译的硬编码文案。 */
+const ALLOWED_UI_TOKENS = new Set([
+  "MB",
+  "KB",
+  "GB",
+  "AI",
+  "URL",
+  "UA",
+  "HTTP",
+  "HTTPS",
+  "CPU",
+  "API",
+  "TXT",
+  "JSON",
+  "SHA",
+  "Rust",
+  "Tauri",
+  "Windows",
+  "PowerShell",
+  "SmartScreen",
+  "MangaReader",
+  "GitHub",
+  "WebView",
+  "WebView2",
+  "SQLite",
+  "Vite",
+  "MSI",
+  "NSIS",
+  "localhost",
+  "127.0.0.1",
+]);
+
+function suspiciousHardcodedText(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return null;
+  if (/[\u3400-\u9fff]/.test(value)) return value;
+  const words = value.match(/[A-Za-z]{2,}/g) || [];
+  const suspicious = words.filter(
+    (word) =>
+      !ALLOWED_UI_TOKENS.has(word) &&
+      // 全大写缩写（SHA/MB/URL…）视为技术标识，不误报。
+      !/^[A-Z][A-Z0-9]*$/.test(word),
+  );
+  return suspicious.length ? value : null;
+}
+
+export function checkPostI18nHardcodedText(root, report) {
+  const hits = [];
+  const missingDirs = [];
+  const files = [];
+  for (const dir of HARDCODED_TEXT_DIRS) {
+    const full = path.join(root, dir);
+    if (!fs.existsSync(full)) {
+      missingDirs.push(dir);
+      continue;
+    }
+    files.push(...walk(full).filter((name) => name.endsWith(".tsx")));
+  }
+  for (const relative of HARDCODED_TEXT_FILES) {
+    const full = path.join(root, relative);
+    if (fs.existsSync(full)) files.push(full);
+    else missingDirs.push(relative);
+  }
+  for (const file of files) {
+    {
+      const source = fs.readFileSync(file, "utf8");
+      let ast = null;
+      try {
+        ast = ts.createSourceFile(
+          file,
+          source,
+          ts.ScriptTarget.Latest,
+          true,
+          ts.ScriptKind.TSX,
+        );
+      } catch (error) {
+        hits.push({
+          file: path.relative(root, file),
+          line: 1,
+          kind: "parse-error",
+          text: String(error),
+        });
+        continue;
+      }
+      const visit = (node) => {
+        if (ts.isJsxText(node)) {
+          const text = suspiciousHardcodedText(node.text);
+          if (text) {
+            hits.push({
+              file: path.relative(root, file),
+              line:
+                ast.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+              kind: "jsx-text",
+              text: text.slice(0, 100),
+            });
+          }
+        }
+        if (
+          ts.isJsxAttribute(node) &&
+          /^(aria-label|title)$/.test(node.name.getText(ast))
+        ) {
+          const initializer = node.initializer;
+          if (initializer && ts.isStringLiteral(initializer)) {
+            const text = suspiciousHardcodedText(initializer.text);
+            if (text) {
+              hits.push({
+                file: path.relative(root, file),
+                line:
+                  ast.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+                kind: node.name.getText(ast),
+                text: text.slice(0, 100),
+              });
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(ast);
+    }
+  }
+
+  if (hits.length) {
+    fail(report, {
+      id: "static:post-i18n-hardcode",
+      suite: "static",
+      layer: "static",
+      title: "设置/诊断/隐私/恢复窗仍含硬编码可见文案",
+      severity: "P1",
+      details: hits
+        .slice(0, 20)
+        .map((hit) => `${hit.file}:${hit.line} [${hit.kind}] ${JSON.stringify(hit.text)}`)
+        .join(" | "),
+      location: `${hits[0].file}:${hits[0].line}`,
+      expected:
+        "JSX 文本节点与 aria-label/title 字符串统一走 t()；仅允许技术缩写/单位",
+      actual: hits
+        .slice(0, 20)
+        .map((hit) => `${hit.file}:${hit.line} ${hit.text}`)
+        .join(", "),
+      rootCause: "新增分区时直接写入中英文文案，未走六语字典",
+      fix: "改用 useI18n().t(key)，并同步六语字典",
+    });
+  } else {
+    ok(report, {
+      id: "static:post-i18n-hardcode",
+      suite: "static",
+      layer: "static",
+      title: "设置/诊断/隐私/恢复窗无硬编码 JSX 文案",
+      details: `扫描 ${files.length} 个文件（${
+        HARDCODED_TEXT_DIRS.length
+      } 个目录 + Settings.tsx）${
+        missingDirs.length ? `（缺失：${missingDirs.join(", ")}）` : ""
+      }`,
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 反 Mock 审计：关键算法必须有真实函数调用与断言                     */
+/* ------------------------------------------------------------------ */
+
+const ANTI_MOCK_AREAS = [
+  {
+    name: "自然序",
+    file: path.join("src-tauri", "src", "commands.rs"),
+    definition: /fn\s+natural_cmp(?:_path)?\s*\(/,
+    symbol: "natural_cmp_path",
+    testSymbols: ["natural_cmp", "natural_cmp_path"],
+  },
+  {
+    name: "日志脱敏",
+    file: path.join("src-tauri", "src", "diagnostics.rs"),
+    definition: /fn\s+sanitize_text\s*\(/,
+    symbol: "sanitize_text",
+    testSymbols: ["sanitize_text"],
+  },
+  {
+    name: "在线提纯",
+    file: path.join("src-tauri", "src", "online", "filter.rs"),
+    definition: /fn\s+filter_candidates\s*\(/,
+    symbol: "filter_candidates",
+    testSymbols: ["filter_candidates"],
+  },
+  {
+    name: "条漫切片",
+    file: path.join("src-tauri", "src", "pipeline.rs"),
+    definition: /fn\s+render_webtoon_tiles\s*\(/,
+    symbol: "render_webtoon_tiles",
+    testSymbols: ["render_webtoon_tiles"],
+  },
+];
+
+export function checkAntiMockGuards(root, report) {
+  const errors = [];
+  const evidence = [];
+  const rustRoot = path.join(root, "src-tauri", "src");
+  const prodSources = [];
+  const testSources = [];
+
+  if (fs.existsSync(rustRoot)) {
+    for (const file of walk(rustRoot).filter((name) => name.endsWith(".rs"))) {
+      const source = fs.readFileSync(file, "utf8");
+      const index = source.indexOf("#[cfg(test)]");
+      prodSources.push(index >= 0 ? source.slice(0, index) : source);
+      if (index >= 0) testSources.push(source.slice(index));
+    }
+  }
+  const allProd = prodSources.join("\n");
+  const allTests = testSources.join("\n");
+
+  for (const area of ANTI_MOCK_AREAS) {
+    const file = path.join(root, area.file);
+    if (!fs.existsSync(file)) {
+      errors.push(`${area.name}：缺少 ${area.file}`);
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    const index = source.indexOf("#[cfg(test)]");
+    const prod = index >= 0 ? source.slice(0, index) : source;
+    const tests = index >= 0 ? source.slice(index) : "";
+    if (!area.definition.test(prod)) {
+      errors.push(`${area.name}：${area.file} 缺少生产函数定义`);
+    }
+    if (!tests) {
+      errors.push(`${area.name}：${area.file} 缺少 #[cfg(test)] 测试`);
+    } else {
+      const mentionsReal = area.testSymbols.some((symbol) =>
+        new RegExp(`\\b${symbol}\\s*\\(`).test(tests),
+      );
+      if (!mentionsReal) {
+        errors.push(
+          `${area.name}：测试未调用真实函数（${area.testSymbols.join("/")}）`,
+        );
+      }
+      if (!/\bassert(?:_eq|_ne)?!\s*\(/.test(tests)) {
+        errors.push(`${area.name}：测试缺少断言`);
+      }
+    }
+    const stripped = allProd.replace(
+      new RegExp(`fn\\s+${area.symbol}\\s*\\(`, "g"),
+      "",
+    );
+    const calls = (
+      stripped.match(new RegExp(`\\b${area.symbol}\\s*\\(`, "g")) || []
+    ).length;
+    if (calls < 1) {
+      errors.push(
+        `${area.name}：生产路径未调用 ${area.symbol}（疑似仅剩 mock/常量）`,
+      );
+    }
+    evidence.push(`${area.name}: 生产调用 ${calls} 次`);
+  }
+
+  // QA 套件不得用 mock 替换 Tauri invoke。
+  const overrideHits = [];
+  const testsRoot = path.join(root, "tests");
+  if (fs.existsSync(testsRoot)) {
+    for (const file of walk(testsRoot).filter((name) => /\.(tsx?|jsx?|mjs)$/.test(name))) {
+      const source = fs.readFileSync(file, "utf8");
+      if (/__TAURI_INTERNALS__\s*\.\s*invoke\s*=/.test(source)) {
+        overrideHits.push(path.relative(root, file));
+      }
+    }
+  }
+  if (overrideHits.length) {
+    errors.push(`QA 套件替换了真实 invoke：${overrideHits.join(", ")}`);
+  }
+
+  if (errors.length) {
+    fail(report, {
+      id: "static:anti-mock-guards",
+      suite: "static",
+      layer: "static",
+      title: "关键算法只有 mock/常量而缺少真实调用与断言",
+      severity: "P1",
+      details: errors.join(" | "),
+      location: "src-tauri/src",
+      expected:
+        "自然序、脱敏、在线过滤、条漫切片都有真实生产调用 + #[cfg(test)] 断言；QA 不得替换 invoke",
+      actual: errors.join(" | "),
+      rootCause: "测试以假常量替代真实函数，或关键算法被 mock 化",
+      fix: "恢复真实函数断言；禁止在 QA 中覆写 __TAURI_INTERNALS__.invoke",
+    });
+  } else {
+    ok(report, {
+      id: "static:anti-mock-guards",
+      suite: "static",
+      layer: "static",
+      title: "自然序/脱敏/在线过滤/条漫切片均有真实调用与断言",
+      details: evidence.join("；"),
     });
   }
 }

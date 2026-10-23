@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -51,7 +52,7 @@ function errorText(error: unknown): string {
 }
 
 export default function RecoveryApp() {
-  const { t, formatDateTime, formatNumber } = useI18n();
+  const { t, locale, formatDateTime, formatNumber } = useI18n();
   const [context, setContext] = useState<RecoveryContext | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<ActionKind>(null);
@@ -82,6 +83,20 @@ export default function RecoveryApp() {
       window.clearInterval(timer);
     };
   }, [retryTick]);
+
+  // 原生窗口标题跟随语言切换；缺少 core:window:allow-set-title 或非 Tauri
+  // 环境时静默降级（WebView 文档标题已由 I18nProvider 同步）。
+  useEffect(() => {
+    try {
+      void getCurrentWindow()
+        .setTitle(t("recovery.windowTitle"))
+        .catch(() => {
+          /* 权限缺失或窗口已销毁时忽略 */
+        });
+    } catch {
+      /* 非 Tauri 运行环境 */
+    }
+  }, [locale, t]);
 
   const close = async () => {
     try {
@@ -182,7 +197,7 @@ export default function RecoveryApp() {
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-3.5">
           {loadError && !context ? (
-            <Card className="items-start gap-3 p-4">
+            <Card className="items-start gap-3 p-4 shadow-hard-sm">
               <div className="flex items-start gap-2.5">
                 <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
                 <p className="break-words text-xs text-muted-foreground">
@@ -202,7 +217,7 @@ export default function RecoveryApp() {
 
           {context && copy ? (
             <>
-              <Card className="gap-3 p-4 sm:p-5">
+              <Card className="gap-3 p-4 shadow-hard-sm sm:p-5">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
@@ -268,7 +283,7 @@ export default function RecoveryApp() {
               </Card>
 
               <div className="grid gap-2 min-[560px]:grid-cols-3">
-                <Card className="gap-2 p-3">
+                <Card className="gap-2 p-3 shadow-hard-sm">
                   <p className="text-xs font-extrabold">
                     {t("recovery.actions.continueTitle")}
                   </p>
@@ -289,7 +304,7 @@ export default function RecoveryApp() {
                     )}
                   </Button>
                 </Card>
-                <Card className="gap-2 p-3">
+                <Card className="gap-2 p-3 shadow-hard-sm">
                   <p className="text-xs font-extrabold">
                     {t("recovery.actions.reloadTitle")}
                   </p>
@@ -317,7 +332,7 @@ export default function RecoveryApp() {
                       : t("recovery.actions.reloadTitle")}
                   </Button>
                 </Card>
-                <Card className="gap-2 border-primary/60 p-3">
+                <Card className="gap-2 border-primary/60 p-3 shadow-hard-sm">
                   <p className="text-xs font-extrabold">
                     {t("recovery.actions.safeTitle")}
                   </p>
@@ -367,7 +382,7 @@ export default function RecoveryApp() {
                 </div>
               ) : null}
 
-              <div className="rounded-2xl border border-border bg-card/80 p-3">
+              <div className="rounded-2xl border border-border bg-card/80 p-3 shadow-hard-sm">
                 <p className="text-xs font-extrabold">
                   {t("recovery.safetyTitle")}
                 </p>
@@ -377,13 +392,13 @@ export default function RecoveryApp() {
               </div>
             </>
           ) : !loadError ? (
-            <div className="flex items-center gap-2 rounded-2xl border border-border bg-card p-4 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 rounded-2xl border border-border bg-card p-4 text-xs text-muted-foreground shadow-hard-sm">
               <Loader2 className="size-4 animate-spin" />
               {t("common.loading")}
             </div>
           ) : null}
 
-          <Card className="p-4 sm:p-5">
+          <Card className="p-4 shadow-hard-sm sm:p-5">
             <div className="mb-3">
               <p className="text-sm font-extrabold">
                 {t("recovery.diagnosticsTitle")}

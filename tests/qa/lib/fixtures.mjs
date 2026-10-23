@@ -33,7 +33,7 @@ function pngChunk(type, data) {
 }
 
 /** Minimal opaque RGB PNG (no external image libraries). */
-export function makePng(width, height, [red, green, blue]) {
+export function makePng(width, height, [red, green, blue], deflateLevel = 9) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
@@ -53,7 +53,7 @@ export function makePng(width, height, [red, green, blue]) {
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", zlib.deflateSync(raw, { level: 9 })),
+    pngChunk("IDAT", zlib.deflateSync(raw, { level: deflateLevel })),
     pngChunk("IEND", Buffer.alloc(0)),
   ]);
 }
@@ -202,6 +202,26 @@ function writeNaturalArchive(root) {
   return { archive, widths };
 }
 
+/**
+ * 超高条漫夹具：单页 800×21000（>8192 纹理安全线，且远超 WebView2 纹理上限）。
+ *
+ * 目的：
+ * - 条漫「先切后缩」必须把巨图切成多片渲染，前端不得出现黑/白块；
+ * - 单页模式渲染高度必须被钳制到 ≤ MAX_SAFE_TEXTURE_H(8192)。
+ *
+ * 体积控制：纯色 PNG 压缩后只有几百 KB；但生成期 raw 缓冲为
+ * 800×21000×3 ≈ 48MB，用 deflate level 1 把生成耗时压到百毫秒级。
+ */
+function writeUltraTallWebtoon(root, width, height) {
+  const dir = path.join(root, "QA Ultra Tall Webtoon");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "001.png"),
+    makePng(width, height, [36, 120, 210], 1),
+  );
+  return dir;
+}
+
 export function createQaFixtures(root) {
   fs.rmSync(root, { recursive: true, force: true });
   fs.mkdirSync(root, { recursive: true });
@@ -223,6 +243,11 @@ export function createQaFixtures(root) {
   const broken = path.join(root, "QA_Broken.cbz");
   fs.writeFileSync(broken, crypto.randomBytes(2048));
 
+  // 超高条漫（单页 800×21000）：AGENTS.md §4.2 的巨图防线夹具。
+  const ultraTallWidth = 800;
+  const ultraTallHeight = 21000;
+  const ultraTall = writeUltraTallWebtoon(root, ultraTallWidth, ultraTallHeight);
+
   return {
     root,
     folder,
@@ -233,6 +258,7 @@ export function createQaFixtures(root) {
     cjkArchive,
     zipPath,
     broken,
+    ultraTall,
     importOrder: [
       folder,
       naturalOrder,
@@ -242,6 +268,7 @@ export function createQaFixtures(root) {
       zipPath,
       longWebtoon,
       broken,
+      ultraTall,
     ],
     expected: {
       folderPages: 10,
@@ -249,6 +276,9 @@ export function createQaFixtures(root) {
       zipPages: 4,
       webtoonPages: 125,
       naturalPages: 4,
+      ultraTallPages: 1,
+      ultraTallWidth,
+      ultraTallHeight,
       naturalOrder: ["1.png", "2.png", "10.png", "11.png"],
       naturalArchiveOrder: Array.from({ length: 20 }, (_, index) => `${index + 1}.png`),
       naturalArchiveWidths: naturalArchive.widths,

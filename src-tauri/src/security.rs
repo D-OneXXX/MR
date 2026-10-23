@@ -176,6 +176,9 @@ pub async fn clear_online_traces(
     state.render.clear_all();
     state.online_cache.clear_all();
     *state.session_online_headers.lock() = None;
+    // 辅助会话（受控 WebView 验证后的 UA/用户自备请求头）同样只驻留内存，
+    // 清理在线痕迹时必须一起作废。
+    state.clear_assisted_sessions();
     // 池中的 transport 仍可能内嵌旧 Cookie/请求头；必须整体作废，
     // 否则清理后继续阅读会复用已清除凭据的句柄。
     state.invalidate_sources();
@@ -332,12 +335,16 @@ fn parse_capability_evidence(raw: &str) -> Result<CapabilityEvidence, String> {
         }
     }
 
+    // 受控窗口白名单：主窗、恢复窗与内嵌浏览器窗。
+    // 浏览器窗虽然被列进 capability.windows，但它加载的是远程 Origin，
+    // Tauri 按 (label, origin) 匹配，远程页面拿不到任何本地能力，
+    // 因此这里计入白名单不会削弱隔离性。
     let scoped = !windows.is_empty()
         && !has_glob
         && remote_capabilities == 0
-        && windows
-            .iter()
-            .all(|label| label == "main" || label == RECOVERY_LABEL);
+        && windows.iter().all(|label| {
+            label == "main" || label == RECOVERY_LABEL || label == BROWSER_LABEL
+        });
 
     Ok(CapabilityEvidence {
         windows,
@@ -525,7 +532,11 @@ mod tests {
         let evidence = parse_capability_evidence(CAPABILITIES_JSON).expect("capability 应可解析");
         assert_eq!(
             evidence.windows,
-            vec!["main".to_string(), "recovery".to_string()]
+            vec![
+                "main".to_string(),
+                "recovery".to_string(),
+                "browser".to_string()
+            ]
         );
         assert_eq!(evidence.remote_capabilities, 0);
         assert!(evidence.scoped);

@@ -122,6 +122,23 @@ const zhCN = {
   "privacy.toast.cleared": "在线痕迹与缓存已清理。",
   "privacy.toast.clearFailed": "清理失败：{detail}",
   "privacy.toast.auditFailed": "安全自检失败：{detail}",
+  "privacy.security.windowsTitle": "Windows 安全与更新完整性",
+  "privacy.security.windowsBody":
+    "更新包先下载到系统临时目录，再通过 SHA-256 与 minisign 签名校验；只有全部校验通过，才会由标准安装器以事务方式替换正在运行的程序，绝不在内存中覆写运行中的可执行文件。任何一项校验失败都会立即拒绝安装，并删除已下载的半成品文件。",
+  "privacy.security.windowsBadgeIntegrity": "SHA-256 + Minisign 校验",
+  "privacy.security.windowsBadgeTransaction": "安装器事务替换",
+  "privacy.security.windowsSmartScreenTitle": "SmartScreen 拦截与放行",
+  "privacy.security.windowsSmartScreen":
+    "本地构建与自签名构建没有受信任的代码签名，Windows SmartScreen 会把它们当作「不受信任的应用」拦下，这是预期行为，不是病毒提示。要放行请按下面的顺序操作；若你更信任正式发布的签名版本，请改用官方发行渠道获取。",
+  "privacy.security.windowsStepLaunch": "双击安装包",
+  "privacy.security.windowsStepInfo": "更多信息",
+  "privacy.security.windowsStepRun": "仍要运行",
+  "privacy.security.windowsTempTitle": "下载与解压目录",
+  "privacy.security.windowsTemp":
+    "更新包请下载并解压到系统临时目录或应用专属的 staging 目录，不要放在「下载」文件夹里。下载目录会被实时扫描，也常被同步盘接管，落在这里的安装包更容易被误判或直接锁定。",
+  "privacy.security.windowsAllowlistTitle": "杀毒软件白名单",
+  "privacy.security.windowsAllowlist":
+    "可以把应用数据目录与缓存目录一起加入杀毒软件的排除项或白名单。数据目录存放书库数据库（library.db）、日志与下载文件，缓存目录存放图片与渲染缓存；两者都不保存任何账号凭据。加入白名单后，日常扫描就不会再反复锁定这些文件。",
 } as const;
 
 const en: Record<keyof typeof zhCN, string> = {
@@ -247,6 +264,23 @@ const en: Record<keyof typeof zhCN, string> = {
   "privacy.toast.cleared": "Online traces and cache cleared.",
   "privacy.toast.clearFailed": "Cleanup failed: {detail}",
   "privacy.toast.auditFailed": "Security check failed: {detail}",
+  "privacy.security.windowsTitle": "Windows security and update integrity",
+  "privacy.security.windowsBody":
+    "Update packages are downloaded to the system temp directory first, then verified with SHA-256 and a minisign signature. Only when every check passes does the standard installer replace the running program transactionally; the running executable is never overwritten in memory. If any check fails, the install is refused and the half-downloaded file is deleted.",
+  "privacy.security.windowsBadgeIntegrity": "SHA-256 + Minisign verified",
+  "privacy.security.windowsBadgeTransaction": "Transactional installer swap",
+  "privacy.security.windowsSmartScreenTitle": "SmartScreen warnings and how to allow the app",
+  "privacy.security.windowsSmartScreen":
+    "Local and self-signed builds carry no trusted code signature, so Windows SmartScreen flags them as an unrecognized app. That is expected behaviour, not a malware warning. Allow it with the steps below; if you prefer a trusted signed release, get the app from the official release channel instead.",
+  "privacy.security.windowsStepLaunch": "Double-click installer",
+  "privacy.security.windowsStepInfo": "More info",
+  "privacy.security.windowsStepRun": "Run anyway",
+  "privacy.security.windowsTempTitle": "Download and extraction folders",
+  "privacy.security.windowsTemp":
+    "Download and unpack updates into the system temp directory or the app's own staging directory, not into the Downloads folder. Downloads is scanned in real time and is often synced to the cloud, so installers left there are more likely to be misclassified or locked outright.",
+  "privacy.security.windowsAllowlistTitle": "Antivirus allowlist",
+  "privacy.security.windowsAllowlist":
+    "You can add both the app data folder and the cache folder to your antivirus exclusions or allowlist. The data folder holds the library database (library.db), logs and downloaded files; the cache folder holds image and render caches. Neither ever stores account credentials, and allowlisting them stops scheduled scans from repeatedly locking these files.",
 };
 
 const zhTW: Record<keyof typeof zhCN, string> = {
@@ -369,6 +403,23 @@ const zhTW: Record<keyof typeof zhCN, string> = {
   "privacy.toast.cleared": "線上痕跡與快取已清理。",
   "privacy.toast.clearFailed": "清理失敗：{detail}",
   "privacy.toast.auditFailed": "安全自我檢查失敗：{detail}",
+  "privacy.security.windowsTitle": "Windows 安全與更新完整性",
+  "privacy.security.windowsBody":
+    "更新套件會先下載到系統暫存目錄，再通過 SHA-256 與 minisign 簽章驗證；只有所有驗證都通過，才會由標準安裝程式以交易式的方式替換執行中的程式，絕不在記憶體中覆寫執行中的執行檔。任何一項驗證失敗都會立即拒絕安裝，並刪除已下載的半成品檔案。",
+  "privacy.security.windowsBadgeIntegrity": "SHA-256 + Minisign 驗證",
+  "privacy.security.windowsBadgeTransaction": "安裝程式交易式替換",
+  "privacy.security.windowsSmartScreenTitle": "SmartScreen 攔截與放行",
+  "privacy.security.windowsSmartScreen":
+    "本機建置與自我簽章的建置沒有受信任的程式碼簽章，Windows SmartScreen 會把它們視為「不受信任的應用程式」而攔下，這是預期行為，並非病毒提示。要放行請依下列順序操作；若你更信任正式發行的簽章版本，請改從官方發行管道取得。",
+  "privacy.security.windowsStepLaunch": "按兩下安裝檔",
+  "privacy.security.windowsStepInfo": "更多資訊",
+  "privacy.security.windowsStepRun": "仍要執行",
+  "privacy.security.windowsTempTitle": "下載與解壓縮目錄",
+  "privacy.security.windowsTemp":
+    "更新套件請下載並解壓縮到系統暫存目錄或應用程式專屬的 staging 目錄，不要放在「下載」資料夾。下載資料夾會被即時掃描，也常被同步軟體接管，放在那裡的安裝檔更容易被誤判或直接鎖定。",
+  "privacy.security.windowsAllowlistTitle": "防毒軟體白名單",
+  "privacy.security.windowsAllowlist":
+    "可以把應用程式資料目錄與快取目錄一起加入防毒軟體的排除項目或白名單。資料目錄存放書庫資料庫（library.db）、日誌與下載檔案，快取目錄存放圖片與算繪快取；兩者都不會儲存任何帳號憑證。加入白名單後，日常掃描就不會再反覆鎖定這些檔案。",
 };
 
 const es: Record<keyof typeof zhCN, string> = {
@@ -499,6 +550,23 @@ const es: Record<keyof typeof zhCN, string> = {
   "privacy.toast.clearFailed": "Error al borrar: {detail}",
   "privacy.toast.auditFailed":
     "La comprobación de seguridad falló: {detail}",
+  "privacy.security.windowsTitle": "Seguridad de Windows e integridad de las actualizaciones",
+  "privacy.security.windowsBody":
+    "Los paquetes de actualización se descargan primero a la carpeta temporal del sistema y después se verifican con SHA-256 y una firma minisign. Solo cuando todas las comprobaciones pasan, el instalador estándar sustituye el programa en ejecución de forma transaccional; el ejecutable en marcha nunca se sobrescribe en memoria. Si una comprobación falla, la instalación se rechaza y se borra el archivo a medio descargar.",
+  "privacy.security.windowsBadgeIntegrity": "Verificación SHA-256 + Minisign",
+  "privacy.security.windowsBadgeTransaction": "Sustitución transaccional del instalador",
+  "privacy.security.windowsSmartScreenTitle": "Avisos de SmartScreen y cómo permitir la aplicación",
+  "privacy.security.windowsSmartScreen":
+    "Las compilaciones locales o firmadas por el propio autor no llevan una firma de código de confianza, así que Windows SmartScreen las marca como aplicación no reconocida. Es el comportamiento esperado, no un aviso de malware. Permítela con los pasos de abajo; si prefieres una versión firmada de confianza, obtén la aplicación del canal oficial de publicación.",
+  "privacy.security.windowsStepLaunch": "Doble clic en el instalador",
+  "privacy.security.windowsStepInfo": "Más información",
+  "privacy.security.windowsStepRun": "Ejecutar de todas formas",
+  "privacy.security.windowsTempTitle": "Carpetas de descarga y extracción",
+  "privacy.security.windowsTemp":
+    "Descarga y descomprime las actualizaciones en la carpeta temporal del sistema o en el directorio de preparación propio de la aplicación, no en la carpeta de Descargas. Descargas se analiza en tiempo real y suele sincronizarse con la nube, por lo que los instaladores que se quedan ahí se confunden o se bloquean con más facilidad.",
+  "privacy.security.windowsAllowlistTitle": "Lista blanca del antivirus",
+  "privacy.security.windowsAllowlist":
+    "Puedes añadir tanto la carpeta de datos como la de caché de la aplicación a las exclusiones o a la lista blanca de tu antivirus. La carpeta de datos guarda la base de datos de la biblioteca (library.db), los registros y los archivos descargados; la de caché guarda las cachés de imágenes y de renderizado. Ninguna almacena credenciales, y excluirlas evita que los análisis programados bloqueen estos archivos una y otra vez.",
 };
 
 const ja: Record<keyof typeof zhCN, string> = {
@@ -625,6 +693,23 @@ const ja: Record<keyof typeof zhCN, string> = {
   "privacy.toast.clearFailed": "消去に失敗しました：{detail}",
   "privacy.toast.auditFailed":
     "セキュリティチェックに失敗しました：{detail}",
+  "privacy.security.windowsTitle": "Windows のセキュリティと更新の完全性",
+  "privacy.security.windowsBody":
+    "更新パッケージはまずシステムの一時フォルダへダウンロードされ、SHA-256 と minisign 署名で検証されます。すべての検査に通ったときだけ、標準のインストーラーがトランザクション方式で実行中のプログラムを置き換え、実行中の実行ファイルがメモリ上で上書きされることはありません。いずれかの検査に失敗した場合はインストールを拒否し、途中までダウンロードしたファイルを削除します。",
+  "privacy.security.windowsBadgeIntegrity": "SHA-256 と Minisign で検証",
+  "privacy.security.windowsBadgeTransaction": "インストーラーによるトランザクション置換",
+  "privacy.security.windowsSmartScreenTitle": "SmartScreen の警告と許可する手順",
+  "privacy.security.windowsSmartScreen":
+    "ローカルビルドや自己署名ビルドには信頼されたコード署名がないため、Windows SmartScreen が「認識されていないアプリ」として警告します。これは想定どおりの動作で、ウイルス通知ではありません。下の手順で許可してください。より信頼性の高い正式署名の版をご希望なら、公式の配布チャンネルから入手してください。",
+  "privacy.security.windowsStepLaunch": "インストーラーをダブルクリック",
+  "privacy.security.windowsStepInfo": "詳細情報",
+  "privacy.security.windowsStepRun": "実行する",
+  "privacy.security.windowsTempTitle": "ダウンロードと展開の保存先",
+  "privacy.security.windowsTemp":
+    "更新パッケージは「ダウンロード」フォルダーではなく、システムの一時フォルダーかアプリ専用のステージングディレクトリへ展開してください。「ダウンロード」フォルダーはリアルタイムスキャンやクラウド同期の対象になりやすく、置かれたインストーラーが誤検知やロックの対象になりがちです。",
+  "privacy.security.windowsAllowlistTitle": "アンチウイルス製品の許可リスト",
+  "privacy.security.windowsAllowlist":
+    "アプリのデータフォルダーとキャッシュフォルダーの両方を、アンチウイルス製品の除外項目や許可リストへ追加できます。データフォルダーには書庫データベース（library.db）、ログ、ダウンロードしたファイルが、キャッシュフォルダーには画像キャッシュとレンダーキャッシュが保存されます。どちらにもアカウントの資格情報は含まれず、追加すればスケジュールスキャンがこれらのファイルを繰り返しロックしなくなります。",
 };
 
 const ko: Record<keyof typeof zhCN, string> = {
@@ -750,6 +835,23 @@ const ko: Record<keyof typeof zhCN, string> = {
   "privacy.toast.cleared": "온라인 흔적과 캐시를 삭제했습니다.",
   "privacy.toast.clearFailed": "삭제 실패: {detail}",
   "privacy.toast.auditFailed": "보안 점검 실패: {detail}",
+  "privacy.security.windowsTitle": "Windows 보안 및 업데이트 무결성",
+  "privacy.security.windowsBody":
+    "업데이트 패키지는 먼저 시스템 임시 폴더에 다운로드된 뒤 SHA-256과 minisign 서명으로 검증됩니다. 모든 검사를 통과한 경우에만 표준 설치 프로그램이 트랜잭션 방식으로 실행 중인 프로그램을 교체하며, 실행 중인 실행 파일을 메모리에서 덮어쓰는 일은 없습니다. 검사 하나라도 실패하면 설치를 거부하고, 내려받다 만 파일을 삭제합니다.",
+  "privacy.security.windowsBadgeIntegrity": "SHA-256 + Minisign 검증",
+  "privacy.security.windowsBadgeTransaction": "설치 프로그램 트랜잭션 교체",
+  "privacy.security.windowsSmartScreenTitle": "SmartScreen 경고와 실행 허용 방법",
+  "privacy.security.windowsSmartScreen":
+    "로컬 빌드나 자체 서명 빌드에는 신뢰할 수 있는 코드 서명이 없으므로 Windows SmartScreen가 '알 수 없는 앱'으로 경고합니다. 이는 정상적인 동작이며 바이러스 경고가 아닙니다. 아래 순서대로 허용하세요. 신뢰할 수 있는 정식 서명 빌드를 원하시면 공식 배포 경로에서 받아 주세요.",
+  "privacy.security.windowsStepLaunch": "설치 프로그램을 두 번 클릭",
+  "privacy.security.windowsStepInfo": "자세한 정보",
+  "privacy.security.windowsStepRun": "그래도 실행",
+  "privacy.security.windowsTempTitle": "다운로드 및 압축 풀기 폴더",
+  "privacy.security.windowsTemp":
+    "업데이트 패키지는 '다운로드' 폴더가 아니라 시스템 임시 폴더나 앱 전용 스테이징 디렉터리에 풀어 주세요. '다운로드' 폴더는 실시간 검사와 클라우드 동기화가 자주 걸리는 위치라, 그곳에 남은 설치 프로그램이 오탐으로 차단되기 쉽습니다.",
+  "privacy.security.windowsAllowlistTitle": "바이러스 방어 프로그램 허용 목록",
+  "privacy.security.windowsAllowlist":
+    "앱 데이터 폴더와 캐시 폴더를 함께 바이러스 방어 프로그램의 예외 항목이나 허용 목록에 추가할 수 있습니다. 데이터 폴더에는 서재 데이터베이스(library.db), 로그, 다운로드한 파일이, 캐시 폴더에는 이미지 및 렌더 캐시가 보관됩니다. 두 폴더 모두 계정 자격 증명을 저장하지 않으며, 허용 목록에 추가하면 주기적 검사에서 이 파일들이 반복적으로 잠기지 않습니다.",
 };
 
 export const privacyMessages = {

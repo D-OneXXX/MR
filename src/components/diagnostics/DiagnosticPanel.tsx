@@ -92,7 +92,7 @@ function RuntimeTile({ label, value }: { label: string; value: string }) {
 }
 
 export default function DiagnosticPanel({ compact = false }: { compact?: boolean }) {
-  const { t, formatDateTime } = useI18n();
+  const { t, formatDateTime, locale } = useI18n();
   const [bundle, setBundle] = useState<DiagnosticBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -152,7 +152,9 @@ export default function DiagnosticPanel({ compact = false }: { compact?: boolean
         },
         () => {
           // 脱敏不可用时宁可不插入描述，也不能把原文写进 Prompt。
-          if (alive) setSafeDescription("[description omitted: sanitizer unavailable]");
+          if (alive) {
+            setSafeDescription(t("diagnostics.prompt.descriptionOmitted"));
+          }
         },
       );
     }, 180);
@@ -160,14 +162,15 @@ export default function DiagnosticPanel({ compact = false }: { compact?: boolean
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [description]);
+  }, [description, t]);
 
   const generatedPrompt = useMemo(
     () =>
       bundle
         ? buildDiagnosticPrompt(bundle, safeDescription)
         : "",
-    [bundle, safeDescription],
+    // locale 参与依赖：buildDiagnosticPrompt 跟随活动语言，切换语言后需要重建。
+    [bundle, safeDescription, locale],
   );
   const prompt = promptOverride ?? generatedPrompt;
   const manual = promptOverride !== null;

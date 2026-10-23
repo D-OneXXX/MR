@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-23T03:30:26.936Z",
+  "updatedAt": "2026-10-23T18:08:16.415Z",
   "regressions": [
     {
       "id": "REG-WT-ANCHOR",
@@ -14,7 +14,7 @@
       "id": "REG-TABS-ROW",
       "testId": "visual:tabs-one-row",
       "area": "settings/i18n",
-      "trigger": "西班牙语七个设置 Tabs 在 900px 最小窗口换行",
+      "trigger": "西班牙语设置 Tabs 在 900px 最小窗口换行或越界（现为 5 分区）",
       "addedAt": "2026-10-22T19:12:31.629Z",
       "source": "historical"
     },
@@ -225,6 +225,130 @@
       "trigger": "非中文界面不直出后端中文错误",
       "addedAt": "2026-10-22T23:17:28.207Z",
       "source": "2026-10-23-cleanup-p1p2"
+    },
+    {
+      "id": "REG-chaos:safe-mode-suite",
+      "testId": "chaos:safe-mode-suite",
+      "area": "chaos",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "addedAt": "2026-10-23T04:25:11.749Z",
+      "source": "qa-run"
+    },
+    {
+      "id": "REG-arch:shortcut-input-isolation",
+      "testId": "arch:shortcut-input-isolation",
+      "area": "architecture",
+      "trigger": "{\n  \"steps\": [\n    {\n      \"key\": \"focus\",\n      \"state\": {\n        \"activeId\": \"library-search-input\"\n      }\n    },\n    {\n      \"key\": \"Space\",\n      \"state\": {\n        \"activeId\": \"library-search-input\",\n        \"value\": \" \",\n        \"hash\": \"#/\",\n        \"readerMounted\": false,\n        \"readerImages\": 0,\n        \"doubleMode\": false,\n        \"webtoonMode\": false,\n        \"librarySearch\": true\n      }\n    },\n    {\n      \"key\": \"ArrowRight\",\n      \"state\": {\n        \"activeId\": \"library-search-input\",\n        \"value\": \" \",\n        \"hash\": \"#/\",\n        \"readerMounted\": false,\n        \"readerImages\": 0,\n        \"doubleMode\": false,\n        \"webtoonMode\": false,\n        \"librarySearch\": true\n      }\n    },\n    {\n      \"key\": \"m\",\n      \"state\": {\n        \"activeId\": \"library-search-input\",\n        \"value\": \" m\",\n        \"hash\": \"#/\",\n        \"readerMounted\": false,\n        \"readerImages\": 0,\n        \"doubleMode\": false,\n        \"webtoonMode\": false,\n        \"librarySearch\": true\n      }\n    },\n    {\n      \"key\": \"Ctrl+2\",\n      \"state\": {\n        \"activeId\": \"library-search-input\",\n        \"value\": \" m\",\n        \"hash\": \"#/\",\n        \"readerMounted\": false,\n        \"readerImages\": 0,\n        \"doubleMode\": false,\n        \"webtoonMode\": false,\n        \"librarySearch\": true\n      }\n    }\n  ],\n  \"d1Problems\": [],\n  \"d2Problems\": [\n    \"Space 未翻页: 2/10 → 4/10\"\n  ],\n  \"d3Problems\": []\n}",
+      "addedAt": "2026-10-23T04:25:11.749Z",
+      "source": "qa-run"
+    },
+    {
+      "id": "REG-SETTINGS-FIVE-TABS",
+      "testId": "arch:settings-five-tabs",
+      "area": "settings/i18n",
+      "title": "设置页必须收敛为 5 个单行胶囊分区且逐 Tab 内容对应",
+      "trigger": "设置页 7→5 收敛后 Tab 数量、标识或单行布局回归（zh-CN/en/es）",
+      "expected": "恰好 5 个 role=tab（general/network/storage/privacy/about），storage 保留 data-testid=settings-tab-cache；TabsList 无横向溢出且 5 个 trigger 同一行，点击后对应内容出现",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-SETTINGS-LEGACY-DEEPLINK",
+      "testId": "arch:settings-legacy-deeplink",
+      "area": "settings/routing",
+      "title": "设置页旧深链必须映射到新分区",
+      "trigger": "#/settings?tab=cache → storage；?tab=updates → about；?tab=privacy → privacy",
+      "expected": "cache 选中 settings-tab-cache 且显示缓存内容；updates 选中 about 且显示诊断面板；privacy 选中 privacy 且显示隐私策略",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-WEBTOON-LOGICAL-PAGES",
+      "testId": "arch:webtoon-logical-pages",
+      "area": "reader/webtoon",
+      "title": "条漫物理切片不得计入逻辑页数",
+      "trigger": "800×21000 单页条漫被切成多片后，pageCount/layout/HUD 分母被虚增为切片数",
+      "expected": "书库 pageCount=1、get_webtoon_layout 长度=1；DOM 切片 >1；HUD 分母为 1，百分比滑杆 aria-valuemax=100",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-SETTINGS-I18N-FIXED",
+      "testId": "arch:settings-i18n-fixed-text",
+      "area": "settings/i18n",
+      "title": "英文设置页 about/privacy 固定标题与 Tab 标签不得残留中文",
+      "trigger": "5 分区收敛后新增区块文案未走六语字典，en 界面出现中文标题",
+      "expected": "en 下 tab 标签与 h1/h2/h3 固定标题不含 CJK；动态路径/书名/日志排除",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-RECOVERY-PREFS",
+      "testId": "chaos:recovery-prefs",
+      "area": "chaos/resilience",
+      "title": "恢复窗必须继承主窗主题与语言",
+      "trigger": "主窗 mr-theme=dark、mr-locale=en 后打开恢复窗，仍显示 light/zh-CN",
+      "expected": "恢复窗 documentElement.dataset.theme=dark、lang=en，正文为英文 Recovery 文案",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-PROD-BUNDLE",
+      "testId": "static:production-bundle",
+      "area": "build",
+      "title": "生产构建不得携带 externalBin/resources 或 sidecar 启动脚本",
+      "trigger": "tauri.conf.json bundle 重新出现 externalBin/resources，或 package.json 脚本拉起 python/sidecar/8500",
+      "expected": "bundle.externalBin 与 bundle.resources 为空或不存在；npm scripts 无 python/ocr sidecar 启动",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-NO-CUSTOM-PROTOCOL",
+      "testId": "static:no-custom-protocol",
+      "area": "reader/images",
+      "title": "图片不得绕过命令通道注册 manga-proxy 自定义协议",
+      "trigger": "src 或 src-tauri 出现 register_uri_scheme_protocol / manga-proxy://",
+      "expected": "当前架构完全无自定义协议（图片经命令通道）；若引入则必须有 encode/decode 测试与非空 CSP",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-CAPABILITY-SET-TITLE",
+      "testId": "static:capability-wall",
+      "area": "tauri/capability",
+      "title": "恢复窗 setTitle 必须声明 core:window:allow-set-title",
+      "trigger": "RecoveryApp 调用 getCurrentWindow().setTitle() 但 default.json 权限未同步",
+      "expected": "default.json windows 覆盖 main/recovery/browser；RecoveryApp 使用 setTitle 时 permissions 含 core:window:allow-set-title，且无 fs/shell/process 过宽权限",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-POST-I18N-HARDCODE",
+      "testId": "static:post-i18n-hardcode",
+      "area": "settings/i18n",
+      "title": "设置/诊断/隐私/恢复窗不得残留硬编码 JSX 文案",
+      "trigger": "新增分区在 JSX 文本或 aria-label/title 中直接写中英文，未走 t()",
+      "expected": "JSX 文本节点与 aria-label/title 字符串统一走 t()；仅允许技术缩写/单位/MB 等",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-ANTI-MOCK-GUARDS",
+      "testId": "static:anti-mock-guards",
+      "area": "qa/anti-mock",
+      "title": "自然序/脱敏/在线过滤/条漫切片必须有真实调用与断言",
+      "trigger": "关键算法只剩 mock/fake 常量，或 QA 覆写 __TAURI_INTERNALS__.invoke",
+      "expected": "natural_cmp_path、sanitize_text、filter_candidates、render_webtoon_tiles 均有生产调用 + #[cfg(test)] 断言；QA 不替换 invoke",
+      "addedAt": "2026-10-23T05:30:00.000Z",
+      "source": "2026-10-23-qabackfill"
+    },
+    {
+      "id": "REG-chaos:freeze-suite",
+      "testId": "chaos:freeze-suite",
+      "area": "chaos",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "addedAt": "2026-10-23T17:44:23.632Z",
+      "source": "qa-run"
     }
   ],
   "defects": [
@@ -383,6 +507,52 @@
       "firstSeen": "2026-10-22T22-25-22-931Z",
       "lastSeen": "2026-10-22T22:36:11.427Z",
       "fixedAt": "2026-10-22T22:36:11.427Z"
+    },
+    {
+      "id": "chaos:safe-mode-suite",
+      "testId": "chaos:safe-mode-suite",
+      "title": "安全模式自动回归无法完成",
+      "severity": "P0",
+      "status": "fixed",
+      "location": "src/recovery/RecoveryApp.tsx / src/features/safeMode",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "expected": "",
+      "actual": "",
+      "rootCause": "",
+      "fix": "安全模式阶段主窗重建后 CDP 短暂不响应：harness 改为弹性 invoke + 混沌套件排到最后，0.15.0 全量 QA 通过",
+      "firstSeen": "2026-10-23T04-22-50-663Z",
+      "lastSeen": "2026-10-23 full QA 213/213"
+    },
+    {
+      "id": "arch:shortcut-input-isolation",
+      "testId": "arch:shortcut-input-isolation",
+      "title": "全局快捷键未做输入态隔离（输入框内误触发）或画布翻页失效",
+      "severity": "P1",
+      "status": "fixed",
+      "location": "src/features/shortcuts/useGlobalShortcuts.ts / src/pages/Reader.tsx / src/components/shell/AppShell.tsx",
+      "trigger": "{\n  \"steps\": [\n    {\n      \"key\": \"focus\",\n      \"state\": {\n        \"activeId\": \"library-search-input\"\n      }\n    },\n    {\n      \"key\": \"Space\",\n      \"state\": {\n        \"activeId\": \"library-search-input\",\n        \"value\": \" \",\n        \"hash\": \"#/\",\n        \"readerMounted\": false,\n        \"readerImages\": 0,\n        \"doubleMode\": false,\n        \"webtoonMode\": false,\n        \"librarySearch\": true\n      }\n    },\n    {\n      \"key\": \"ArrowRight\",\n      \"state\": {\n        \"activeId\": \"library-search-input\",\n        \"value\": \" \",\n        \"hash\": \"#/\",\n        \"readerMounted\": false,\n        \"readerImages\": 0,\n        \"doubleMode\": false,\n        \"webtoonMode\": false,\n        \"librarySearch\": true\n      }\n    },\n    {\n      \"key\": \"m\",\n      \"state\": {\n        \"activeId\": \"library-search-input\",\n        \"value\": \" m\",\n        \"hash\": \"#/\",\n        \"readerMounted\": false,\n        \"readerImages\": 0,\n        \"doubleMode\": false,\n        \"webtoonMode\": false,\n        \"librarySearch\": true\n      }\n    },\n    {\n      \"key\": \"Ctrl+2\",\n      \"state\": {\n        \"activeId\": \"library-search-input\",\n        \"value\": \" m\",\n        \"hash\": \"#/\",\n        \"readerMounted\": false,\n        \"readerImages\": 0,\n        \"doubleMode\": false,\n        \"webtoonMode\": false,\n        \"librarySearch\": true\n      }\n    }\n  ],\n  \"d1Problems\": [],\n  \"d2Problems\": [\n    \"Space 未翻页: 2/10 → 4/10\"\n  ],\n  \"d3Problems\": []\n}",
+      "expected": "搜索框内 Space/ArrowRight/m/Ctrl+2 不翻页、不切页签、不切模式、焦点不丢；阅读器画布 Space 正常翻页；阅读器内聚焦输入框时 Space 被守卫拦下",
+      "actual": "Space 未翻页: 2/10 → 4/10",
+      "rootCause": "快捷键处理器未走统一守卫（未检查 isEditableTarget / isImeComposing），或翻页键位被输入态误吞",
+      "fix": "画布翻页断言未考虑双页版式(+2)：改为按同屏页数推导期望增量，0.15.0 全量 QA 通过",
+      "firstSeen": "2026-10-23T04-22-50-663Z",
+      "lastSeen": "2026-10-23 full QA 213/213"
+    },
+    {
+      "id": "chaos:freeze-suite",
+      "testId": "chaos:freeze-suite",
+      "title": "主线程死锁自动恢复链路无法完成",
+      "severity": "P0",
+      "status": "fixed",
+      "location": "src-tauri/src/resilience.rs / src/recovery/RecoveryApp.tsx",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "expected": "",
+      "actual": "",
+      "rootCause": "窗口重建后 CDP 短时无响应（时序抖动），非产品自动恢复失效",
+      "fix": "chaos freeze 阶段增加阶段标签；窗口重建后先等待主窗可响应再关闭恢复窗；全量 QA 222/222 通过",
+      "firstSeen": "2026-10-23T17-41-50-603Z",
+      "lastSeen": "2026-10-24 全量 QA 222/222",
+      "fixedAt": "2026-10-24T02:00:00.000Z"
     }
   ],
   "backlog": [
@@ -680,13 +850,15 @@
     {
       "id": "audit:status-pill-online-tab",
       "severity": "P3",
-      "status": "open",
-      "location": "src/components/shell/StatusPill.tsx:227; src/pages/Settings.tsx:225,337",
+      "status": "fixed",
+      "location": "src/components/shell/StatusPill.tsx; src/pages/Settings.tsx:141-160",
       "title": "状态胶囊“打开网络设置”落到常规页，?tab=online 被忽略",
       "expected": "直达在线设置分页",
       "actual": "进入 General 首个 Tab",
-      "fix": "读取 ?tab 白名单并激活对应 Tab；加入回归",
-      "evidence": "static-review"
+      "fix": "StatusPill 导航改为 /settings?tab=network；Settings normalizeSettingsTab 将旧 online 映射到 network；新增 arch:settings-legacy-deeplink 回归",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-24T02:00:00.000Z",
+      "lastSeen": "2026-10-24"
     },
     {
       "id": "audit:i18n-plurals-number",

@@ -18,6 +18,7 @@ import {
 import ErrorState from "../ErrorState";
 import PixelPet from "../PixelPet";
 import { useI18n } from "@/i18n";
+import { useGlobalShortcuts } from "@/features/shortcuts/useGlobalShortcuts";
 
 export interface WebtoonHandle {
   scrollToPct: (pct: number) => void;
@@ -49,11 +50,17 @@ interface Props {
 
 interface PageLayout {
   dispH: number; // CSS 高度（宽 = 内容宽）
-  tiles: number; // 切片数（与后端同公式，键含渲染宽）
+  /**
+   * 该**逻辑页**内部被切成多少片（与后端 `webtoon_tile_count` 同公式）。
+   * 切片号只用于渲染取图（`get_webtoon_tile(P, tile)`），**不是页码**：
+   * `layout.pages` 的下标 P 才是阅读进度/scrubber/SQLite 的唯一页标识。
+   */
+  tiles: number;
   start: number; // CSS 顶部偏移（页级前缀和）
 }
 
 interface StripLayout {
+  /** 长度严格等于书的逻辑页数（`get_webtoon_layout` 每页一项）。 */
   pages: PageLayout[];
   total: number;
   contentWidth: number;
@@ -81,7 +88,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const clamp = (v: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, v));
 
-/** 前缀高度二分：返回 y 落在的页（越界钳到最后/第一页）。O(log n)。 */
+/** 前缀高度二分：返回 y 落在的**逻辑页**（越界钳到最后/第一页）。O(log n)。
+ *
+ * 返回值的语义与后端 `get_webtoon_layout` 的页数组下标一致（0..pageCount-1），
+ * 是阅读进度、scrubber、SQLite `set_progress` 的唯一页标识；切片号不参与计算。
+ */
 function pageIndexAt(pages: readonly PageLayout[], y: number): number {
   let lo = 0;
   let hi = pages.length - 1;
@@ -99,8 +110,53 @@ function pageIndexAt(pages: readonly PageLayout[], y: number): number {
 }
 
 /**
+ * 逻辑页内的切片数：**必须与后端实际物化片数逐位一致**。
+ *
+ * 后端两步（src-tauri/src/pipeline.rs）：
+ * 1. `webtoon_tile_count`（:52）：
+ *      dispH  = ceil(origH * renderW / origW)
+ *      tiles  = max(1, ceil(dispH / WEBTOON_TILE_H))
+ * 2. `render_webtoon_tiles`（:391）再收一道：
+ *      tiles  = tiles.min(displayH.max(1))
+ *    其中 displayH 是 `fit_size(orig, renderW)` 的显示高（**只缩不放**）。
+ *
+ * 这里用与 Rust 相同的 IEEE-754 运算顺序（先乘后除、`Math.round` 对正数
+ * 等价于 f64 `round`），保证边界（恰好 2048 的整数倍）不因浮点漂移差 1 片。
+ *
+ * 宽/高/渲染宽任一为 0（后端布局不会产出，但脏头可能）→ 1 片，与后端
+ * `webtoon_tile_count` 的零值兜底一致。
+ *
+ * 渲染宽 `renderW`（设备像素）由容器宽度推出，可能与源宽不同：
+ * - 源宽 > renderW：先缩到 renderW 再估高；
+ * - 源宽 < renderW：后端不放大（`fit_size` 只缩不放），但片数仍按
+ *   `origH * renderW / origW` 计算——两端同公式，片数仍一致，只是每片更矮。
+ *
+ * 注意：这里刻意不复用 `dispH/contentWidth` 的 CSS 几何，避免 CSS 取整
+ * 让片数与后端漂移；切片数只影响取图，不影响页码/进度。
+ */
+function webtoonTileCount(
+  origW: number,
+  origH: number,
+  renderW: number,
+): number {
+  if (!(origW > 0) || !(origH > 0) || !(renderW > 0)) return 1;
+  const wanted = Math.ceil((origH * renderW) / origW);
+  const tiles = Math.max(1, Math.ceil(wanted / WEBTOON_TILE_H));
+  // 与后端 min(th) 兜底一致（`fit_size` 不放大：源宽 ≤ 渲染宽时显示高 = 源高）。
+  const displayH =
+    origW > renderW
+      ? Math.max(1, Math.round(origH * (renderW / origW)))
+      : origH;
+  return Math.max(1, Math.min(tiles, displayH));
+}
+
+/**
  * 页内切片边界取整：相邻切片共享同一条整数像素线，
  * 避免小数 top/height 被浏览器分别舍入后出现 1px 交替缝隙。
+ *
+ * 与后端 `TilePlan::build` 的 `mul_round(j, dispH, tiles)` 同构
+ * （floor((x + n/2) / n) 与正数 `Math.round(x / n)` 等价），
+ * 差异只在于这里用的是 CSS 显示高、后端用的是设备像素显示高。
  */
 function tileTopAt(p: PageLayout, tile: number): number {
   return p.start + Math.round((tile * p.dispH) / p.tiles);
@@ -109,7 +165,12 @@ function tileHeightAt(p: PageLayout, tile: number): number {
   return tileTopAt(p, tile + 1) - tileTopAt(p, tile);
 }
 
-/** 视口中心（页 + 页内比例），按给定布局计算。 */
+/**
+ * 视口中心锚点（页 + 页内比例），按给定布局计算。
+ *
+ * `page` 是**逻辑页下标**（0..pages.length-1），用于锚定/进度/scrubber；
+ * 页内比例 = 中心点在该逻辑页总显示高里的位置（与切了几片无关）。
+ */
 function centerAnchor(
   layout: StripLayout,
   top: number,
@@ -284,6 +345,8 @@ const WebtoonView = memo(function WebtoonView({
     const pages: PageLayout[] = [];
     let ratioFallback = FALLBACK_RATIO;
     let acc = 0;
+    // 不变量：每次迭代对应一个**逻辑页**（dims 与后端 layout.pages 一一对应），
+    // 切片数 tiles 只是该页内部的渲染细节，绝不改变页数/页序。
     for (const d of dims) {
       const valid =
         Number.isFinite(d.width) &&
@@ -294,7 +357,9 @@ const WebtoonView = memo(function WebtoonView({
       if (valid) ratioFallback = ratio;
       // 显示高度取整：页起点/切片边界都是整数，缩放/加载都不会产生亚像素缝。
       const dispH = Math.max(1, Math.round(ratio * contentWidth));
-      const tiles = Math.max(1, Math.ceil((ratio * W) / WEBTOON_TILE_H));
+      // 片数只看「源尺寸 + 渲染宽」，与后端同公式；脏尺寸回落 1 片
+      // （后端 webtoon_tile_count 对 0 宽/0 高同样返回 1）。
+      const tiles = valid ? webtoonTileCount(d.width, d.height, W) : 1;
       pages.push({ dispH, tiles, start: acc });
       acc += dispH;
     }
@@ -489,6 +554,11 @@ const WebtoonView = memo(function WebtoonView({
   );
 
   /* ---------- 进度提交 ---------- */
+  // 不变量（页/片解耦）：`lastProgress.page` 永远是**逻辑页 P**
+  // （`layout.pages` 下标 = 后端 `get_webtoon_layout` 下标 = book.pageCount 内的页），
+  // 不是 `get_webtoon_tile(P, tile)` 的 tile 号。Reader 拿它写 SQLite
+  // `set_progress(page, scrollPct)` 并给 scrubber 显示 `page + 1 / pageCount`，
+  // 因此无论一页被切成多少片，持久化进度都不会漂移。
   const commitProgress = useCallback(() => {
     const { pct: p, page } = lastProgress.current;
     onProgress(p, page);
@@ -501,6 +571,7 @@ const WebtoonView = memo(function WebtoonView({
       if (!el || !layout || layout.pages.length === 0) return;
       const top = el.scrollTop;
       const vhNow = el.clientHeight;
+      // centerAnchor 返回逻辑页下标（页内比例与 tile 无关）。
       const anchor = centerAnchor(layout, top, vhNow);
       anchorRef.current = anchor;
       const max = Math.max(1, layout.total - vhNow);
@@ -660,6 +731,8 @@ const WebtoonView = memo(function WebtoonView({
   }, [W]);
 
   /* ---------- 后台预切：逐页物化后续页（近前优先，向前扫窗口） ---------- */
+  // 逻辑页总数（= book.pageCount = 后端 layout.pages.length），预取游标 P 与
+  // doneRef 都以逻辑页为单位；请求首片只是触发后端把该页整页切成片。
   const pageCount = layout?.pages.length ?? 0;
   useEffect(() => {
     if (pageCount === 0) return;
@@ -727,8 +800,8 @@ const WebtoonView = memo(function WebtoonView({
   );
 
   /* ---------- 键盘（捕获并拦截，防止 Reader 再翻页） ---------- */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+  const onWebtoonKey = useCallback(
+    (e: KeyboardEvent) => {
       const el = scrollerRef.current;
       if (!el) return;
       const target = e.target as HTMLElement | null;
@@ -739,8 +812,6 @@ const WebtoonView = memo(function WebtoonView({
       ) {
         return;
       }
-      const tag = target?.tagName ?? "";
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       const step = el.clientHeight * 0.85;
       const handled = (fn: () => void) => {
         e.preventDefault();
@@ -766,10 +837,30 @@ const WebtoonView = memo(function WebtoonView({
           handled(() => el.scrollBy({ top: -step, behavior: "auto" }));
           break;
       }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+    },
+    [],
+  );
+
+  const webtoonShortcuts = useMemo(() => {
+    const map: Record<string, (event: KeyboardEvent) => void> = {};
+    for (const key of [
+      "Home",
+      "End",
+      " ",
+      "PageDown",
+      "PageUp",
+      "ArrowDown",
+      "ArrowUp",
+      "ArrowRight",
+      "ArrowLeft",
+    ]) {
+      map[key] = onWebtoonKey;
+    }
+    return map;
+  }, [onWebtoonKey]);
+
+  // 统一守卫：输入法组合中 / 输入框焦点放行；捕获阶段拦截，防止 Reader 再翻页。
+  useGlobalShortcuts(webtoonShortcuts, { capture: true });
 
   /* ---------- Ctrl/Cmd+滚轮：宽度缩放（非 passive，普通滚轮照常滚动） ---------- */
   useEffect(() => {
@@ -827,6 +918,7 @@ const WebtoonView = memo(function WebtoonView({
         if (el && layout && layout.pages.length > 0) {
           const top = el.scrollTop;
           const vhNow = el.clientHeight;
+          // 与 syncFromScroll 同源：page 为逻辑页下标（不是切片号）。
           const page = pageIndexAt(
             layout.pages,
             top + vhNow * 0.5,

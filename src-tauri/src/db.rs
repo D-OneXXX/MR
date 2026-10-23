@@ -5,11 +5,37 @@
 //!
 //! `id` 为路径的 SHA-256 hex（稳定、可跨扫描复用，保留进度）。
 
+use std::path::Path;
+use std::time::Duration;
+
 use chrono::Local;
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 
 use crate::source::BackendError;
+
+/// 写锁等待上限：并发扫描/阅读写入时最多排队 5 秒，超出才报 `database is locked`。
+pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 统一连接配置（所有生产入口共用，规则唯一）：
+/// - `busy_timeout` 先设置，后续 PRAGMA 切换也能等待锁；
+/// - `journal_mode=WAL` 是持久化库属性；内存库返回 `"memory"`，不视为错误；
+/// - `synchronous=NORMAL` 在 WAL 下兼顾安全与吞吐；
+/// - `foreign_keys=ON` 让级联删除/约束真实生效。
+pub(crate) fn configure(conn: &Connection) -> Result<(), BackendError> {
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    Ok(())
+}
+
+/// 打开生产库的唯一入口：`Connection::open` + [`configure`]。
+pub(crate) fn open(path: impl AsRef<Path>) -> Result<Connection, BackendError> {
+    let conn = Connection::open(path)?;
+    configure(&conn)?;
+    Ok(conn)
+}
 
 pub fn book_id_for_path(path: &str) -> String {
     let mut h = Sha256::new();
@@ -26,6 +52,8 @@ pub fn now_str() -> String {
 }
 
 pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
+    // 任何入口（生产 open / 测试内存库）在第一条 SQL 前都完成并发加固。
+    configure(conn)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS books(
             id TEXT PRIMARY KEY,
@@ -817,6 +845,7 @@ pub fn filter_stats(conn: &Connection) -> Result<FilterStats, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn mem() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -824,8 +853,83 @@ mod tests {
         conn
     }
 
+    /// 唯一临时库路径（进程号 + 纳秒），测试结束连同 -wal/-shm 一起删除。
+    fn unique_temp_db(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("系统时钟早于 UNIX_EPOCH")
+            .as_nanos();
+        std::env::temp_dir().join(format!("mr-db-{tag}-{}-{nanos}.db", std::process::id()))
+    }
 
+    fn cleanup_db_files(path: &Path) {
+        for suffix in ["", "-wal", "-shm"] {
+            let mut raw = path.as_os_str().to_owned();
+            raw.push(suffix);
+            let _ = std::fs::remove_file(PathBuf::from(raw));
+        }
+    }
 
+    #[test]
+    fn configure_sets_wal_busy_timeout_and_foreign_keys() {
+        let path = unique_temp_db("config");
+        {
+            let conn = open(&path).expect("打开临时库");
+            init_schema(&conn).expect("建表");
+            let mode: String = conn
+                .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(mode.to_ascii_lowercase(), "wal", "生产库必须落盘为 WAL");
+            let busy: i64 = conn
+                .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(busy, BUSY_TIMEOUT.as_millis() as i64);
+            let fk: i64 = conn
+                .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(fk, 1);
+        }
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn busy_timeout_lets_second_writer_wait_instead_of_failing() {
+        let path = unique_temp_db("busy");
+        {
+            let setup = open(&path).expect("打开临时库");
+            setup
+                .execute_batch("CREATE TABLE busy_probe(id INTEGER PRIMARY KEY, v TEXT);")
+                .unwrap();
+        }
+        let writer = open(&path).expect("打开持锁连接");
+        writer
+            .execute_batch("BEGIN IMMEDIATE; INSERT INTO busy_probe(v) VALUES('first');")
+            .unwrap();
+
+        let waiter_path = path.clone();
+        let waiter = std::thread::spawn(move || {
+            let conn = open(&waiter_path).expect("打开等待连接");
+            let started = std::time::Instant::now();
+            conn.execute("INSERT INTO busy_probe(v) VALUES('second')", [])
+                .expect("busy_timeout 内应等待成功，而不是 database is locked");
+            started.elapsed()
+        });
+
+        // 持锁 200ms，逼迫第二个连接进入 busy_timeout 等待。
+        std::thread::sleep(Duration::from_millis(200));
+        writer.execute_batch("COMMIT;").unwrap();
+        let waited = waiter.join().expect("等待线程不应 panic");
+        assert!(
+            waited >= Duration::from_millis(100),
+            "第二个写入应真实等待持锁事务，而非立即失败：{waited:?}"
+        );
+        let count: i64 = writer
+            .query_row("SELECT COUNT(*) FROM busy_probe", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "两个连接的写入都必须落盘");
+        drop(writer);
+        cleanup_db_files(&path);
+    }
 
     #[test]
     fn soft_remove_then_reimport_restores_progress() {

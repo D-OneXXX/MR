@@ -224,7 +224,8 @@ export default function StatusPill({
             className="mt-4 w-full"
             onClick={() => {
               setOpen(false);
-              nav("/settings");
+              // 状态胶囊里的入口与网络/在线源直接相关，直达对应分区。
+              nav("/settings?tab=network");
             }}
           >
             {t("status.openSettings")}

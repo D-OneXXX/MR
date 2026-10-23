@@ -25,6 +25,7 @@ import { runOnlineSuite } from "./suites/online.mjs";
 import { runCacheSuite } from "./suites/cache.mjs";
 import { runPrivacySuite } from "./suites/privacy.mjs";
 import { runChaosSuite } from "./suites/chaos.mjs";
+import { runArchitectureSuite } from "./suites/architecture.mjs";
 
 const QA_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(QA_ROOT, "..", "..");
@@ -36,6 +37,16 @@ const KB_PATH = path.join(QA_ROOT, "qa-knowledge-base.json");
 const CDP_PORT = Number(process.env.QA_CDP_PORT || "9334");
 const KEEP_DATA = process.argv.includes("--keep-data");
 const ONLY = process.argv.find((arg) => arg.startsWith("--suite="))?.split("=")[1];
+/** 需要拉起隔离应用（而不是只跑静态检查）的 suite 白名单。 */
+const E2E_SUITES = new Set([
+  "visual",
+  "reader",
+  "online",
+  "cache",
+  "privacy",
+  "chaos",
+  "architecture",
+]);
 
 function latestGitCommit() {
   try {
@@ -152,7 +163,7 @@ async function main() {
   const staticResult = { id: "static", title: "静态与版本红线", run: runStaticSuite };
   await runOne(report, { root: ROOT, artifactDir: ARTIFACT_ROOT }, staticResult);
 
-  if (ONLY && ONLY !== "visual" && ONLY !== "reader" && ONLY !== "online" && ONLY !== "cache" && ONLY !== "privacy" && ONLY !== "chaos") {
+  if (ONLY && !E2E_SUITES.has(ONLY)) {
     finalize(report);
     return;
   }
@@ -179,6 +190,14 @@ async function main() {
       { id: "online", title: "在线直读与噪音过滤", run: runOnlineSuite },
       { id: "cache", title: "磁盘缓存上限与清理隔离", run: runCacheSuite },
       { id: "privacy", title: "隐私脱敏与版本展示", run: runPrivacySuite },
+      {
+        id: "architecture",
+        title:
+          "架构宪法回归（路由兜底 / 存储清洗 / 快捷键隔离 / 超高条漫逻辑页 / 设置 5 分区与深链 / 后置 i18n）",
+        run: runArchitectureSuite,
+      },
+      // 混沌套件必须放在最后：它会故意冻结主线程并重建窗口，
+      // 放在中间会让后续套件继承到一个半冻结的应用状态。
       { id: "chaos", title: "混沌、安全模式与恢复", run: runChaosSuite },
     ].filter((suite) => !ONLY || suite.id === ONLY);
     for (const suite of suites) {

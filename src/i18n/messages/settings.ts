@@ -9,10 +9,21 @@ const zhCN = {
   "settings.page.loading": "正在加载设置",
 
   "settings.tabs.label": "设置分区",
-  "settings.tabs.general": "常规",
+  "settings.tabs.general": "常规与外观",
   "settings.tabs.online": "在线源",
   "settings.tabs.reading": "统计",
   "settings.tabs.cache": "缓存",
+  "settings.tabs.network": "网络与在线源",
+  "settings.tabs.storage": "存储与数据",
+  "settings.tabs.privacy": "隐私与安全",
+  "settings.tabs.about": "关于与维护",
+
+  "settings.shortcuts.title": "全局快捷键",
+  "settings.shortcuts.description":
+    "输入框聚焦或输入法组合中（isComposing / keyCode 229）时，除 Ctrl/Cmd+W 外，全局快捷键一律不触发。",
+  "settings.shortcuts.note":
+    "需要使用快捷键时请先离开输入框；Ctrl/Cmd+W（关闭窗口）是唯一例外。",
+  "settings.shortcuts.command": "Ctrl/Cmd+K 打开命令中心",
 
   "settings.language.title": "界面语言",
   "settings.language.description":
@@ -209,10 +220,21 @@ const zhTW: SettingsMessages = {
   "settings.page.loading": "正在載入設定",
 
   "settings.tabs.label": "設定分區",
-  "settings.tabs.general": "一般",
+  "settings.tabs.general": "一般與外觀",
   "settings.tabs.online": "線上來源",
   "settings.tabs.reading": "統計",
   "settings.tabs.cache": "快取",
+  "settings.tabs.network": "網路與線上來源",
+  "settings.tabs.storage": "儲存與資料",
+  "settings.tabs.privacy": "隱私與安全",
+  "settings.tabs.about": "關於與維護",
+
+  "settings.shortcuts.title": "全域快速鍵",
+  "settings.shortcuts.description":
+    "輸入框聚焦或輸入法組字中（isComposing / keyCode 229）時，除 Ctrl/Cmd+W 外，全域快速鍵一律不觸發。",
+  "settings.shortcuts.note":
+    "需要使用快速鍵時請先離開輸入框；Ctrl/Cmd+W（關閉視窗）是唯一例外。",
+  "settings.shortcuts.command": "Ctrl/Cmd+K 開啟命令中心",
 
   "settings.language.title": "介面語言",
   "settings.language.description":
@@ -409,10 +431,21 @@ const en: SettingsMessages = {
   "settings.page.loading": "Loading settings",
 
   "settings.tabs.label": "Settings sections",
-  "settings.tabs.general": "General",
+  "settings.tabs.general": "General & appearance",
   "settings.tabs.online": "Online",
   "settings.tabs.reading": "Stats",
   "settings.tabs.cache": "Cache",
+  "settings.tabs.network": "Network & sources",
+  "settings.tabs.storage": "Storage & data",
+  "settings.tabs.privacy": "Privacy & security",
+  "settings.tabs.about": "About & maintenance",
+
+  "settings.shortcuts.title": "Global shortcuts",
+  "settings.shortcuts.description":
+    "While an input is focused or an IME is composing (isComposing / keyCode 229), no global shortcut fires except Ctrl/Cmd+W.",
+  "settings.shortcuts.note":
+    "Move focus out of the input first; Ctrl/Cmd+W (close window) is the only exception.",
+  "settings.shortcuts.command": "Ctrl/Cmd+K opens the command center",
 
   "settings.language.title": "Interface language",
   "settings.language.description":
@@ -610,10 +643,21 @@ const es: SettingsMessages = {
   "settings.page.loading": "Cargando ajustes",
 
   "settings.tabs.label": "Secciones de ajustes",
-  "settings.tabs.general": "General",
+  "settings.tabs.general": "General y apariencia",
   "settings.tabs.online": "En línea",
   "settings.tabs.reading": "Datos",
   "settings.tabs.cache": "Caché",
+  "settings.tabs.network": "Red y fuentes",
+  "settings.tabs.storage": "Almacenamiento y datos",
+  "settings.tabs.privacy": "Privacidad y seguridad",
+  "settings.tabs.about": "Acerca de y mantenimiento",
+
+  "settings.shortcuts.title": "Atajos globales",
+  "settings.shortcuts.description":
+    "Con un campo enfocado o el IME en composición (isComposing / keyCode 229), ningún atajo global se activa salvo Ctrl/Cmd+W.",
+  "settings.shortcuts.note":
+    "Quita el foco del campo primero; Ctrl/Cmd+W (cerrar ventana) es la única excepción.",
+  "settings.shortcuts.command": "Ctrl/Cmd+K abre el centro de comandos",
 
   "settings.language.title": "Idioma de la interfaz",
   "settings.language.description":
@@ -820,10 +864,21 @@ const ja: SettingsMessages = {
   "settings.page.loading": "設定を読み込み中",
 
   "settings.tabs.label": "設定セクション",
-  "settings.tabs.general": "一般",
+  "settings.tabs.general": "一般と外観",
   "settings.tabs.online": "オンライン",
   "settings.tabs.reading": "統計",
   "settings.tabs.cache": "キャッシュ",
+  "settings.tabs.network": "ネットワークとソース",
+  "settings.tabs.storage": "ストレージとデータ",
+  "settings.tabs.privacy": "プライバシーとセキュリティ",
+  "settings.tabs.about": "情報とメンテナンス",
+
+  "settings.shortcuts.title": "グローバルショートカット",
+  "settings.shortcuts.description":
+    "入力欄にフォーカスがある、または IME 変換中（isComposing / keyCode 229）は、Ctrl/Cmd+W 以外のグローバルショートカットは動作しません。",
+  "settings.shortcuts.note":
+    "ショートカットを使う前にフォーカスを外してください。Ctrl/Cmd+W（ウィンドウを閉じる）だけが例外です。",
+  "settings.shortcuts.command": "Ctrl/Cmd+K でコマンドセンターを開く",
 
   "settings.language.title": "表示言語",
   "settings.language.description":
@@ -1031,10 +1086,21 @@ const ko: SettingsMessages = {
   "settings.page.loading": "설정 불러오는 중",
 
   "settings.tabs.label": "설정 섹션",
-  "settings.tabs.general": "일반",
+  "settings.tabs.general": "일반 및 모양",
   "settings.tabs.online": "온라인",
   "settings.tabs.reading": "통계",
   "settings.tabs.cache": "캐시",
+  "settings.tabs.network": "네트워크 및 소스",
+  "settings.tabs.storage": "저장공간 및 데이터",
+  "settings.tabs.privacy": "개인정보 및 보안",
+  "settings.tabs.about": "정보 및 유지보수",
+
+  "settings.shortcuts.title": "전역 단축키",
+  "settings.shortcuts.description":
+    "입력란에 포커스가 있거나 입력기 조합 중(isComposing / keyCode 229)이면 Ctrl/Cmd+W를 제외한 전역 단축키가 동작하지 않습니다.",
+  "settings.shortcuts.note":
+    "단축키를 쓰려면 먼저 입력란 밖으로 포커스를 옮기세요. Ctrl/Cmd+W(창 닫기)만 예외입니다.",
+  "settings.shortcuts.command": "Ctrl/Cmd+K로 명령 센터 열기",
 
   "settings.language.title": "인터페이스 언어",
   "settings.language.description":

@@ -4,11 +4,13 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import {
   initialLocale,
+  isLocale,
   localeLabel,
   LOCALE_STORAGE_KEY,
   type Locale,
@@ -88,13 +90,32 @@ export function I18nProvider({
   documentTitleKey?: MessageKey;
 }) {
   const [locale, setLocaleState] = useState<Locale>(initialLocale);
+  const externalSyncRef = useRef(false);
   activeLocale = locale;
+
+  // 跨窗口同步：其它窗口改写 mr-locale 时只更新状态，不回写 localStorage。
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== LOCALE_STORAGE_KEY) return;
+      if (!isLocale(event.newValue)) return;
+      externalSyncRef.current = true;
+      setLocaleState(event.newValue);
+      activeLocale = event.newValue;
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   useEffect(() => {
     document.documentElement.lang = locale;
     document.documentElement.dir = "ltr";
     document.title =
       messages[locale][documentTitleKey] ?? messages["zh-CN"][documentTitleKey];
+    if (externalSyncRef.current) {
+      // 本次变更来自 storage 事件，写入方已落盘，跳过 write 以避免回环
+      externalSyncRef.current = false;
+      return;
+    }
     try {
       localStorage.setItem(LOCALE_STORAGE_KEY, locale);
     } catch {

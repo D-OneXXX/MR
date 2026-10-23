@@ -204,7 +204,8 @@ export async function runVisualSuite(ctx, report) {
       const settingsLayout = await currentLayout(page);
       recordTabs(report, { locale, theme, layout: settingsLayout });
       if (theme === "light") {
-        await openSettingsTab(page, 2);
+        // 5 分区顺序：general=0 / network=1 / storage=2 / privacy=3 / about=4。
+        await openSettingsTab(page, 3);
         const privacyContrast = await contrastFailures(page);
         recordContrast(report, { locale, theme, page: "settings-privacy", rows: privacyContrast });
       }
@@ -408,16 +409,16 @@ function recordTabs(report, { locale, theme, layout }) {
   const labels = layout.tabs.map((tab) => tab.text).join(" / ");
   const uniqueRows = new Set(layout.tabs.map((tab) => tab.top));
   const maxRight = Math.max(0, ...layout.tabs.map((tab) => tab.right));
-  if (layout.tabs.length !== 7 || uniqueRows.size !== 1 || maxRight > layout.inner[0] + 1) {
+  if (layout.tabs.length !== 5 || uniqueRows.size !== 1 || maxRight > layout.inner[0] + 1) {
     fail(report, {
       id: "visual:tabs-one-row",
       suite: "visual",
       layer: "visual",
-      title: `设置 7 个 Tabs 在最小宽度必须单行完整可见（${locale}/${theme}）`,
+      title: `设置 5 个 Tabs 在最小宽度必须单行完整可见（${locale}/${theme}）`,
       severity: "P2",
       details: `count=${layout.tabs.length}, rows=${uniqueRows.size}, maxRight=${maxRight}, inner=${layout.inner[0]}, tabs=${labels}`,
-      location: "src/pages/Settings.tsx:694-741",
-      expected: "7 个标签同一行且不越界",
+      location: "src/pages/Settings.tsx",
+      expected: "5 个标签同一行且不越界",
       actual: JSON.stringify(layout.tabs),
     });
   } else {

@@ -1,23 +1,43 @@
 import type { DiagnosticBundle } from "./types";
 import { APP_VERSION, BUILD_COMMIT } from "@/lib/version";
+import { translate, type MessageKey, type TranslateVars } from "@/i18n";
 
-const ACTION_LABELS: Record<string, string> = {
-  navigation: "Navigation",
-  readerMode: "Reader mode change",
-  archiveImport: "Archive import",
-  folderImport: "Folder import",
-  onlineRead: "Online direct read",
-  settingsChange: "Settings change",
-  themeChange: "Theme change",
-  localeChange: "Locale change",
-  onlinePairing: "External browser pairing",
-  recovery: "Recovery action",
-  safeMode: "Safe mode",
-  update: "App update",
-  privacy: "Privacy / security action",
-  readerPage: "Reader page change",
-  other: "Other action",
-};
+/**
+ * `translate` 绑定的是 `I18nProvider` 维护的活动语言，因此本模块无需接收
+ * locale 参数；组件侧在 useMemo 依赖里加入 locale 即可在切换语言后重建。
+ * 字典值只承载纯文本，Markdown 结构（标题层级、列表符号、代码围栏）由本模块保证。
+ */
+function tr(key: MessageKey, vars?: TranslateVars): string {
+  return translate(key, vars);
+}
+
+const ACTION_KEY_PREFIX = "diagnostics.actionKind.";
+
+function actionLabel(kind: string): string {
+  const key = `${ACTION_KEY_PREFIX}${kind}` as MessageKey;
+  const label = tr(key);
+  // 未知 kind 的 key 在字典里不存在，translate 会原样返回 key，此时回落原字符串。
+  return label === key ? kind : label;
+}
+
+function readerLabel(mode?: string | null): string {
+  if (mode === "single" || mode === "double" || mode === "webtoon") {
+    return tr(`diagnostics.mode.${mode}`);
+  }
+  return tr("diagnostics.prompt.unknown");
+}
+
+function valueLabel(value: boolean): string {
+  return value ? tr("diagnostics.prompt.yes") : tr("diagnostics.prompt.no");
+}
+
+function stateLabel(active: boolean): string {
+  return active ? tr("diagnostics.prompt.active") : tr("diagnostics.prompt.inactive");
+}
+
+function heading(title: string): string {
+  return `## ${title}`;
+}
 
 function fenceFor(content: string): string {
   let longest = 0;
@@ -39,43 +59,43 @@ function codeBlock(content: string, language = ""): string {
   return `${fence}${language}\n${safe}\n${fence}`;
 }
 
-function actionLabel(kind: string): string {
-  return ACTION_LABELS[kind] ?? kind;
-}
-
-function readerLabel(mode?: string | null): string {
-  if (mode === "single" || mode === "double" || mode === "webtoon") {
-    return mode;
-  }
-  return "unknown";
-}
-
 function runtimeSection(bundle: DiagnosticBundle): string {
   const r = bundle.runtime;
+  const network = `${r.networkMode}${r.proxyScheme ? ` (${r.proxyScheme})` : ""}`;
+  const layout = `${readerLabel(r.readerMode)}${
+    r.readerPage !== null && r.readerPage !== undefined
+      ? `, ${tr("diagnostics.prompt.page", { page: r.readerPage + 1 })}`
+      : ""
+  }`;
+  const lines = [
+    tr("diagnostics.prompt.runtimeVersion", { version: r.version }),
+    tr("diagnostics.prompt.runtimeBuild", { build: r.buildBaseline }),
+    tr("diagnostics.prompt.runtimeBundle", {
+      version: APP_VERSION,
+      commit: BUILD_COMMIT,
+    }),
+    tr("diagnostics.prompt.runtimeOs", { os: r.os, arch: r.arch }),
+    tr("diagnostics.prompt.runtimeRoute", {
+      route: r.route ?? tr("diagnostics.prompt.unknown"),
+    }),
+    tr("diagnostics.prompt.runtimeReader", { mode: layout }),
+    tr("diagnostics.prompt.runtimeNetwork", { network }),
+    tr("diagnostics.prompt.runtimeOnline", { value: valueLabel(r.onlineEnabled) }),
+    tr("diagnostics.prompt.runtimeSafeMode", { value: stateLabel(r.safeMode) }),
+  ];
   return [
-    "## Runtime environment",
-    `- App version: ${r.version}`,
-    `- Build baseline: ${r.buildBaseline}`,
-    `- Frontend bundle: ${APP_VERSION} (${BUILD_COMMIT})`,
-    `- OS: ${r.os} (${r.arch})`,
-    `- Route: ${r.route ?? "unknown"}`,
-    `- Reader layout: ${readerLabel(r.readerMode)}${
-      r.readerPage !== null && r.readerPage !== undefined
-        ? `, page ${r.readerPage + 1}`
-        : ""
-    }`,
-    `- Network: ${r.networkMode}${r.proxyScheme ? ` (${r.proxyScheme})` : ""}`,
-    `- Online direct-read enabled: ${r.onlineEnabled ? "yes" : "no"}`,
-    `- Safe mode: ${r.safeMode ? "active" : "inactive"}`,
+    heading(tr("diagnostics.prompt.runtimeTitle")),
+    ...lines.map((line) => `- ${line}`),
   ].join("\n");
 }
 
 function breadcrumbSection(bundle: DiagnosticBundle): string {
+  const title = heading(tr("diagnostics.prompt.breadcrumbsTitle"));
   if (bundle.breadcrumbs.length === 0) {
-    return "## Recent action trail (last 20)\n\nNone recorded.";
+    return [title, "", tr("diagnostics.prompt.breadcrumbsNone")].join("\n");
   }
   return [
-    "## Recent action trail (last 20)",
+    title,
     "",
     ...bundle.breadcrumbs.map(
       (item) =>
@@ -87,8 +107,9 @@ function breadcrumbSection(bundle: DiagnosticBundle): string {
 }
 
 function errorSection(bundle: DiagnosticBundle): string {
+  const title = heading(tr("diagnostics.prompt.errorsTitle"));
   if (bundle.errors.length === 0) {
-    return "## Frontend / backend errors\n\nNone recorded.";
+    return [title, "", tr("diagnostics.prompt.errorsNone")].join("\n");
   }
   const items = bundle.errors.map((error, index) => {
     const body = [
@@ -101,38 +122,42 @@ function errorSection(bundle: DiagnosticBundle): string {
     ]
       .filter(Boolean)
       .join("\n");
-    return `### Error ${index + 1}\n\n${codeBlock(body, "text")}`;
+    const itemTitle = `### ${tr("diagnostics.prompt.errorItem", { index: index + 1 })}`;
+    return `${itemTitle}\n\n${codeBlock(body, "text")}`;
   });
-  return ["## Frontend / backend errors", "", ...items].join("\n\n");
+  return [title, "", ...items].join("\n\n");
 }
 
 function logSection(bundle: DiagnosticBundle): string {
+  const title = heading(tr("diagnostics.prompt.logsTitle"));
   if (bundle.logs.length === 0) {
-    return "## Developer logs\n\nNone recorded.";
+    return [title, "", tr("diagnostics.prompt.logsNone")].join("\n");
   }
   const body = bundle.logs
     .map((entry) => `[${entry.at}] [${entry.scope}] ${entry.message}`)
     .join("\n");
-  return `## Developer logs\n\n${codeBlock(body, "text")}`;
+  return `${title}\n\n${codeBlock(body, "text")}`;
 }
 
 /**
  * Deterministic prompt for a coding agent. All bundle values already passed the
  * Rust sanitizer; the user has previewed this text before copying/exporting.
+ * Text follows the active UI locale through `translate`.
  */
 export function buildDiagnosticPrompt(
   bundle: DiagnosticBundle,
   description: string,
 ): string {
-  const note = description.trim() || "(No additional description provided.)";
+  const note =
+    description.trim() || tr("diagnostics.prompt.noDescription");
   return [
-    "# MangaReader diagnostic report",
+    `# ${tr("diagnostics.prompt.title")}`,
     "",
-    `Generated at: ${bundle.generatedAt}`,
+    tr("diagnostics.prompt.generatedAt", { time: bundle.generatedAt }),
     "",
-    "> This report was generated locally. It has not been uploaded. Sensitive credentials and local manga paths were sanitized before preview.",
+    `> ${tr("diagnostics.prompt.localNote")}`,
     "",
-    "## User reproduction / description",
+    heading(tr("diagnostics.prompt.descriptionTitle")),
     "",
     note,
     "",
@@ -144,15 +169,15 @@ export function buildDiagnosticPrompt(
     "",
     logSection(bundle),
     "",
-    "## Requested diagnosis",
+    heading(tr("diagnostics.prompt.requestedTitle")),
     "",
-    "Act as a senior engineer debugging the local-first MangaReader desktop app (Tauri 2 + React 19 + TypeScript + Rust). Use the evidence above and return a concise, actionable report with exactly these sections:",
+    tr("diagnostics.prompt.requestedRole"),
     "",
-    "1. **Root cause** — classify as frontend rendering/state, Tauri IPC, Rust local-file/network parsing, or another category, and explain the evidence. If evidence is insufficient, say what is missing instead of guessing.",
-    "2. **Suspected code locations** — name the most likely MangaReader modules, functions, or file paths and why they fit the evidence; distinguish confirmed facts from hypotheses.",
-    "3. **Fix and temporary workaround** — propose a concrete fix, a minimal verification/test plan, and a safe user-facing workaround. Do not suggest uploading private logs or bypassing the local privacy model.",
+    `1. ${tr("diagnostics.prompt.rootCause")}`,
+    `2. ${tr("diagnostics.prompt.codeLocations")}`,
+    `3. ${tr("diagnostics.prompt.fix")}`,
     "",
-    "Output clear Markdown. Prefer specific, testable steps over generic advice.",
+    tr("diagnostics.prompt.format"),
     "",
   ].join("\n");
 }

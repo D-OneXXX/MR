@@ -10,8 +10,18 @@ permissions:
 
 jobs:
   release:
-    name: Build signed Windows release
-    runs-on: windows-latest
+    name: Build signed release (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            bundles: nsis
+          - name: linux
+            os: ubuntu-22.04
+            bundles: deb,rpm,appimage
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,6 +40,23 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
+      - name: Install WebKitGTK build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2
+
       - name: Install frontend dependencies
         run: npm ci
 
@@ -42,7 +69,7 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} does not match package.json version v${VERSION}." >&2
             exit 1
           fi
-          echo "Releasing v${VERSION}"
+          echo "Releasing v${VERSION} on ${{ matrix.name }}"
 
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v1
@@ -57,5 +84,5 @@ jobs:
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
-          updaterJsonPreferNsis: true
-          args: "--bundles nsis"
+          updaterJsonPreferNsis: ${{ runner.os == 'Windows' }}
+          args: "--bundles ${{ matrix.bundles }}"

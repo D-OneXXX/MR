@@ -35,12 +35,25 @@ pub struct OpenWithRequest {
     pub error_code: Option<String>,
 }
 
+/// 去重键：Windows 文件系统大小写不敏感且接受两种分隔符；Linux/macOS
+/// 大小写敏感，`Book.cbz` 与 `book.cbz` 是两本书，必须原样区分。
+fn dedup_key(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        path.replace('/', "\\").to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string()
+    }
+}
+
 /// 从命令行参数中提取可打开路径。
 ///
 /// - 跳过 argv[0]（可执行文件自身）；
 /// - 跳过空串与以 `-` 开头的开关参数；
-/// - 只接受**已存在的目录**或扩展名为 `.zip` / `.cbz` 的文件；
-/// - Windows 路径大小写不敏感去重，保留首次出现顺序。
+/// - 只接受**已存在的目录**或扩展名为 `.zip` / `.cbz` 的文件（大小写不敏感）；
+/// - 按平台语义去重（Windows 忽略大小写，Linux/macOS 精确匹配），保留首次出现顺序。
 pub fn extract_paths(argv: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -58,8 +71,7 @@ pub fn extract_paths(argv: impl IntoIterator<Item = String>) -> Vec<String> {
         if !supported {
             continue;
         }
-        let key = trimmed.replace('/', "\\").to_ascii_lowercase();
-        if seen.insert(key) {
+        if seen.insert(dedup_key(trimmed)) {
             out.push(trimmed.to_string());
         }
     }

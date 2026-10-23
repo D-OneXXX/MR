@@ -1,18 +1,45 @@
-# MangaReader QA 摘要（v0.15.0）
+# MangaReader QA 摘要（v0.16.0）
 
 独立 QA 使用隔离数据目录与本地 stub，不触碰真实书库、不写用户数据。
 本轮的架构红线固化在仓库根目录 [AGENTS.md](../AGENTS.md)。
 
-## 最近一次运行
+## 最近一次运行（0.16.0 Linux 移植验收）
 
-- 版本：`0.15.0`
-- QA：**222/222（100%）**
-- 运行时缺陷：P0=0 · P1=0 · P2=0 · P3=0
-- 静态审计 backlog：**6 条 P3**（P0/P1/P2=0）
-- Rust 单测：**274 passed**
-- `tsc` / `npm run build` / 版本门禁：通过
+- 版本：`0.16.0`
+- 全量 E2E：**222/222（100%）**，P0=0 · P1=0 · P2=0 · P3=0
+  （visual / reader / online / cache / privacy / architecture / chaos 全绿；
+  首次以新构建二进制运行时 online/architecture 出现过两例冷启动时序抖动，
+  复跑两次均稳定通过，判定为 flake 而非缺陷）
+- Rust 单测：**294 passed**（含 Linux 移植新增：ZIP GBK 条目名修复、
+  gsettings/kioslaverc 代理解析、`/run/media`+`/mnt` 脱敏、DMABUF 决策表、
+  deb/rpm/AppImage 格式解析）
+- `npx tsc --noEmit`、`npm run build`、版本门禁：通过
+- `cargo check --all-targets`（Windows 宿主）：通过
+- Linux 专属 `cfg(linux)` 代码的**真实编译**由
+  `.github/workflows/ci-linux-check.yml`（ubuntu-22.04）在推送
+  `feat/linux-port` 时验证；`release.yml` 双矩阵产出 deb/rpm/AppImage。
 
 生成的逐条报告在 `tests/qa/reports/latest.md`（构建产物，不提交）。
+
+### 0.16.0 新增验收证据
+
+- **文件关联/CLI 直开 + 单实例**：隔离数据目录启动 debug 应用，传入 20 页 CBZ →
+  主窗 hash 为 `#/reader/<id>`，`list_books` 仅该书；再启动第二个实例传入另一本 CBZ →
+  第二进程退出码 0，已有主窗自动切到第二本。证据：临时 CDP 冒烟脚本输出
+  `FIRST_HASH` / `SECOND_EXIT {"code":0}` / `SECOND_HASH`。
+- **失效路径无损重定位**：真实 20 页 CBZ 写到第 15 页 → 重命名文件 → 书库卡片出现
+  「文件位置已变更」胶囊 → 点击弹出重定位引导 → 事务迁移后 `currentPage=15`、
+  `pageCount=20`、`missing=false`，阅读历史同步迁移。Rust 回归：
+  `renamed_archive_keeps_page_fifteen_after_relocation`。
+- **备份/恢复**：真实应用内导出 `.mrbackup`（1 本书、偏好 JSON，78 KB）→ 把进度改成
+  第 2 页、主题改成 light → 恢复 → 进度回到第 15 页、主题回到 dark、偏好 JSON
+  完整带回 `mr-locale=en`；导出快照不含 `online_headers` / 过滤事件 / app_meta。
+  Rust 回归：`backup::tests` 5 项。
+- **Updater**：`tauri.conf.json` 的 `createUpdaterArtifacts` / `fileAssociations` /
+  `plugins.updater` 公钥与 `latest.json` endpoint 已校验；设置页「GitHub 自动更新」
+  与「本地备份与恢复」面板在真实应用中可见；静态能力墙 17/17 通过。
+  **未实际发布 GitHub Release**，`latest.json` 生成由 `release.yml` 的
+  `tauri-action@v1`（`uploadUpdaterJson: true`）保证，需用户配置签名 secrets 后推送 tag 验证。
 
 ## 覆盖范围
 

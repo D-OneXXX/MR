@@ -21,6 +21,12 @@ export interface AppInfo {
   profile: string;
   signatureConfigured: boolean;
   sha256Enforced: boolean;
+  /**
+   * Linux 安装形态（Rust `platform::install_channel`）：
+   * `appimage` 可自动替换 / `system` deb/rpm 引导手动安装 / `portable` /
+   * 空串 = 非 Linux（前端跳过 Linux 更新策略提示）。
+   */
+  linuxInstall: string;
 }
 
 export interface ArtifactInfo {

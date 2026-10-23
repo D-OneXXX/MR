@@ -114,12 +114,17 @@
 }
 
 @theme inline {
+  /* Linux CJK 防乱码：WebKitGTK 环境没有 PingFang/微软雅黑，必须显式
+     回退到 Noto Sans CJK（简/繁/日/韩）与文泉驿微米黑，否则中日韩标题
+     会渲染成方块。西文优先，CJK 按区排列，最后保留 Windows/macOS 字体。 */
   --font-sans: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", "Inter",
-    "Inter Variable", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
-    sans-serif;
+    "Inter Variable", "Noto Sans CJK SC", "Noto Sans CJK TC",
+    "Noto Sans CJK JP", "Noto Sans CJK KR", "WenQuanYi Micro Hei",
+    "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-heading: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", "Inter",
-    "Inter Variable", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
-    sans-serif;
+    "Inter Variable", "Noto Sans CJK SC", "Noto Sans CJK TC",
+    "Noto Sans CJK JP", "Noto Sans CJK KR", "WenQuanYi Micro Hei",
+    "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
 
   --color-background: var(--sh-background);

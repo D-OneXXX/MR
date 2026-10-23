@@ -71,8 +71,39 @@ pub fn is_image_name(name: &str) -> bool {
     })
 }
 
+/// zip 条目名对：`display` 用于展示与自然序排序，`lookup` 用于
+/// `ZipArchive::by_name` 查找（必须与 zip crate 内部解码一致）。
+///
+/// 背景：条目未带 UTF-8 标志时 zip crate 按 CP437 解码，而中文 Windows
+/// 压缩工具（WinRAR/360压缩等）实际写入的是 GBK 字节，Linux/Windows
+/// 上展示层都会变成乱码。修复只影响展示名——即使猜测错误，
+/// `lookup` 仍保证按索引读页 100% 命中。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZipEntryName {
+    pub display: String,
+    pub lookup: String,
+}
+
+/// 非 UTF-8 ZIP 条目名修复（纯函数，任何平台都可测试）。
+///
+/// - 原始字节是合法 UTF-8 → 与 zip crate 解码一致，原样返回；
+/// - 否则按 GBK 解码；解码出现替换字符（说明不是 GBK）→ 回退 zip crate
+///   的 CP437 结果。Shift_JIS 压缩包可能被误判为 GBK 汉字，但只影响
+///   展示名，页序与读取不受影响（UTF-8 名与 ASCII 名走不到该分支）。
+fn fixup_entry_name(raw: &[u8], zip_decoded: &str) -> String {
+    if std::str::from_utf8(raw).is_ok() {
+        return zip_decoded.to_string();
+    }
+    let (decoded, _, had_errors) = encoding_rs::GBK.decode(raw);
+    if had_errors {
+        zip_decoded.to_string()
+    } else {
+        decoded.into_owned()
+    }
+}
+
 /// 统一收集 zip/cbz 图片条目，并在打开阶段拒绝 zip bomb / 超大归档。
-fn zip_image_names(archive: &mut zip::ZipArchive<File>) -> Result<Vec<String>, BackendError> {
+fn zip_image_names(archive: &mut zip::ZipArchive<File>) -> Result<Vec<ZipEntryName>, BackendError> {
     let mut names = Vec::new();
     let mut total: u64 = 0;
     for index in 0..archive.len() {
@@ -91,7 +122,11 @@ fn zip_image_names(archive: &mut zip::ZipArchive<File>) -> Result<Vec<String>, B
                 "压缩包总解压体积超过安全上限（4 GiB）".into(),
             ));
         }
-        names.push(entry.name().to_string());
+        let display = fixup_entry_name(entry.name_raw(), entry.name());
+        names.push(ZipEntryName {
+            display,
+            lookup: entry.name().to_string(),
+        });
     }
     Ok(names)
 }
@@ -183,8 +218,8 @@ impl ImageSource for FolderSource {
 /// zip/cbz 源：无常驻句柄，每次按需打开归档、只读命中条目（流式、读完即关）。
 pub struct ZipSource {
     path: PathBuf,
-    /// 归档内图片条目名（按名排序，索引稳定）。
-    names: Vec<String>,
+    /// 归档内图片条目名（按展示名自然序排序，索引稳定）。
+    names: Vec<ZipEntryName>,
 }
 
 impl ZipSource {
@@ -192,7 +227,7 @@ impl ZipSource {
         let file = File::open(path)?;
         let mut archive = zip::ZipArchive::new(file)?;
         let mut names = zip_image_names(&mut archive)?;
-        names.sort_by(|a, b| crate::commands::natural_cmp_path(a, b));
+        names.sort_by(|a, b| crate::commands::natural_cmp_path(&a.display, &b.display));
         Ok(Self {
             path: path.to_path_buf(),
             names,
@@ -210,7 +245,7 @@ impl ImageSource for ZipSource {
     }
 
     fn entry_names(&self) -> Result<Vec<String>, BackendError> {
-        Ok(self.names.clone())
+        Ok(self.names.iter().map(|n| n.display.clone()).collect())
     }
 
     fn read_raw(&self, index: usize) -> Result<RawPage, BackendError> {
@@ -219,14 +254,15 @@ impl ImageSource for ZipSource {
             .get(index)
             .ok_or_else(|| BackendError::Msg(format!("页码越界：{index}")))?;
         let mut archive = self.reopen()?;
-        let mut entry = archive.by_name(name)?;
+        let mut entry = archive.by_name(&name.lookup)?;
         // 安全：拒绝 ZipSlip（虽然只读内存不落盘，仍做校验）。
         if entry.enclosed_name().is_none() {
-            return Err(BackendError::Zip(format!("非法条目名：{name}")));
+            return Err(BackendError::Zip(format!("非法条目名：{}", name.display)));
         }
         if entry.size() > PAGE_MAX_BYTES as u64 {
             return Err(BackendError::Zip(format!(
-                "单页解压体积超过上限：{name}"
+                "单页解压体积超过上限：{}",
+                name.display
             )));
         }
         let mut bytes = Vec::with_capacity(entry.size().min(32 * 1024 * 1024) as usize);
@@ -235,10 +271,11 @@ impl ImageSource for ZipSource {
             .read_to_end(&mut bytes)?;
         if bytes.len() > PAGE_MAX_BYTES {
             return Err(BackendError::Zip(format!(
-                "单页解压体积超过上限：{name}"
+                "单页解压体积超过上限：{}",
+                name.display
             )));
         }
-        let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let ext = name.display.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         Ok(RawPage { bytes, ext })
     }
 }
@@ -472,7 +509,7 @@ enum HandleKind {
     },
     Zip {
         archive: parking_lot::Mutex<zip::ZipArchive<File>>,
-        names: Vec<String>,
+        names: Vec<ZipEntryName>,
     },
     Online(OnlineSource),
 }
@@ -490,7 +527,7 @@ impl SourceHandle {
             let file = File::open(path)?;
             let mut archive = zip::ZipArchive::new(file)?;
             let mut names = zip_image_names(&mut archive)?;
-            names.sort_by(|a, b| crate::commands::natural_cmp_path(a, b));
+            names.sort_by(|a, b| crate::commands::natural_cmp_path(&a.display, &b.display));
             Ok(Self {
                 path: path.to_path_buf(),
                 kind: HandleKind::Zip {
@@ -551,7 +588,10 @@ impl SourceHandle {
                         .to_string()
                 })
                 .collect()),
-            HandleKind::Zip { names, .. } => Ok(names.clone()),
+            HandleKind::Zip { names, .. } => Ok(names
+                .iter()
+                .map(|n| n.display.clone())
+                .collect()),
             HandleKind::Online(s) => s.entry_names(),
         }
     }
@@ -575,13 +615,14 @@ impl SourceHandle {
                     .get(index)
                     .ok_or_else(|| BackendError::Msg(format!("页码越界：{index}")))?;
                 let mut ar = archive.lock();
-                let mut entry = ar.by_name(name)?;
+                let mut entry = ar.by_name(&name.lookup)?;
                 if entry.enclosed_name().is_none() {
-                    return Err(BackendError::Zip(format!("非法条目名：{name}")));
+                    return Err(BackendError::Zip(format!("非法条目名：{}", name.display)));
                 }
                 if entry.size() > PAGE_MAX_BYTES as u64 {
                     return Err(BackendError::Zip(format!(
-                        "单页解压体积超过上限：{name}"
+                        "单页解压体积超过上限：{}",
+                        name.display
                     )));
                 }
                 let mut bytes = Vec::with_capacity(entry.size().min(32 * 1024 * 1024) as usize);
@@ -590,10 +631,11 @@ impl SourceHandle {
                     .read_to_end(&mut bytes)?;
                 if bytes.len() > PAGE_MAX_BYTES {
                     return Err(BackendError::Zip(format!(
-                        "单页解压体积超过上限：{name}"
+                        "单页解压体积超过上限：{}",
+                        name.display
                     )));
                 }
-                let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                let ext = name.display.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
                 Ok(RawPage { bytes, ext })
             }
             HandleKind::Online(s) => s.read_raw(index),
@@ -623,13 +665,13 @@ impl SourceHandle {
                     .get(index)
                     .ok_or_else(|| BackendError::Msg(format!("页码越界：{index}")))?;
                 let mut ar = archive.lock();
-                let mut entry = ar.by_name(name)?;
+                let mut entry = ar.by_name(&name.lookup)?;
                 if entry.enclosed_name().is_none() {
-                    return Err(BackendError::Zip(format!("非法条目名：{name}")));
+                    return Err(BackendError::Zip(format!("非法条目名：{}", name.display)));
                 }
                 let mut bytes = Vec::new();
                 (&mut entry).take(max_bytes).read_to_end(&mut bytes)?;
-                let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                let ext = name.display.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
                 Ok(RawPage { bytes, ext })
             }
             // 在线页没有可廉价读取的本地 header：头部探测必须走整页下载，直接拒绝。
@@ -646,7 +688,7 @@ mod tests {
     use crate::online::http::{HttpResponse, HttpTransport};
     use crate::online::{OnlineError, PageRef};
 
-    use super::ImageSource;
+    use super::{fixup_entry_name, ImageSource};
 
     /// 固定响应的假传输：记录每次请求的 (url, referer, max_bytes, header_scope)。
     struct FakeHttp {
@@ -690,6 +732,22 @@ mod tests {
                 body: self.body.clone(),
             })
         }
+    }
+
+    #[test]
+    fn zip_entry_name_fixup_recovers_gbk_but_keeps_utf8() {
+        // 合法 UTF-8 原始字节 → 与 zip crate 解码一致（含非 ASCII）。
+        let utf8_raw = "第01话/1.png".as_bytes();
+        assert_eq!(fixup_entry_name(utf8_raw, "decoded"), "decoded");
+
+        // GBK 字节（中文 Windows 压缩工具、未设 UTF-8 标志）→ 修复为汉字。
+        let (gbk_bytes, _, _) = encoding_rs::GBK.encode("第01话/1.png");
+        assert!(std::str::from_utf8(&gbk_bytes).is_err(), "GBK 字节不应是合法 UTF-8");
+        let fixed = fixup_entry_name(&gbk_bytes, "mojibake");
+        assert_eq!(fixed, "第01话/1.png");
+
+        // 既非 UTF-8 也非 GBK 的字节 → 回退 zip crate 的 CP437 解码结果。
+        assert_eq!(fixup_entry_name(&[0xff, 0xfe, 0x81, 0x30, 0x0a], "cp437"), "cp437");
     }
 
     fn tiny_png() -> Vec<u8> {

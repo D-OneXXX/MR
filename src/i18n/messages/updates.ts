@@ -134,6 +134,20 @@ const zhCN = {
   "updates.native.errorCheck": "无法连接 GitHub 更新服务，请检查网络后重试。",
   "updates.native.errorInstall": "下载或安装更新失败，当前版本未受影响。",
   "updates.native.errorRelaunch": "重启应用失败，请手动关闭并重新打开 MangaReader。",
+  "updates.linux.strategyTitle": "Linux 更新策略",
+  "updates.linux.appimageHint":
+    "AppImage 运行态：下载校验通过后可自动替换当前文件并重启，无需 root。",
+  "updates.linux.systemHint":
+    "系统安装态（.deb/.rpm）：/usr 下的文件由包管理器管辖，应用不会自动替换，请下载后手动安装。",
+  "updates.linux.portableHint":
+    "便携运行态：请下载对应格式的安装包后手动安装或替换。",
+  "updates.linux.manualTitle": "请使用包管理器安装",
+  "updates.linux.debCommand": "sudo apt install ./MangaReader_{version}_amd64.deb",
+  "updates.linux.rpmCommand": "sudo dnf install ./MangaReader-{version}-x86_64.rpm",
+  "updates.linux.stagingDir":
+    "下载完成的安装包位于系统临时目录 /tmp/mangareader-updates/。",
+  "updates.linux.libfuse2":
+    "Ubuntu 22.04 及以上版本双击运行 AppImage 需要 libfuse2（sudo apt install libfuse2）。",
 } as const;
 
 const en: Record<keyof typeof zhCN, string> = {
@@ -286,6 +300,20 @@ const en: Record<keyof typeof zhCN, string> = {
     "Downloading or installing the update failed. Your current version is unaffected.",
   "updates.native.errorRelaunch":
     "Could not restart the app. Close and open MangaReader manually.",
+  "updates.linux.strategyTitle": "Linux update policy",
+  "updates.linux.appimageHint":
+    "AppImage: once the download is verified, the app replaces its own file and relaunches — no root required.",
+  "updates.linux.systemHint":
+    "System install (.deb/.rpm): files under /usr belong to the package manager; the app never replaces them, install manually instead.",
+  "updates.linux.portableHint":
+    "Portable run: download the matching package and install or replace it manually.",
+  "updates.linux.manualTitle": "Install with your package manager",
+  "updates.linux.debCommand": "sudo apt install ./MangaReader_{version}_amd64.deb",
+  "updates.linux.rpmCommand": "sudo dnf install ./MangaReader-{version}-x86_64.rpm",
+  "updates.linux.stagingDir":
+    "Verified installers are staged in the system temp directory /tmp/mangareader-updates/.",
+  "updates.linux.libfuse2":
+    "Ubuntu 22.04+ needs libfuse2 to launch AppImages (sudo apt install libfuse2).",
 };
 
 const zhTW: Record<keyof typeof zhCN, string> = {
@@ -421,6 +449,20 @@ const zhTW: Record<keyof typeof zhCN, string> = {
   "updates.native.errorInstall": "下載或安裝更新失敗，目前版本未受影響。",
   "updates.native.errorRelaunch":
     "無法重新啟動應用程式，請手動關閉並重新開啟 MangaReader。",
+  "updates.linux.strategyTitle": "Linux 更新策略",
+  "updates.linux.appimageHint":
+    "AppImage 執行態：下載校驗通過後可自動取代目前檔案並重新啟動，無需 root。",
+  "updates.linux.systemHint":
+    "系統安裝態（.deb/.rpm）：/usr 下的檔案由套件管理器管轄，應用程式不會自動取代，請下載後手動安裝。",
+  "updates.linux.portableHint":
+    "可攜執行態：請下載對應格式的安裝包後手動安裝或取代。",
+  "updates.linux.manualTitle": "請使用套件管理器安裝",
+  "updates.linux.debCommand": "sudo apt install ./MangaReader_{version}_amd64.deb",
+  "updates.linux.rpmCommand": "sudo dnf install ./MangaReader-{version}-x86_64.rpm",
+  "updates.linux.stagingDir":
+    "下載完成的安裝包位於系統暫存目錄 /tmp/mangareader-updates/。",
+  "updates.linux.libfuse2":
+    "Ubuntu 22.04 及以上版本雙擊執行 AppImage 需要 libfuse2（sudo apt install libfuse2）。",
 };
 const es: Record<keyof typeof zhCN, string> = {
   "updates.tab": "Actualizar",
@@ -572,6 +614,20 @@ const es: Record<keyof typeof zhCN, string> = {
     "La descarga o instalación de la actualización falló. La versión actual no se ha modificado.",
   "updates.native.errorRelaunch":
     "No se pudo reiniciar la aplicación. Cierra y abre MangaReader manualmente.",
+  "updates.linux.strategyTitle": "Política de actualización en Linux",
+  "updates.linux.appimageHint":
+    "AppImage: tras verificar la descarga, la app sustituye su propio archivo y se reinicia, sin necesidad de root.",
+  "updates.linux.systemHint":
+    "Instalación del sistema (.deb/.rpm): los archivos bajo /usr pertenecen al gestor de paquetes; la app nunca los sustituye, instala manualmente.",
+  "updates.linux.portableHint":
+    "Ejecución portable: descarga el paquete correspondiente e instálalo o sustitúyelo manualmente.",
+  "updates.linux.manualTitle": "Instala con tu gestor de paquetes",
+  "updates.linux.debCommand": "sudo apt install ./MangaReader_{version}_amd64.deb",
+  "updates.linux.rpmCommand": "sudo dnf install ./MangaReader-{version}-x86_64.rpm",
+  "updates.linux.stagingDir":
+    "Los instaladores verificados se guardan en el directorio temporal /tmp/mangareader-updates/.",
+  "updates.linux.libfuse2":
+    "Ubuntu 22.04+ necesita libfuse2 para ejecutar AppImages (sudo apt install libfuse2).",
 };
 const ja: Record<keyof typeof zhCN, string> = {
   "updates.tab": "更新",
@@ -723,6 +779,20 @@ const ja: Record<keyof typeof zhCN, string> = {
     "アップデートのダウンロードまたはインストールに失敗しました。現在のバージョンは影響を受けません。",
   "updates.native.errorRelaunch":
     "アプリを再起動できませんでした。MangaReader を手動で閉じて開き直してください。",
+  "updates.linux.strategyTitle": "Linux 更新ポリシー",
+  "updates.linux.appimageHint":
+    "AppImage 実行環境：ダウンロードの検証後、アプリ自身のファイルを置き換えて再起動します。root は不要です。",
+  "updates.linux.systemHint":
+    "システムインストール（.deb/.rpm）：/usr 配下のファイルはパッケージマネージャーが管理するため、アプリは自動置換しません。手動でインストールしてください。",
+  "updates.linux.portableHint":
+    "ポータブル実行：対応する形式のパッケージをダウンロードして手動でインストールまたは置換してください。",
+  "updates.linux.manualTitle": "パッケージマネージャーでインストール",
+  "updates.linux.debCommand": "sudo apt install ./MangaReader_{version}_amd64.deb",
+  "updates.linux.rpmCommand": "sudo dnf install ./MangaReader-{version}-x86_64.rpm",
+  "updates.linux.stagingDir":
+    "検証済みのインストーラーはシステムの一時ディレクトリ /tmp/mangareader-updates/ に保存されます。",
+  "updates.linux.libfuse2":
+    "Ubuntu 22.04 以降で AppImage を起動するには libfuse2 が必要です（sudo apt install libfuse2）。",
 };
 const ko: Record<keyof typeof zhCN, string> = {
   "updates.tab": "업데이트",
@@ -874,6 +944,20 @@ const ko: Record<keyof typeof zhCN, string> = {
     "업데이트 다운로드 또는 설치에 실패했습니다. 현재 버전은 영향을 받지 않습니다.",
   "updates.native.errorRelaunch":
     "앱을 다시 시작하지 못했습니다. MangaReader를 직접 종료한 후 다시 여세요.",
+  "updates.linux.strategyTitle": "Linux 업데이트 정책",
+  "updates.linux.appimageHint":
+    "AppImage 실행 환경: 다운로드 검증 후 앱이 자기 파일을 교체하고 다시 시작합니다. root 권한이 필요 없습니다.",
+  "updates.linux.systemHint":
+    "시스템 설치(.deb/.rpm): /usr의 파일은 패키지 관리자가 관리하므로 앱이 자동으로 교체하지 않습니다. 수동으로 설치하세요.",
+  "updates.linux.portableHint":
+    "휴대용 실행: 해당 형식의 패키지를 내려받아 수동으로 설치하거나 교체하세요.",
+  "updates.linux.manualTitle": "패키지 관리자로 설치하세요",
+  "updates.linux.debCommand": "sudo apt install ./MangaReader_{version}_amd64.deb",
+  "updates.linux.rpmCommand": "sudo dnf install ./MangaReader-{version}-x86_64.rpm",
+  "updates.linux.stagingDir":
+    "검증된 설치 패키지는 시스템 임시 디렉터리 /tmp/mangareader-updates/에 저장됩니다.",
+  "updates.linux.libfuse2":
+    "Ubuntu 22.04 이상에서 AppImage를 실행하려면 libfuse2가 필요합니다(sudo apt install libfuse2).",
 };
 
 export const updatesMessages = {

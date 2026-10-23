@@ -30,6 +30,7 @@ import {
   SettingsSection,
 } from "@/components/settings/SettingsSection";
 import { useI18n, type MessageKey } from "@/i18n";
+import { isLinuxPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { useUpdater } from "@/features/update/UpdateProvider";
 import {
@@ -303,6 +304,16 @@ export default function UpdatesPanel() {
       : null;
   const nativeNotes = nativeInfo?.body?.trim() ?? "";
   const nativeNeedsRelaunch = !isWindowsPlatform();
+
+  // Linux 更新策略：系统安装态（deb/rpm）的应用不能也不应自动改 /usr 下的
+  // 文件；AppImage 运行态才允许后端自动替换。安装形态由 Rust 侧判定。
+  const isLinux = isLinuxPlatform();
+  const linuxChannel = appInfo?.linuxInstall ?? "";
+  const linuxSystemBlocked =
+    isLinux &&
+    linuxChannel === "system" &&
+    (ready?.format === "deb" || ready?.format === "rpm");
+
   const nativeStatus =
     nativePhase === "checking"
       ? t("updates.checking")
@@ -585,6 +596,23 @@ export default function UpdatesPanel() {
           <p className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
             {t("updates.error.config")}
           </p>
+        ) : null}
+
+        {isLinux && linuxChannel ? (
+          <div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+            <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-primary" />
+            <span>
+              <span className="font-semibold text-foreground">
+                {t("updates.linux.strategyTitle")} ·{" "}
+              </span>
+              {linuxChannel === "appimage"
+                ? t("updates.linux.appimageHint")
+                : linuxChannel === "system"
+                  ? t("updates.linux.systemHint")
+                  : t("updates.linux.portableHint")}{" "}
+              {t("updates.linux.libfuse2")}
+            </span>
+          </div>
         ) : null}
 
         <div className="grid gap-4 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
@@ -902,28 +930,44 @@ export default function UpdatesPanel() {
           })}
           action={<Badge variant="success">SHA-256</Badge>}
         >
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="pill-primary"
-              size="pill"
-              className="whitespace-nowrap"
-              disabled={installing || phase === "installing"}
-              onClick={() => void onInstall()}
-            >
-              {installing || phase === "installing" ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <Power />
-              )}
-              {installing || phase === "installing"
-                ? t("updates.installing")
-                : t("updates.install")}
-            </Button>
-            <span className="text-[11px] leading-relaxed text-muted-foreground">
-              {t("updates.installHint")}
-            </span>
-          </div>
+          {linuxSystemBlocked ? (
+            <div className="space-y-2 rounded-2xl border border-border bg-muted/40 p-4 text-xs leading-relaxed text-muted-foreground">
+              <p className="text-xs font-semibold text-foreground">
+                {t("updates.linux.manualTitle")}
+              </p>
+              <p>{t("updates.linux.systemHint")}</p>
+              <p className="break-all font-mono text-[11px]">
+                {ready.format === "rpm"
+                  ? t("updates.linux.rpmCommand", { version: ready.version })
+                  : t("updates.linux.debCommand", { version: ready.version })}
+              </p>
+              <p>{t("updates.linux.stagingDir")}</p>
+              <p>{t("updates.linux.libfuse2")}</p>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="pill-primary"
+                size="pill"
+                className="whitespace-nowrap"
+                disabled={installing || phase === "installing"}
+                onClick={() => void onInstall()}
+              >
+                {installing || phase === "installing" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Power />
+                )}
+                {installing || phase === "installing"
+                  ? t("updates.installing")
+                  : t("updates.install")}
+              </Button>
+              <span className="text-[11px] leading-relaxed text-muted-foreground">
+                {t("updates.installHint")}
+              </span>
+            </div>
+          )}
           <p className="font-mono text-[11px] text-muted-foreground">
             {ready.format.toUpperCase()} ·{" "}
             {formatBytes(ready.size, locale, sizeFallback)} ·{" "}
@@ -949,7 +993,7 @@ export default function UpdatesPanel() {
             {t("updates.error.detail", { detail: error.message })}
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            {error.stage === "install" && ready ? (
+            {error.stage === "install" && ready && !linuxSystemBlocked ? (
               <Button
                 type="button"
                 variant="pill-primary"

@@ -1,0 +1,25 @@
+# Linux 移植规范：仓库内文本统一 LF，防止 CRLF 污染 Linux 构建与配置。
+# 二进制资源显式标记，避免被文本归一化破坏。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.webp binary
+*.avif binary
+*.zip binary
+*.cbz binary
+*.exe binary
+*.msi binary
+*.deb binary
+*.rpm binary
+*.AppImage binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.db binary
+*.sqlite binary

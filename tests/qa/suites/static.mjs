@@ -502,7 +502,154 @@ export async function runStaticSuite(ctx, report) {
   checkProductionBundle(root, report);
   checkNoUnusedCustomProtocol(root, report);
   checkPostI18nHardcodedText(root, report);
+  checkReleaseSurface(root, report);
   checkAntiMockGuards(root, report);
+}
+
+/* ------------------------------------------------------------------ */
+/* §2.3 发行级长尾体验：文件关联 / 备份 / Updater / 单实例           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 守卫 0.16.0 的发行面：文件关联、备份命令、官方 Updater 公钥/endpoint、
+ * 签名 CI、主窗专属 capability，以及三个用户入口文件。
+ * 只做静态契约检查，不启动应用；运行期行为由 Rust 单测 + 真机冒烟覆盖。
+ */
+export function checkReleaseSurface(root, report) {
+  const errors = [];
+  const read = (relative) => {
+    const file = path.join(root, relative);
+    if (!fs.existsSync(file)) {
+      errors.push(`缺少 ${relative}`);
+      return "";
+    }
+    return fs.readFileSync(file, "utf8");
+  };
+  const parseJson = (relative) => {
+    try {
+      return JSON.parse(read(relative));
+    } catch (error) {
+      errors.push(`${relative} 不是合法 JSON: ${error.message}`);
+      return null;
+    }
+  };
+
+  const conf = parseJson("src-tauri/tauri.conf.json");
+  if (conf) {
+    const associations = Array.isArray(conf.bundle?.fileAssociations)
+      ? conf.bundle.fileAssociations
+      : [];
+    const extensions = associations.flatMap((entry) =>
+      Array.isArray(entry?.ext) ? entry.ext : [],
+    );
+    for (const ext of ["cbz", "zip"]) {
+      if (!extensions.includes(ext)) {
+        errors.push(`bundle.fileAssociations 缺少 .${ext}`);
+      }
+    }
+    if (conf.bundle?.createUpdaterArtifacts !== true) {
+      errors.push("bundle.createUpdaterArtifacts 必须为 true");
+    }
+    if (
+      typeof conf.plugins?.updater?.pubkey !== "string" ||
+      conf.plugins.updater.pubkey.trim().length < 32
+    ) {
+      errors.push("plugins.updater.pubkey 缺失或过短");
+    }
+    const endpoints = Array.isArray(conf.plugins?.updater?.endpoints)
+      ? conf.plugins.updater.endpoints
+      : [];
+    if (
+      !endpoints.some(
+        (endpoint) =>
+          typeof endpoint === "string" &&
+          endpoint.includes("github.com") &&
+          endpoint.endsWith("latest.json"),
+      )
+    ) {
+      errors.push("plugins.updater.endpoints 缺少 GitHub latest.json");
+    }
+  }
+
+  const updaterCapability = parseJson("src-tauri/capabilities/updater.json");
+  if (updaterCapability) {
+    const windows = Array.isArray(updaterCapability.windows)
+      ? updaterCapability.windows
+      : [];
+    const permissions = Array.isArray(updaterCapability.permissions)
+      ? updaterCapability.permissions
+      : [];
+    if (windows.length !== 1 || windows[0] !== "main") {
+      errors.push("updater.json 只能覆盖 main 窗口");
+    }
+    if (!permissions.includes("updater:default")) {
+      errors.push("updater.json 缺少 updater:default");
+    }
+    if (permissions.some((permission) => String(permission).startsWith("process:"))) {
+      errors.push("updater.json 不得声明 process:* 权限（重启走自研 restart_app）");
+    }
+  }
+
+  const workflow = read(".github/workflows/release.yml");
+  for (const marker of [
+    "TAURI_SIGNING_PRIVATE_KEY",
+    "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    "uploadUpdaterJson: true",
+    "tauri-apps/tauri-action@v1",
+    "releaseDraft: false",
+  ]) {
+    if (!workflow.includes(marker)) {
+      errors.push(`release.yml 缺少 ${marker}`);
+    }
+  }
+
+  const lib = read("src-tauri/src/lib.rs");
+  for (const command of [
+    "commands::relocate_book",
+    "open_with::take_pending_open",
+    "backup::export_backup",
+    "backup::import_backup",
+    "update::restart_app",
+  ]) {
+    if (!lib.includes(command)) {
+      errors.push(`lib.rs 未注册 ${command}`);
+    }
+  }
+
+  for (const entry of [
+    "src/components/library/RelocateDialog.tsx",
+    "src/components/settings/DataBackupPanel.tsx",
+    "src/features/openWith/OpenWithBridge.tsx",
+  ]) {
+    if (!fs.existsSync(path.join(root, entry))) {
+      errors.push(`缺少用户入口 ${entry}`);
+    }
+  }
+
+  if (errors.length) {
+    fail(report, {
+      id: "static:release-surface",
+      suite: "static",
+      layer: "static",
+      title: "发行级长尾体验的静态契约不完整",
+      severity: "P1",
+      details: errors.join(" | "),
+      location: "src-tauri/tauri.conf.json",
+      expected:
+        "文件关联 .cbz/.zip、createUpdaterArtifacts、plugins.updater、签名 CI、主窗 updater 权限、五个命令与三个用户入口齐全",
+      actual: errors.join(" | "),
+      rootCause: "新增发行能力时漏改配置、命令注册或权限文件",
+      fix: "按 docs/RELEASE.md 与 docs/TECHNICAL.md 补齐缺失项",
+    });
+  } else {
+    ok(report, {
+      id: "static:release-surface",
+      suite: "static",
+      layer: "static",
+      title: "文件关联/备份/Updater/单实例静态契约齐全",
+      details: "tauri.conf + updater capability + release.yml + 命令注册 + 三个入口文件",
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ */

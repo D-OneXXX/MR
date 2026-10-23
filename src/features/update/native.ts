@@ -1,9 +1,11 @@
-import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 import {
   check,
   type DownloadEvent,
   type Update,
 } from "@tauri-apps/plugin-updater";
+
+import { platformKind } from "@/lib/platform";
 
 /**
  * Thin wrapper around the official Tauri updater/process plugins.
@@ -62,8 +64,7 @@ export function reportNativeUpdateFailure(
 
 /** Windows installers relaunch the app themselves; other targets need help. */
 export function isWindowsPlatform(): boolean {
-  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
-  return /Windows/i.test(ua);
+  return platformKind() === "windows";
 }
 
 /** Manual check against the endpoints configured in `tauri.conf.json`. */
@@ -136,7 +137,7 @@ export async function closeNativeUpdate(
   }
 }
 
-/** Restart the app after a non-Windows install. */
+/** Restart the app after a non-Windows install (user-clicked only). */
 export async function relaunchApp(): Promise<void> {
-  await relaunch();
+  await invoke<void>("restart_app");
 }

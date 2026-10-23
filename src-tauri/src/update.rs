@@ -66,6 +66,9 @@ pub struct AppInfo {
     pub profile: String,
     pub signature_configured: bool,
     pub sha256_enforced: bool,
+    /// Linux 安装形态：`appimage`（可自动替换）/ `system`（deb/rpm，
+    /// 引导手动安装）/ `portable` / 空串（非 Linux，前端跳过相关提示）。
+    pub linux_install: String,
 }
 
 /// 单个安装包（补丁或全量）的元信息；不向前端暴露 URL。
@@ -210,6 +213,9 @@ impl ArtifactKind {
 enum InstallerFormat {
     Nsis,
     Msi,
+    Deb,
+    Rpm,
+    AppImage,
 }
 
 impl InstallerFormat {
@@ -217,6 +223,9 @@ impl InstallerFormat {
         match self {
             Self::Nsis => "nsis",
             Self::Msi => "msi",
+            Self::Deb => "deb",
+            Self::Rpm => "rpm",
+            Self::AppImage => "appimage",
         }
     }
 
@@ -224,6 +233,9 @@ impl InstallerFormat {
         match self {
             Self::Nsis => ".exe",
             Self::Msi => ".msi",
+            Self::Deb => ".deb",
+            Self::Rpm => ".rpm",
+            Self::AppImage => ".AppImage",
         }
     }
 }
@@ -689,11 +701,21 @@ fn resolve_format(explicit: Option<&str>, url: &Url) -> Result<InstallerFormat, 
         return match raw.to_ascii_lowercase().as_str() {
             "nsis" => Ok(InstallerFormat::Nsis),
             "msi" => Ok(InstallerFormat::Msi),
+            "deb" => Ok(InstallerFormat::Deb),
+            "rpm" => Ok(InstallerFormat::Rpm),
+            "appimage" | "app-image" => Ok(InstallerFormat::AppImage),
             _ => Err("不支持的安装包格式".to_string()),
         };
     }
-    if url.path().to_ascii_lowercase().ends_with(".msi") {
+    let path = url.path().to_ascii_lowercase();
+    if path.ends_with(".msi") {
         Ok(InstallerFormat::Msi)
+    } else if path.ends_with(".deb") {
+        Ok(InstallerFormat::Deb)
+    } else if path.ends_with(".rpm") {
+        Ok(InstallerFormat::Rpm)
+    } else if path.ends_with(".appimage") {
+        Ok(InstallerFormat::AppImage)
     } else {
         Ok(InstallerFormat::Nsis)
     }
@@ -990,7 +1012,10 @@ fn artifact_file_name(artifact: &Artifact, version: &str, generation: u64) -> St
         ),
     };
     let extension = artifact.format.extension();
-    if !base.to_ascii_lowercase().ends_with(extension) {
+    if !base
+        .to_ascii_lowercase()
+        .ends_with(&extension.to_ascii_lowercase())
+    {
         base.push_str(extension);
     }
     // 进程号 + 代数前缀：避免多个实例/多次下载写同一路径（File::create 仍会截断）。
@@ -1479,7 +1504,70 @@ fn spawn_installer(path: &Path, format: &str, relaunch_exe: &Path) -> Result<(),
         .map_err(|error| format!("无法启动安装程序：{error}"))
 }
 
-#[cfg(not(windows))]
+/// Linux 安装策略：
+/// - **AppImage 运行态**：下载的新 AppImage 经校验后原子替换当前
+///   `.AppImage` 文件（备份 → 改名 → 拉起新进程 → 清理/回滚），无需 root；
+/// - **系统安装态（.deb/.rpm）**：`/usr/bin` 下的文件归包管理器管辖，
+///   应用绝不以 root 自居去改系统文件——返回稳定错误码
+///   `linux-manual-install`，由前端引导用户下载后用包管理器安装。
+#[cfg(target_os = "linux")]
+fn spawn_installer(path: &Path, format: &str, relaunch_exe: &Path) -> Result<(), String> {
+    match format {
+        "appimage" => install_appimage(path, relaunch_exe),
+        "deb" | "rpm" => Err(
+            "系统安装态的更新包由包管理器管辖，请下载后手动安装（linux-manual-install）"
+                .to_string(),
+        ),
+        other => Err(format!("Linux 暂不支持自动安装 {other} 格式的更新包")),
+    }
+}
+
+/// AppImage 原地替换：备份旧文件 → 新文件改名到位 → 拉起新版本。
+/// 任何一步失败都回滚，保证旧版本始终可双击运行。
+#[cfg(target_os = "linux")]
+fn install_appimage(new_appimage: &Path, _relaunch_exe: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    // APPIMAGE 由 AppImage 运行时注入，指向磁盘上的 .AppImage 文件本体
+    // （不是 /tmp/.mount_* 下的 squashfs 挂载点）。缺失说明不是 AppImage
+    // 运行态（开发/便携运行），原地替换无从谈起。
+    let target = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.is_file());
+    let Some(target) = target else {
+        return Err("当前不是 AppImage 运行态，无法自动替换（linux-manual-install）".to_string());
+    };
+
+    let mut permissions = std::fs::metadata(new_appimage)
+        .map_err(|err| format!("无法读取更新包属性：{err}"))?
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(new_appimage, permissions)
+        .map_err(|err| format!("无法为更新包添加执行权限：{err}"))?;
+
+    let backup = target.with_extension("old-appimage");
+    let _ = std::fs::remove_file(&backup);
+    std::fs::rename(&target, &backup).map_err(|err| format!("无法备份当前 AppImage：{err}"))?;
+    if let Err(err) = std::fs::rename(new_appimage, &target) {
+        let _ = std::fs::rename(&backup, &target);
+        return Err(format!("无法替换 AppImage：{err}"));
+    }
+    match std::process::Command::new(&target).spawn() {
+        Ok(_) => {
+            // 新版本已拉起；旧文件不再需要，直接清理。
+            let _ = std::fs::remove_file(&backup);
+            Ok(())
+        }
+        Err(err) => {
+            // 新版本启动失败：回滚旧文件，用户仍能运行旧版。
+            let _ = std::fs::remove_file(&target);
+            let _ = std::fs::rename(&backup, &target);
+            Err(format!("无法启动新版本 AppImage：{err}"))
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn spawn_installer(_path: &Path, _format: &str, _relaunch_exe: &Path) -> Result<(), String> {
     Err("当前平台暂不支持自动安装更新，请手动安装".to_string())
 }
@@ -1501,6 +1589,7 @@ pub fn get_app_info() -> AppInfo {
         .to_string(),
         signature_configured: signature_configured(),
         sha256_enforced: true,
+        linux_install: crate::platform::install_channel().to_string(),
     }
 }
 
@@ -1607,6 +1696,15 @@ pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     }
     app.exit(0);
     Ok(())
+}
+
+/// 用户显式点击「立即重启」后重启应用。
+///
+/// 不经过 process 插件，也不暴露 `process:*` 权限；命令由本应用注册，
+/// 因此只授予 update 面板使用。绝不由后台自动调用。
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle) {
+    app.restart();
 }
 
 /// 请求取消当前下载；下载循环会在下一个检查点删除半成品并退出。
@@ -1934,12 +2032,30 @@ mod tests {
         let exe = Url::parse("https://example.com/setup.exe").expect("url");
         let msi = Url::parse("https://example.com/setup.MSI").expect("url");
         let bin = Url::parse("https://example.com/download").expect("url");
+        let deb = Url::parse("https://example.com/MangaReader_0.15.0_amd64.deb").expect("url");
+        let rpm = Url::parse("https://example.com/MangaReader-0.15.0-x86_64.rpm").expect("url");
+        let appimage =
+            Url::parse("https://example.com/MangaReader_0.15.0_amd64.AppImage").expect("url");
         assert_eq!(resolve_format(None, &exe).expect("nsis"), InstallerFormat::Nsis);
         assert_eq!(resolve_format(None, &msi).expect("msi"), InstallerFormat::Msi);
         assert_eq!(resolve_format(None, &bin).expect("nsis"), InstallerFormat::Nsis);
+        assert_eq!(resolve_format(None, &deb).expect("deb"), InstallerFormat::Deb);
+        assert_eq!(resolve_format(None, &rpm).expect("rpm"), InstallerFormat::Rpm);
+        assert_eq!(
+            resolve_format(None, &appimage).expect("appimage"),
+            InstallerFormat::AppImage
+        );
         assert_eq!(
             resolve_format(Some("NSIS"), &msi).expect("explicit"),
             InstallerFormat::Nsis
+        );
+        assert_eq!(
+            resolve_format(Some("AppImage"), &exe).expect("explicit appimage"),
+            InstallerFormat::AppImage
+        );
+        assert_eq!(
+            resolve_format(Some("deb"), &exe).expect("explicit deb"),
+            InstallerFormat::Deb
         );
         assert!(resolve_format(Some("appx"), &exe).is_err());
     }

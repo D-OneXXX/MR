@@ -349,21 +349,45 @@ fn monitor_rects(monitors: &[tauri::Monitor]) -> Vec<(i32, i32, u32, u32)> {
 }
 
 /// 兜底：把完全跑到所有显示器可见区域之外的窗口拉回屏幕中央。
-/// 没有显示器信息（远程会话/驱动异常）时直接返回，绝不误 center。
+///
+/// Wayland 合成器可能拒绝提供全局坐标（`available_monitors` /
+/// `outer_position` 返回 Err）：此时安全降级为 `window.center()` 并返回
+/// Ok，绝不 panic、绝不让恢复窗因坐标探测失败而打不开。
+/// 显示器列表为空（远程会话/驱动异常，成功但无数据）时保持原状返回，
+/// 不做无依据的居中。
 fn ensure_window_on_screen(window: &tauri::WebviewWindow) -> Result<(), String> {
-    let monitors = window
-        .available_monitors()
-        .map_err(|err| format!("无法读取显示器列表：{err}"))?;
+    let monitors = match window.available_monitors() {
+        Ok(monitors) => monitors,
+        Err(err) => {
+            crate::logging::log_error(
+                "window_guard",
+                &format!(
+                    "窗口 {} 无法读取显示器列表（{err}），Wayland 下属预期，降级为居中",
+                    window.label()
+                ),
+            );
+            let _ = window.center();
+            return Ok(());
+        }
+    };
     if monitors.is_empty() {
         return Ok(());
     }
     let rects = monitor_rects(&monitors);
-    let position = window
-        .outer_position()
-        .map_err(|err| format!("无法读取窗口位置：{err}"))?;
-    let size = window
-        .outer_size()
-        .map_err(|err| format!("无法读取窗口尺寸：{err}"))?;
+    let (position, size) = match (window.outer_position(), window.outer_size()) {
+        (Ok(position), Ok(size)) => (position, size),
+        (Err(err), _) | (Ok(_), Err(err)) => {
+            crate::logging::log_error(
+                "window_guard",
+                &format!(
+                    "窗口 {} 无法读取位置/尺寸（{err}），降级为居中",
+                    window.label()
+                ),
+            );
+            let _ = window.center();
+            return Ok(());
+        }
+    };
     if rect_visible_on_any_monitor(position.x, position.y, size.width, size.height, &rects) {
         return Ok(());
     }

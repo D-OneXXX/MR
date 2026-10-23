@@ -12,6 +12,7 @@ pub mod logging;
 mod online;
 mod open_with;
 mod paths;
+mod platform;
 mod resilience;
 pub mod pipeline;
 pub mod render_cache;
@@ -422,6 +423,8 @@ fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK（Linux）渲染回退等启动期加固必须先于 Builder/WebView 创建。
+    platform::early_env_hardening();
     let resilience_state = resilience::new_state();
     let app = tauri::Builder::default()
         .manage(resilience_state.clone())
@@ -434,8 +437,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // 官方 Updater：GitHub Releases latest.json + minisign 校验。
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // 仅提供用户显式点击后的重启命令。
-        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             diagnostics::install_panic_hook();
             // 1) 先锚定数据/缓存根（app_data_dir / app_cache_dir），再初始化日志。
@@ -528,6 +529,7 @@ pub fn run() {
             update::check_update,
             update::download_update,
             update::install_update,
+            update::restart_app,
             update::cancel_update,
             update::get_update_snapshot,
             security::security_audit,

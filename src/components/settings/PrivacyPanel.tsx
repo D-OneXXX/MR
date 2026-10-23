@@ -22,6 +22,7 @@ import ConfirmDialog from "@/components/ConfirmDialog";
 import { toast } from "@/components/Toast";
 import { useI18n, type MessageKey } from "@/i18n";
 import { ONLINE_LAST_TEST_EVENT } from "@/lib/onlineLastTest";
+import { platformKind } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { recordBreadcrumb } from "@/features/resilience";
 import { useUpdater } from "@/features/update/UpdateProvider";
@@ -39,12 +40,21 @@ import {
 
 const TRACE_KEYS = new Set(["mr-browser-recents", "mr-online-last-test"]);
 
+/** 目录提示按平台区分：Linux 下 Tauri 映射到 XDG 规范路径。 */
+const IS_LINUX = platformKind() === "linux";
+
 /** 应用数据目录（Tauri `app_data_dir`：library.db / 日志 / 下载）。 */
-const APP_DATA_DIR = "%APPDATA%\\com.local.manga-reader";
+const APP_DATA_DIR = IS_LINUX
+  ? "~/.local/share/com.local.manga-reader"
+  : "%APPDATA%\\com.local.manga-reader";
 /** 应用缓存目录（Tauri `app_cache_dir`：render_cache / online_cache）。 */
-const CACHE_DIR = "%LOCALAPPDATA%\\com.local.manga-reader";
+const CACHE_DIR = IS_LINUX
+  ? "~/.cache/com.local.manga-reader"
+  : "%LOCALAPPDATA%\\com.local.manga-reader";
 /** 更新暂存目录：Rust 侧 std::env::temp_dir() 下的 mangareader-updates。 */
-const UPDATE_STAGING_DIR = "%TEMP%\\mangareader-updates";
+const UPDATE_STAGING_DIR = IS_LINUX
+  ? "/tmp/mangareader-updates"
+  : "%TEMP%\\mangareader-updates";
 
 function statusVariant(
   status: SecurityStatus,

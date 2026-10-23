@@ -1,6 +1,6 @@
 # MangaReader 技术文档
 
-> 应用版本：`0.14.0`。`package.json` 是版本单一事实源，`npm run version:sync` 同步
+> 应用版本：`0.16.0`。`package.json` 是版本单一事实源，`npm run version:sync` 同步
 > `tauri.conf.json`、`Cargo.toml`、`Cargo.lock`、`package-lock.json`；前端版本由 Vite 注入。
 
 - [README](../README.md)
@@ -39,6 +39,8 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 能力墙（`src-tauri/capabilities/default.json`）覆盖真实窗口标签
   `main` / `recovery` / `browser`，权限只声明代码里真实用到的
   `core:window:allow-*`、`opener:default`、`dialog:default`；自研命令不经 ACL。
+  官方 Updater 额外由 `capabilities/updater.json` 仅授予 `main`；重启使用自研
+  `restart_app`，不声明 `process:*` 权限。
 - 主窗口心跳每 1s；6s 无心跳由独立看门狗开恢复窗；系统休眠/唤醒按 tick gap 重置，
   不误判。
 - 恢复窗可重载或重建主窗口；重建返回真实结果，不伪造成功。
@@ -80,6 +82,13 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 | `online_filter_events` | `id` | 脱敏 URL、原因、动作、尺寸、时间；最多 10000 条 |
 
 - `BookInfo.path` 对在线书就是规范化 URL，`id = sha256(path)`。
+- `BookInfo.missing` 不落库：`list_books` / `get_book` 对本地源做一次
+  `symlink_metadata`，仅 `NotFound` 标记为 `true`（权限/网络盘错误不误判）；
+  在线书恒为 `false`。
+- **无损重定位**：`relocate_book(bookId, newPath)` 在单事务内把 `books.id` 从
+  `sha256(oldPath)` 改为 `sha256(newPath)`，同步迁移 `reading_log.book_id` 与
+  `online_filter_events`，保留 `current_page` / `scroll_pct` / `updated_at` /
+  `source_type` / `meta_json`，并按新页数钳制页码。移动/改名文件后重导入不会产生重复书。
 - 在线 `meta_json` 是 `StoredMeta`：`pages[]`、`filtered[]`、`filter_profile`、系列/下一话链路。
 - `PageRef` 可带 `anchor { channel, messageId, photoIndex, refreshBase }`。
 - `reading_log(date PK)` 旧库迁移在单事务内完成；崩溃遗留的 `reading_log_legacy`
@@ -92,8 +101,10 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 |---|---|
 | `lib.rs` | 设置、启动迁移、命令注册、路径解析入口 |
 | `paths.rs` | `app_data_dir` / `app_cache_dir` 锚点、旧库原子迁移与 `quick_check` |
-| `db.rs` | SQLite schema、WAL + `busy_timeout=5000`、书库/进度/设置/统计 |
-| `commands.rs` | 书库/取页/进度/设置/在线导入/过滤标记恢复 |
+| `db.rs` | SQLite schema、WAL + `busy_timeout=5000`、书库/进度/设置/统计/重定位事务 |
+| `commands.rs` | 书库/取页/进度/设置/在线导入/过滤标记恢复/失效路径重定位 |
+| `open_with.rs` | 文件关联与命令行参数过滤、单实例唤醒、待打开请求内存队列 |
+| `backup.rs` | `.mrbackup` 导出/恢复、快照净化、完整性/计数校验、事务导入 |
 | `source.rs` | 文件夹/zip/在线源；自然排序、zip bomb 上限、CDN 刷新 |
 | `pipeline.rs` / `cache.rs` / `render_cache.rs` / `disk_cache.rs` | 解码缩放、三级内存缓存、渲染 L2、在线原图 L2 与统一 LRU |
 | `online/{mod,http,direct,html,filter,telegram,handoff}.rs` | 在线直读全链路 |
@@ -139,6 +150,33 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `_ - .` 与空白，因此 `page_2 < page_10`；`1.jpg / 2.png / 10.jpg` 混合扩展名也按页号。
 - 递归扫描子目录、合集章节与前端章节列表使用同一顺序；`01.jpg` 与 `1.jpg` 数值相同时
   以稳定字典序兜底，保证跨平台结果一致。
+
+### 6.4 文件关联、单实例与命令行直开
+
+- `bundle.fileAssociations` 注册 `.cbz` / `.zip`；Windows 安装器负责写入关联。
+- 首次启动：`setup` 读取 `std::env::args_os()`；二次启动：
+  `tauri-plugin-single-instance`（必须是第一个插件）回调唤醒主窗并转交 argv。
+- `open_with::extract_paths` 只接受**已存在目录**或 `.zip` / `.cbz` 文件，跳过 exe、
+  空串、`-` 开关与不支持文件，Windows 下小写去重；绝不把任意参数当命令执行。
+- 导入在后台线程复用 `commands::import_blocking`；结果写入 `AppState` 的内存 FIFO
+  （上限 16 条），并发送无载荷 `open-with-pending` ping。前端循环调用
+  `take_pending_open` 消费，重复事件不会重复打开；安全模式开启时只入库、不挂 Reader。
+- 日志只记计数/稳定 ID 前缀，不落命令行路径或书名。
+
+### 6.5 本地备份与恢复（`.mrbackup`）
+
+- 导出：`VACUUM INTO` 生成一致性快照 → 净化（删除 `settings.online_headers`、
+  `online_filter_events`、`app_meta`）→ `VACUUM` 抹除空闲页 → `PRAGMA integrity_check`
+  → 切 `journal_mode=DELETE` → 写入 zip（`manifest.json` + `library.db` +
+  可选 `preferences.json`）。目标文件先写同目录临时文件，再原子替换。
+- 恢复：zip 条目数/大小/名称校验，缺 `manifest` 或路径穿越直接拒绝；`library.db`
+  解压到系统临时目录，只读 `integrity_check`、必需表和列、manifest 计数全部通过后，
+  才用 `ATTACH` + 单事务清空/复制核心表；失败 `ROLLBACK`，活库不动。
+- 恢复范围：`books`、`reading_log`、`settings`（保留当前 `online_headers`）、
+  `online_filter_profiles`、`online_filter_rules`；**不含**缓存、Cookie、过滤事件、
+  `app_meta`。恢复后刷新内存设置、缓存预算、内存/磁盘派生缓存与源句柄。
+- `preferences.json` 由前端白名单采集（主题/语言/阅读器偏好），后端只校验
+  JSON 对象与大小并原样透传；恢复后前端写回 localStorage 并即时应用主题/语言。
 
 ## 7. 在线直读
 
@@ -212,12 +250,46 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 
 ## 8. 更新与版本
 
+### 8.1 自定义补丁通道（保留）
+
 - SemVer 严格 `MAJOR.MINOR.PATCH`，拒绝 `1.2`、`01.2.3`、四段版本。
 - PATCH 优先补丁；MINOR 可补丁；跨多个 MINOR / MAJOR 回退全量。
 - 更新清单签名覆盖 version、URL、sha256、size、notes 等字段；构建期 `MR_UPDATE_PUBKEY`。
 - 安装包按 sha256 + minisign 校验；下载连接超时 20s，分块空闲超时，总上限 60 分钟。
 - 安装使用 PowerShell `-EncodedCommand`（UTF-16LE），支持中文/emoji 路径；不写 UTF-8 `.cmd`。
+
+### 8.2 官方 Tauri Updater / GitHub Releases（0.16.0）
+
+- `bundle.createUpdaterArtifacts = true`；`plugins.updater.pubkey` 保存 minisign 公钥，
+  `endpoints` 指向 `https://github.com/D-OneXXX/MR/releases/latest/download/latest.json`。
+- 客户端「设置 → 关于与维护」新增 GitHub 自动更新区：手动检查（不自动轮询）、
+  显示版本/日期/纯文本 notes、下载进度、安装完成提示；重启只在用户点击
+  `restart_app` 后发生。Windows 安装器退出/重启属于用户点击安装后的预期行为。
+- CI `release.yml` 在推送 `v*` 标签时：校验 tag 与 `package.json` 版本一致 →
+  `npm ci` → `tauri-action@v1`（NSIS，`uploadUpdaterJson: true`）→ 上传签名安装包与
+  `latest.json`。签名私钥由 `TAURI_SIGNING_PRIVATE_KEY` /
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 注入，**绝不入库**。
+- 权限：仅 `capabilities/updater.json` 对 `main` 授予 `updater:default`；
+  `restart_app` 是自研命令，不需要 `process:*`。
 - `version:sync` 先校验全部文件再统一写入，失败回滚，不产生半迁移。
+
+### 8.3 Linux 更新策略（feat/linux-port）
+
+- 安装形态由 Rust `platform::install_channel()` 判定，经 `get_app_info` 的
+  `linuxInstall` 字段暴露：`appimage`（`APPIMAGE`+`APPDIR` 运行时注入）/
+  `system`（exe 位于 `/usr`、`/opt`，deb/rpm 管辖）/ `portable` / 空串（非 Linux）。
+- **AppImage 运行态**：自研更新通道新增 `appimage` 制品格式
+  （`resolve_format` 识别 `.AppImage`/`deb`/`.rpm`）；`install_appimage`
+  备份旧文件 → 改名新包 → 拉起新进程，任一步失败回滚，无需 root。
+- **系统安装态（.deb/.rpm）**：应用绝不以 root 自居改 `/usr` 下文件；
+  安装按钮替换为手动引导（`sudo apt install ./MangaReader_<v>_amd64.deb` /
+  `sudo dnf install ./MangaReader-<v>-x86_64.rpm`），安装包暂存于
+  `/tmp/mangareader-updates/`；同时提示 Ubuntu 22.04+ 运行 AppImage 需
+  `libfuse2`。
+- 打包目标经 `src-tauri/tauri.linux.conf.json` 平台 overlay 固定为
+  `["deb","rpm","appimage"]`（Windows 的 `tauri.conf.json` 不受影响）；
+  `.cbz`/`.zip` 的 MIME 关联（`application/vnd.comicbook+zip`）由
+  `fileAssociations` 生成 `.desktop` 条目，支持文件管理器双击直开。
 
 ## 9. 隐私与韧性
 
@@ -267,6 +339,15 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 条漫：固定布局高度、DOM 窗口切片、滚动 120ms 空闲合流、最多 4 个在途请求；
   切换版式使用 Webtoon 实时中心页，避免 400ms 防抖导致进度回退。
 - HUD/Dock 自动隐藏；过滤抽屉/目录/设置弹层会锁定 HUD。
+- 书库失效态：`BookInfo.missing` 为 true 时书卡显示「文件位置已变更」胶囊，
+  单击/双击/回车都打开 `RelocateDialog`，不进入 Reader；详情 Sheet 同步显示
+  重新指定/从书库移除两个胶囊按钮。
+- `OpenWithBridge` 挂载在 WorkspaceProvider 内：启动与 `open-with-pending` 时
+  循环消费 `take_pending_open`，有书则 `nav('/reader/:id')`，安全模式下只回书库。
+- 设置 → 存储与数据新增 `DataBackupPanel`：导出/恢复胶囊按钮、保存/打开对话框、
+  覆盖确认、偏好白名单应用、关闭旧页签并广播书库/设置刷新。
+- 设置 → 关于与维护保留原有自定义补丁通道，并新增 GitHub 官方更新区；
+  所有文案六语齐全，不自动检查、不自动重启。
 
 ## 11. 命令契约
 
@@ -274,7 +355,7 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 `get_next_book`、`get_series_books`、`list_entries`、`get_page`、`get_thumbnail`、
 `clear_thumbnail_cache`、`clear_temp_cache`、`get_webtoon_layout`、`get_webtoon_tile`、
 `get_memory_stats`、`get_dashboard`、`get_reading_log`、`get_reading_by_book`、`set_progress`、
-`clear_pages`。
+`clear_pages`、`relocate_book`、`take_pending_open`、`export_backup`、`import_backup`。
 
 设置与在线：`get_settings`、`set_settings`、`resolve_online_url`、`test_online_connection`、
 `import_resolved_pages`、`resolve_online_batch`、`resolve_telegram_channel`、
@@ -286,7 +367,11 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 
 系统：`start_browser_handoff`、`stop_browser_handoff`、`get_browser_handoff_status`、
 `detect_system_proxy`、`open_browser_window`、`navigate_browser`、`list_browser_downloads`、
-`import_browser_download`、更新命令、诊断命令、韧性/安全模式命令。
+`import_browser_download`、更新命令（含官方 Updater 前端插件的 `check` /
+`download` / `install` 与自研 `restart_app`）、诊断命令、韧性/安全模式命令。
+
+事件：`open-with-pending`（无载荷，单实例/文件关联新请求 ping）、
+`online-handoff-imported`、`browser-download` 等保持原有契约。
 
 ## 12. 测试
 
@@ -301,6 +386,45 @@ QA 覆盖：静态/版本红线、双主题六语种、阅读器导入与 125 �
 中文章节名）、在线 30 页噪音与推广图学习、严格 Referer + 桌面 UA 防盗链、Telegram
 频道/消息/403 自愈、磁盘缓存上限/清理隔离、诊断脱敏、混沌/恢复窗/安全模式。
 运行报告写入 `tests/qa/reports/latest.md`（生成物不提交）。
+
+Linux 专属代码（`#[cfg(target_os = "linux")]`）在 Windows 宿主上不参与编译，
+由 `.github/workflows/ci-linux-check.yml`（push/PR 到 `feat/linux-port` 触发，
+ubuntu-22.04）执行 `cargo check --all-targets` + `cargo test --lib` +
+前端 `tsc`/`vite build` 真实验证；纯逻辑（GBK 条目名修复、gsettings/kioslaverc
+解析、DMABUF 决策表）写成跨平台纯函数，Windows 宿主单测同样覆盖。
+`release.yml` 为 `windows-latest`（NSIS）+ `ubuntu-22.04`（deb/rpm/AppImage）
+双矩阵。
+
+## 13. Linux 适配要点（feat/linux-port）
+
+- **启动期加固**（`src-tauri/src/platform.rs`）：安全模式、用户显式
+  `MR_FORCE_DISABLE_DMABUF=1` 或「Wayland + NVIDIA 专有驱动」时，在 Builder
+  之前注入 `WEBKIT_DISABLE_DMABUF_RENDERER=1` 防黑屏；用户已设置的值永不覆盖。
+- **目录与路径**：数据/缓存全部走 Tauri `app_data_dir`/`app_cache_dir`
+  （Linux 映射 `~/.local/share`、`~/.cache`）；无硬编码盘符/反斜杠。
+- **ZIP 条目名编码**：`ZipEntryName{display,lookup}` 分离——未带 UTF-8 标志的
+  条目按 GBK 修复展示名（中文 Windows 压缩工具产物），`by_name` 查找名保持
+  zip crate 解码，页序与读取不受猜测影响；纯 ASCII/UTF-8 条目路径不变。
+- **文件关联去重键**按平台语义：Windows 忽略大小写，Linux/macOS 精确匹配。
+- **脱敏扩展**：`/run/media/<用户名>/` 并入 `<USER_HOME>`；`/mnt/<挂载名>/`
+  折叠为 `<MOUNT>/`，其后漫画路径继续按 `<MANGA_DIR>/<MANGA_FILE>` 收尾。
+- **系统代理**：环境变量（大小写不敏感）→ GNOME `gsettings`（mode=manual 时
+  https→http→socks）→ KDE `~/.config/kioslaverc`（`[Proxy Settings]`
+  `ProxyType=1`）；解析为纯函数跨平台可测。
+- **Wayland 窗口容错**：`ensure_window_on_screen` 读取显示器/坐标失败时降级
+  `window.center()` 并记日志，绝不 panic、不阻断恢复窗；`data-tauri-drag-region`
+  与自绘按钮由 tao 层在 X11/Wayland 一致支持。
+- **CJK 字体栈**：`--font-sans`/`--font-heading` 显式回退
+  `Noto Sans CJK SC/TC/JP/KR` 与 `WenQuanYi Micro Hei`，防止 WebKitGTK
+  无 PingFang/雅黑时六语文本渲染成方块。
+- **图片通道**：页面图片经命令通道以 data URL 交付（无自定义 URI 协议），
+  WebKitGTK 与 WebView2 行为一致；内嵌浏览器导航守卫同时拦截
+  `http://tauri.localhost`（Windows/Android 形态）与非 http(s) 的
+  `tauri://localhost`（Linux/macOS 形态）。
+- **无 inotify**：书库为按需扫描（`scan_library`/`import_books`），
+  不注册任何递归文件监听，不存在 inotify 句柄耗尽（OS Error 28）风险。
+- `.gitattributes` 固化 `* text=auto eol=lf` + 二进制类型标记，防止
+  CRLF 污染 Linux 构建脚本与配置。
 
 ## 13. 已知限制
 

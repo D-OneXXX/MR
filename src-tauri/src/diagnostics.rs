@@ -293,7 +293,16 @@ fn windows_home_regex() -> &'static Regex {
 
 fn unix_home_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    regex(&RE, r#"(?:/home/|/Users/)[^/\s"'<>]+/?"#)
+    // `/run/media/<username>/`：Linux 桌面自动挂载的可移动介质/外置盘，
+    // 用户名同样是可识别个人身份的信息，与 `/home/` 同级脱敏。
+    regex(&RE, r#"(?:/home/|/Users/|/run/media/)[^/\s"'<>]+/?"#)
+}
+
+/// `/mnt/<挂载名>/`：挂载点名称（NAS 共享名、分区标签）可能暴露
+/// 用户的存储习惯，整段折叠为 `<MOUNT>/`，保留“位于挂载盘”这一语义。
+fn unix_mount_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    regex(&RE, r#"/mnt/[^/\s"'<>]+/?"#)
 }
 
 const MANGA_EXTENSIONS: &str = "cbz|zip|cbr|cbt|rar|7z|pdf|jpe?g|png|webp|avif|gif|bmp";
@@ -311,9 +320,11 @@ fn unc_path_regex() -> &'static Regex {
     regex(&RE, &manga_pattern(r"\\\\"))
 }
 
+/// `<USER_HOME>/` / `<MOUNT>/` 前缀后再接漫画文件的路径：前缀替换完成后，
+/// 剩余目录链继续折叠（`<…>/<MANGA_DIR>/<MANGA_FILE>.ext`）。
 fn home_path_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    regex(&RE, &manga_pattern(r"<USER_HOME>[\\/]"))
+    regex(&RE, &manga_pattern(r"<(?:USER_HOME|MOUNT)>[\\/]"))
 }
 
 fn unix_abs_path_regex() -> &'static Regex {
@@ -445,13 +456,16 @@ fn replace_file_path(raw: &str) -> String {
                 .filter(|c| *c == '/' || *c == '\\')
                 .unwrap_or('\\');
             (format!("{}:", &raw[..1]), sep)
-        } else if let Some(rest) = raw.strip_prefix("<USER_HOME>") {
+        } else if let Some(rest) = raw
+            .strip_prefix("<USER_HOME>")
+            .or_else(|| raw.strip_prefix("<MOUNT>"))
+        {
             let sep = rest
                 .chars()
                 .next()
                 .filter(|c| *c == '/' || *c == '\\')
                 .unwrap_or('\\');
-            ("<USER_HOME>".to_string(), sep)
+            (raw[..raw.len() - rest.len()].to_string(), sep)
         } else if raw.starts_with("\\\\") {
             ("\\\\".to_string(), '\\')
         } else if raw.starts_with('/') {
@@ -534,6 +548,9 @@ pub fn sanitize_text(input: &str, redact_url_paths: bool) -> String {
         .into_owned();
     let redacted = unix_home_regex()
         .replace_all(&redacted, "<USER_HOME>/")
+        .into_owned();
+    let redacted = unix_mount_regex()
+        .replace_all(&redacted, "<MOUNT>/")
         .into_owned();
 
     let mut sanitized = win_path_regex()
@@ -979,6 +996,24 @@ mod tests {
         for leaked in ["alice", "One Piece", "ch1"] {
             assert!(!output.contains(leaked), "{leaked} leaked in {output}");
         }
+    }
+
+    #[test]
+    fn linux_removable_media_paths_hide_username_and_mount_name() {
+        // udisks 自动挂载路径：用户名必须脱敏。
+        let output = sanitize_text("/run/media/alice/SDCARD/manga/海贼王 第01卷.zip", true);
+        assert!(!output.contains("alice"), "{output}");
+        assert!(!output.contains("海贼王"), "{output}");
+        assert!(
+            output.contains("<USER_HOME>/") || output.contains("<MANGA_DIR>"),
+            "{output}"
+        );
+
+        // /mnt 挂载点：挂载名折叠为 <MOUNT>，不再泄露 NAS 共享名。
+        let output = sanitize_text("无法读取 /mnt/nas-share/comics/nested/第2话.cbz", true);
+        assert!(!output.contains("nas-share"), "{output}");
+        assert!(!output.contains("第2话"), "{output}");
+        assert!(output.contains("<MOUNT>"), "{output}");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-23T19:50:33.823Z",
+  "updatedAt": "2026-10-23T21:30:15.029Z",
   "regressions": [
     {
       "id": "REG-WT-ANCHOR",
@@ -529,7 +529,7 @@
       "rootCause": "",
       "fix": "安全模式阶段主窗重建后 CDP 短暂不响应：harness 改为弹性 invoke + 混沌套件排到最后，0.15.0 全量 QA 通过",
       "firstSeen": "2026-10-23T04-22-50-663Z",
-      "lastSeen": "2026-10-23 full QA 213/213"
+      "lastSeen": "2026-10-23T21-25-28-530Z"
     },
     {
       "id": "arch:shortcut-input-isolation",

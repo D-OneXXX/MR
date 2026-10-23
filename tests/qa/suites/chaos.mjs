@@ -13,7 +13,9 @@ async function closeRecovery(ctx) {
   const recovery = targets.find((target) => target.url.includes("recovery.html"));
   if (!recovery) return false;
   const page = await connectRecovery(ctx.cdpPort);
-  await invoke(page, "resilience_close_recovery");
+  // 窗口销毁/重建后 WebView2 拆链偶发拖慢命令回包：与套内其它 resilience
+  // 命令一致走超时重试（invokeResilient），重试后仍失败照常判失败。
+  await invokeResilient(page, "resilience_close_recovery");
   await page.close().catch(() => {});
   // 等旧 target 真正消失，避免后续测试连到已关闭/冻结的恢复窗。
   const deadline = Date.now() + 6000;

@@ -173,6 +173,15 @@ export default function DataBackupPanel({ onRestored }: DataBackupPanelProps) {
       if (result.preferencesJson) {
         toast(t("settings.backup.applied"));
       }
+      // 前向兼容恢复（Windows 主线高版本导出的备份）：只提取了核心
+      // 书库/进度/统计/规则，高版本新增的未知字段与表已按兼容模式丢弃。
+      if (result.forwardSchema) {
+        toast(
+          t("settings.backup.forwardSchema", {
+            version: result.appVersion ?? `v? (schema ${result.forwardSchema})`,
+          }),
+        );
+      }
     } catch (e) {
       toastErr("import_backup", e);
     } finally {

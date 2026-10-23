@@ -16,6 +16,7 @@ export const BACKUP_PREFERENCE_KEYS = [
   "mr-locale",
   "mr-reader-mode",
   "mr-reader-dir",
+  "mr-reader-cover",
   "mr-reader-wt-width",
   "mr-wt-width",
   "mr-exp-wt",

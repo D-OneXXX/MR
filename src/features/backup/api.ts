@@ -21,6 +21,8 @@ export interface BackupImportResult {
   preferencesJson: string | null;
   createdAt: string | null;
   appVersion: string | null;
+  /** 备份 manifest schema 高于当前程序时的前向兼容标记（同版本为空）。 */
+  forwardSchema?: number | null;
 }
 
 /**

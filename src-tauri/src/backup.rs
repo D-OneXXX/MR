@@ -125,6 +125,10 @@ pub struct BackupRestoreResult {
     pub preferences_json: Option<String>,
     pub created_at: Option<String>,
     pub app_version: Option<String>,
+    /// 前向兼容标记：备份 manifest 的 schema 高于当前程序时记录其值，
+    /// 前端据此提示「已按兼容模式提取核心数据」。同版本恢复时为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_schema: Option<u32>,
 }
 
 /// `manifest.json`（格式固定，schema=1）。
@@ -461,9 +465,14 @@ fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestor
     if manifest.format != BACKUP_FORMAT {
         return Err("不是 MangaReader 备份文件".into());
     }
-    if manifest.schema != BACKUP_SCHEMA {
+    // 前向兼容：Windows 主线版本演进快于 Linux 分支，高版本导出的备份
+    // （schema > 当前）允许恢复——manifest 未知字段已被 serde 忽略，
+    // library.db 中未知表/列在 copy_sql 显式列复制中被丢弃，只提取核心
+    // 书库路径、章节进度、阅读统计与过滤规则。仅拒绝 0（从未存在过）。
+    if manifest.schema == 0 || manifest.schema < BACKUP_SCHEMA {
         return Err(format!("不支持的备份格式版本：{}", manifest.schema));
     }
+    let forward_schema = (manifest.schema > BACKUP_SCHEMA).then_some(manifest.schema);
 
     let preferences_json = match prefs_index {
         Some(index) => {
@@ -512,6 +521,7 @@ fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestor
         preferences_json,
         created_at,
         app_version,
+        forward_schema,
     })
 }
 
@@ -1000,6 +1010,66 @@ mod tests {
         assert_eq!(parsed["locale"], "ja");
 
         drop(conn);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restore_accepts_future_schema_and_reports_forward_flag() {
+        // 模拟 Windows 主线高版本导出的备份：manifest.schema 高于当前程序，
+        // 且 manifest 携带未知字段（serde 应忽略）。
+        let dir = temp_dir("forward");
+        let db_path = seeded_db(&dir);
+        let source_backup = dir.join("v1.mrbackup");
+        export_backup_blocking(&db_path, &source_backup, None, "9.9.9").unwrap();
+
+        let counts = BackupCounts {
+            books: 2,
+            reading_days: 1,
+            rules: 1,
+            profiles: 1,
+        };
+        let manifest = format!(
+            "{{\"format\":\"{BACKUP_FORMAT}\",\"schema\":{},\"appVersion\":\"99.0.0\",\
+             \"createdAt\":\"2026-10-24 00:00:00\",\"counts\":{},\
+             \"futureUnknownField\":true}}",
+            BACKUP_SCHEMA + 1,
+            serde_json::to_string(&counts).unwrap()
+        );
+        let db_bytes = fs::read(exported_db(&source_backup, &dir)).unwrap();
+        let forward_backup = dir.join("future.mrbackup");
+        write_raw_zip(
+            &forward_backup,
+            &[
+                ("manifest.json", manifest.as_bytes()),
+                ("library.db", &db_bytes),
+            ],
+        );
+
+        let result = restore_backup_blocking(&db_path, &forward_backup).unwrap();
+        assert_eq!(result.forward_schema, Some(BACKUP_SCHEMA + 1));
+        assert_eq!(result.books, 2);
+        assert_eq!(result.app_version.as_deref(), Some("99.0.0"));
+
+        // schema=0（从未存在过）仍被拒绝。
+        let zero_manifest = manifest.replace(
+            &format!("\"schema\":{}", BACKUP_SCHEMA + 1),
+            "\"schema\":0",
+        );
+        let zero_backup = dir.join("zero.mrbackup");
+        write_raw_zip(
+            &zero_backup,
+            &[
+                ("manifest.json", zero_manifest.as_bytes()),
+                ("library.db", &db_bytes),
+            ],
+        );
+        let err = restore_backup_blocking(&db_path, &zero_backup).unwrap_err();
+        assert!(err.contains("不支持的备份格式版本"), "got: {err}");
+
+        // 同版本恢复不带前向标记。
+        let result = restore_backup_blocking(&db_path, &source_backup).unwrap();
+        assert_eq!(result.forward_schema, None);
+
         fs::remove_dir_all(&dir).ok();
     }
 

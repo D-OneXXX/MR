@@ -1,25 +1,65 @@
-# MangaReader QA 摘要（v0.16.0）
+# MangaReader QA 摘要（v0.17.0）
 
 独立 QA 使用隔离数据目录与本地 stub，不触碰真实书库、不写用户数据。
 本轮的架构红线固化在仓库根目录 [AGENTS.md](../AGENTS.md)。
 
-## 最近一次运行（0.16.0 Linux 移植验收）
+## 最近一次运行（0.17.0 双通道解耦 + 双端加固）
 
-- 版本：`0.16.0`
+- 版本：`0.17.0`
+- 全量 QA：**223/223（100%）**，P0=0 · P1=0 · P2=0 · P3=0
+  （visual / reader / online / cache / privacy / architecture / chaos 全绿）
+- Rust 单测：**297 passed**（新增：Shift_JIS 假名裁决解码、伪装包魔数嗅探、
+  备份高 schema 前向兼容 `restore_accepts_future_schema_and_reports_forward_flag`）
+- `npx tsc --noEmit`、`npm run build`、版本门禁：通过（0.17.0 五端同步）
+- 社区构建冒烟：无 `TAURI_SIGNING_PRIVATE_KEY` 时 `npm run build:community`
+  正确生成 `createUpdaterArtifacts=false` 覆盖层并清理（详见下方验收要点）。
+- Linux 专属 `cfg(linux)` 代码的真实编译仍由 `ci-linux-check.yml`（ubuntu-22.04）验证；
+  发版流水线已拆分为 `release-windows.yml`（`v*` 非 `-linux*`）与
+  `release-linux-critical.yml`（`v*-linux-sec*` + 手动 dispatch）。
+
+### 0.17.0 新增验收要点
+
+- **压缩包编码**：GBK 中文名包（`zip_entry_name_fixup_recovers_gbk_but_keeps_utf8`）
+  与 Shift_JIS 假名包（`zip_entry_name_fixup_recovers_shift_jis_via_kana_tiebreak`）
+  展示名恢复正常，`lookup` 仍用 zip crate 解码名保证读页命中。
+- **伪装包/加密包**：`sniff_archive_magic_flags_disguised_archives` 覆盖
+  `Rar!` / `7z` 魔数与杂项内容；加密标志在条目收集阶段（`by_index_raw`）
+  即报 `archive-encrypted`。前端 `localize.ts` 按稳定码映射六语，
+  不再无限转圈。人工用例：把 `.rar` 改名 `.cbz` 导入 → 立即弹
+  六语格式提示（zh 原文、其余语言按 `error.archiveDisguisedRar`）。
+- **双页模式**：宽 > 高×1.1 的页自动独占居中（`.reader-double.solo-center`）；
+  `mr-reader-cover` 开关（Dock 胶囊 + 阅读设置弹层）切换首页封面单独成页，
+  sanitizer flag 规则与备份偏好白名单已同步。
+- **唤醒自愈**：Reader/Webtoon 在 `visibilitychange`/`focus` 后 400ms 校验
+  视口图片，坏图静默重取（分页 ≤2、切片 ≤3 上限防重取风暴）。
+- **构建来源指纹**：无 `MR_BUILD_ORIGIN` 时关于页显示
+  `Community Modified Build (Non-Commercial)`；诊断提示词含
+  `构建来源：community`。官方 CI 注入 `official` 后显示 `Official Release`。
+- **社区构建**：清除 `TAURI_SIGNING_PRIVATE_KEY` 后 `npm run build:community`
+  生成 `createUpdaterArtifacts=false` 覆盖层并正常走完编译（不产生签名产物），
+  临时覆盖层构建后自动删除且被 gitignore。
+- **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
+  `forwardSchema`；schema=0 拒绝。
+- **chaos 已知间歇项（非本次引入）**：`resilience_close_recovery` 在主窗口
+  重建后偶发 >10s 不回包，0.16.0 基线（stash 对照）同样复现；系 WebView2
+  窗口销毁/重建与主事件循环的时序竞争，负载越高越易触发。已在
+  `closeRecovery` 按套内 `invokeResilient` 既有模式加超时重试（重试后仍
+  失败照常判 P0，不弱化断言）。根治需在应用侧审查 `window.close()` 的
+  主线程派发路径，已记 backlog。
+
+## 0.16.0 历史验收（Linux 移植）
+
 - 全量 E2E：**222/222（100%）**（`release-surface` 静态守卫加入前的记录），
   P0=0 · P1=0 · P2=0 · P3=0
   （visual / reader / online / cache / privacy / architecture / chaos 全绿；
   首次以新构建二进制运行时 online/architecture 出现过两例冷启动时序抖动，
   复跑两次均稳定通过，判定为 flake 而非缺陷）
 - 静态套件在新增 `release-surface` 守卫后单独复跑：**18/18**。
-- Rust 单测：**294 passed**（含 Linux 移植新增：ZIP GBK 条目名修复、
+- Rust 单测：294 passed（含 Linux 移植新增：ZIP GBK 条目名修复、
   gsettings/kioslaverc 代理解析、`/run/media`+`/mnt` 脱敏、DMABUF 决策表、
   deb/rpm/AppImage 格式解析）
 - `npx tsc --noEmit`、`npm run build`、版本门禁：通过
 - `cargo check --all-targets`（Windows 宿主）：通过
-- Linux 专属 `cfg(linux)` 代码的**真实编译**由
-  `.github/workflows/ci-linux-check.yml`（ubuntu-22.04）在推送
-  `feat/linux-port` 时验证；`release.yml` 双矩阵产出 deb/rpm/AppImage。
 
 生成的逐条报告在 `tests/qa/reports/latest.md`（构建产物，不提交）。
 

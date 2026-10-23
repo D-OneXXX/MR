@@ -151,6 +151,24 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 递归扫描子目录、合集章节与前端章节列表使用同一顺序；`01.jpg` 与 `1.jpg` 数值相同时
   以稳定字典序兜底，保证跨平台结果一致。
 
+### 6.3a ZIP/CBZ 条目名编码探测与伪装包嗅探（0.17.0）
+
+- **条目名解码阶梯**（`source.rs::fixup_entry_name`）：原始字节合法 UTF-8 →
+  原样；否则 GB18030（GBK 超集，中文 Windows 打包工具 CP936）与 Shift_JIS
+  （日文原版 CP932）各解一次，优先无错者；两者都无错时按**全角假名出现率**
+  裁决（Shift_JIS 含假名而 GB18030 不含 → 判日文包；半角片假名是 GBK 按 SJIS
+  解出的典型噪声，不算证据）；都有替换字符 → 回退 zip crate 的 CP437。
+  修复只影响展示名，`lookup` 恒用 zip crate 解码名保证读页 100% 命中，
+  自然序不受影响。纯汉字日文名与中文名无法区分（无假名线索），按 GB18030 展示。
+- **魔数嗅探**（`source.rs::sniff_archive_magic`）：打开 `.zip/.cbz` 前先读
+  头 8 字节——`PK\x03\x04`/`PK\x05\x06`/`PK\x07\x08` 放行；`Rar!`
+  （52 61 72 21）与 `7z\xBC\xAF\x27\x1C` 立即报结构化错误，不进入 zip
+  解析。错误文案内嵌稳定码 `archive-disguised-rar` / `archive-disguised-7z` /
+  `archive-not-zip`，前端 `localize.ts` 按码映射六语（zh 原文直出）。
+- **加密检测**：条目收集改用 `by_index_raw`（只读中央目录不解密），命中
+  加密标志（`entry.encrypted()`）即报 `archive-encrypted`，杜绝读页时爆出
+  难懂的底层解密错误或前端无限转圈。
+
 ### 6.4 文件关联、单实例与命令行直开
 
 - `bundle.fileAssociations` 注册 `.cbz` / `.zip`；Windows 安装器负责写入关联。
@@ -177,6 +195,11 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `app_meta`。恢复后刷新内存设置、缓存预算、内存/磁盘派生缓存与源句柄。
 - `preferences.json` 由前端白名单采集（主题/语言/阅读器偏好），后端只校验
   JSON 对象与大小并原样透传；恢复后前端写回 localStorage 并即时应用主题/语言。
+- **跨版本前向兼容**（0.17.0）：manifest `schema` 高于当前程序时不再拒绝——
+  serde 已忽略未知字段，`copy_sql` 显式列复制天然丢弃高版本新增表/列，仅提取
+  核心（书库路径、章节进度、阅读统计、过滤规则）；恢复结果携带
+  `forwardSchema` 标记，前端 toast 提示「已按兼容模式恢复」。`schema=0`
+  仍拒绝。Windows 主线与 Linux 分支互导的 `.mrbackup` 双向可用。
 
 ## 7. 在线直读
 
@@ -265,7 +288,8 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 客户端「设置 → 关于与维护」新增 GitHub 自动更新区：手动检查（不自动轮询）、
   显示版本/日期/纯文本 notes、下载进度、安装完成提示；重启只在用户点击
   `restart_app` 后发生。Windows 安装器退出/重启属于用户点击安装后的预期行为。
-- CI `release.yml` 在推送 `v*` 标签时：校验 tag 与 `package.json` 版本一致 →
+- CI（0.17.0 起拆分，见 §8.4）：`release-windows.yml` 在推送 `v*` 标签（排除
+  `-linux*`）时：校验 tag 与 `package.json` 版本一致 →
   `npm ci` → `tauri-action@v1`（NSIS，`uploadUpdaterJson: true`）→ 上传签名安装包与
   `latest.json`。签名私钥由 `TAURI_SIGNING_PRIVATE_KEY` /
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 注入，**绝不入库**。
@@ -316,6 +340,32 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `.cbz`/`.zip` 的 MIME 关联（`application/vnd.comicbook+zip`）由
   `fileAssociations` 生成 `.desktop` 条目，支持文件管理器双击直开。
 
+### 8.4 双端更新通道解耦与非商用授权（0.17.0）
+
+- **通道拆分**：`tauri.linux.conf.json` 把 Linux 的 updater 端点覆盖为
+  `latest-linux-critical.json`（Windows 保持 `latest.json`）。Linux 客户端
+  更新面板常驻六语提示：长期稳定分支，官方仅推送高危安全/崩溃补丁。
+- **CI 拆分**：`release-windows.yml`（`v*` 且非 `-linux*`，仅 windows-latest）
+  与 `release-linux-critical.yml`（`v*-linux-sec*` 或手动 dispatch，
+  ubuntu-22.04，`scripts/make-linux-critical-manifest.mjs` 生成清单）互不
+  阻塞；两条流水线都会把另一通道的清单文件**接力携带**到新 Release，
+  保证 `releases/latest/download/` 下两个 URL 永远可用。
+- **构建来源指纹**：编译期 `MR_BUILD_ORIGIN`（官方 CI 注入 `official`，
+  否则按 `community`）经 `get_app_info().buildOrigin` 与诊断快照
+  `runtime.buildOrigin` 暴露；设置 → 关于与维护显示
+  `Official Release` / `Community Modified Build (Non-Commercial)` 徽章，
+  AI 排查提示词同步携带，防止社区魔改版缺陷混淆官方排查。
+- **社区构建**：`npm run build:community`（`scripts/build-community.mjs`）
+  在没有 `TAURI_SIGNING_PRIVATE_KEY` 时生成临时覆盖层
+  `src-tauri/tauri.community.json`（`createUpdaterArtifacts=false`，已
+  gitignore），一键产出本地 deb/rpm/AppImage；支持 `-- --bundles appimage`
+  透传。
+- **授权**：根目录 `LICENSE`（PolyForm Noncommercial 1.0.0）+ `NOTICE.md`
+  （允许个人/社区查看、修改、适配（特别是 Linux 发行版）与非盈利分发；
+  严禁商业售卖、付费订阅、捆绑商业推广、广告变现与商业内部部署）。
+- 静态守卫 `static:release-surface` 同步升级：校验双流水线标记、
+  Linux 端点、`MR_BUILD_ORIGIN: official` 注入与 macOS 残留（runner/darwin/icns）净空。
+
 ## 9. 隐私与韧性
 
 - 诊断包、错误、日志、描述、Prompt 均经 Rust 脱敏：Windows/Unix 路径、漫画名、
@@ -361,6 +411,17 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   （input/textarea/select/contentEditable），最后才分发；阅读器、页签切换、
   条漫画布共用同一守卫。
 - 六语种：zh-CN、zh-TW、en、es、ja、ko；所有 UI 文案走 `t()`。
+- **双页模式（0.17.0）**：配对由 `spread.ts` 统一组模型驱动——
+  `get_webtoon_layout` 逐页原始宽高（本地书 256KB 头部探测，后端 LRU 缓存）
+  供宽页独占判定（`width > height × 1.1` 自动独占一屏居中，绝不与相邻竖页
+  强行并排）；「首页封面单独成页」开关（`mr-reader-cover`，sanitizer flag
+  规则 + 备份偏好白名单）开启后第 1 页独占、`[2,3]/[4,5]` 起成对；缺省值
+  保持历史行为（RTL 封面单页、LTR `[0,1]` 起对）。Dock 胶囊按钮与阅读
+  设置弹层均可切换；`stepPage` 按组步进，落点取组内最小页下标。
+- **休眠唤醒自愈（0.17.0）**：Reader 与 Webtoon 监听 `visibilitychange`/
+  `focus`，恢复可见 400ms 后对视口内图片/切片做 `complete &&
+  naturalWidth===0` 与 `decode()` 拒绝双重校验，坏图丢缓存**静默重取**
+  （单次唤醒分页 ≤2 页、切片 ≤3 片，防连环重取）。
 - 条漫：固定布局高度、DOM 窗口切片、滚动 120ms 空闲合流、最多 4 个在途请求；
   切换版式使用 Webtoon 实时中心页，避免 400ms 防抖导致进度回退。
 - HUD/Dock 自动隐藏；过滤抽屉/目录/设置弹层会锁定 HUD。
@@ -417,8 +478,9 @@ Linux 专属代码（`#[cfg(target_os = "linux")]`）在 Windows 宿主上不参
 ubuntu-22.04）执行 `cargo check --all-targets` + `cargo test --lib` +
 前端 `tsc`/`vite build` 真实验证；纯逻辑（GBK 条目名修复、gsettings/kioslaverc
 解析、DMABUF 决策表）写成跨平台纯函数，Windows 宿主单测同样覆盖。
-`release.yml` 为 `windows-latest`（NSIS）+ `ubuntu-22.04`（deb/rpm/AppImage）
-双矩阵。
+发版流水线（0.17.0 起）拆分为 `release-windows.yml`（`windows-latest`，NSIS）与
+`release-linux-critical.yml`（`ubuntu-22.04`，deb/rpm/AppImage，仅高危补丁标签），
+互不阻塞。
 
 ## 13. Linux 适配要点（feat/linux-port）
 

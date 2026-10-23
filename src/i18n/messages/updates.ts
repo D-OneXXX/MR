@@ -111,6 +111,29 @@ const zhCN = {
   "updates.securityConfigured": "已配置",
   "updates.securityMissing": "未配置",
   "updates.mb": "{value} MB",
+  "updates.native.title": "GitHub 自动更新",
+  "updates.native.description":
+    "从 GitHub Releases 检查签名更新；下载与安装都需要你手动确认，不会在后台自动进行。",
+  "updates.native.availableVersion": "可用版本",
+  "updates.native.releasedAt": "发布日期",
+  "updates.native.availableDetail":
+    "已找到新版本，更新包会在安装前完成 Minisign 签名校验。",
+  "updates.native.downloadInstall": "下载并安装",
+  "updates.native.downloading": "正在下载更新包…",
+  "updates.native.downloaded": "已下载 {size}",
+  "updates.native.preparing": "正在校验并启动安装程序…",
+  "updates.native.installed": "更新已安装",
+  "updates.native.installedHint": "重启应用以完成安装；书库与阅读进度不受影响。",
+  "updates.native.relaunch": "立即重启",
+  "updates.native.upToDateDetail":
+    "当前 v{version} 已是 GitHub 发布的最新版本。",
+  "updates.native.statusIdle": "尚未检查 GitHub 更新",
+  "updates.native.notes": "更新说明",
+  "updates.native.signature": "Minisign 签名校验",
+  "updates.native.progressLabel": "GitHub 更新下载进度",
+  "updates.native.errorCheck": "无法连接 GitHub 更新服务，请检查网络后重试。",
+  "updates.native.errorInstall": "下载或安装更新失败，当前版本未受影响。",
+  "updates.native.errorRelaunch": "重启应用失败，请手动关闭并重新打开 MangaReader。",
 } as const;
 
 const en: Record<keyof typeof zhCN, string> = {
@@ -236,6 +259,33 @@ const en: Record<keyof typeof zhCN, string> = {
   "updates.securityConfigured": "Configured",
   "updates.securityMissing": "Not configured",
   "updates.mb": "{value} MB",
+  "updates.native.title": "GitHub auto update",
+  "updates.native.description":
+    "Check GitHub Releases for signed updates. Downloading and installing always require your confirmation and never run in the background.",
+  "updates.native.availableVersion": "Available version",
+  "updates.native.releasedAt": "Release date",
+  "updates.native.availableDetail":
+    "A new version was found. The package is verified with its Minisign signature before installation.",
+  "updates.native.downloadInstall": "Download and install",
+  "updates.native.downloading": "Downloading the update package…",
+  "updates.native.downloaded": "{size} downloaded",
+  "updates.native.preparing": "Verifying and starting the installer…",
+  "updates.native.installed": "Update installed",
+  "updates.native.installedHint":
+    "Restart the app to finish installing. Your library and reading progress are untouched.",
+  "updates.native.relaunch": "Restart now",
+  "updates.native.upToDateDetail":
+    "v{version} is the latest version published on GitHub.",
+  "updates.native.statusIdle": "GitHub updates not checked yet",
+  "updates.native.notes": "Release notes",
+  "updates.native.signature": "Minisign signature check",
+  "updates.native.progressLabel": "GitHub update download progress",
+  "updates.native.errorCheck":
+    "Could not reach the GitHub update service. Check your connection and try again.",
+  "updates.native.errorInstall":
+    "Downloading or installing the update failed. Your current version is unaffected.",
+  "updates.native.errorRelaunch":
+    "Could not restart the app. Close and open MangaReader manually.",
 };
 
 const zhTW: Record<keyof typeof zhCN, string> = {
@@ -347,6 +397,30 @@ const zhTW: Record<keyof typeof zhCN, string> = {
   "updates.securityConfigured": "已設定",
   "updates.securityMissing": "未設定",
   "updates.mb": "{value} MB",
+  "updates.native.title": "GitHub 自動更新",
+  "updates.native.description":
+    "從 GitHub Releases 檢查簽章更新；下載與安裝都需要你手動確認，不會在背景自動進行。",
+  "updates.native.availableVersion": "可用版本",
+  "updates.native.releasedAt": "發布日期",
+  "updates.native.availableDetail":
+    "已找到新版本，更新包會在安裝前完成 Minisign 簽章驗證。",
+  "updates.native.downloadInstall": "下載並安裝",
+  "updates.native.downloading": "正在下載更新包…",
+  "updates.native.downloaded": "已下載 {size}",
+  "updates.native.preparing": "正在驗證並啟動安裝程式…",
+  "updates.native.installed": "更新已安裝",
+  "updates.native.installedHint": "重新啟動應用程式以完成安裝；書庫與閱讀進度不受影響。",
+  "updates.native.relaunch": "立即重新啟動",
+  "updates.native.upToDateDetail":
+    "目前 v{version} 已是 GitHub 發布的最新版本。",
+  "updates.native.statusIdle": "尚未檢查 GitHub 更新",
+  "updates.native.notes": "更新說明",
+  "updates.native.signature": "Minisign 簽章驗證",
+  "updates.native.progressLabel": "GitHub 更新下載進度",
+  "updates.native.errorCheck": "無法連線 GitHub 更新服務，請檢查網路後重試。",
+  "updates.native.errorInstall": "下載或安裝更新失敗，目前版本未受影響。",
+  "updates.native.errorRelaunch":
+    "無法重新啟動應用程式，請手動關閉並重新開啟 MangaReader。",
 };
 const es: Record<keyof typeof zhCN, string> = {
   "updates.tab": "Actualizar",
@@ -471,6 +545,33 @@ const es: Record<keyof typeof zhCN, string> = {
   "updates.securityConfigured": "Configurado",
   "updates.securityMissing": "No configurado",
   "updates.mb": "{value} MB",
+  "updates.native.title": "Actualización automática de GitHub",
+  "updates.native.description":
+    "Busca actualizaciones firmadas en GitHub Releases. La descarga y la instalación siempre requieren tu confirmación y nunca se ejecutan en segundo plano.",
+  "updates.native.availableVersion": "Versión disponible",
+  "updates.native.releasedAt": "Fecha de publicación",
+  "updates.native.availableDetail":
+    "Se encontró una nueva versión. El paquete se verifica con su firma Minisign antes de instalarse.",
+  "updates.native.downloadInstall": "Descargar e instalar",
+  "updates.native.downloading": "Descargando el paquete de actualización…",
+  "updates.native.downloaded": "{size} descargados",
+  "updates.native.preparing": "Verificando e iniciando el instalador…",
+  "updates.native.installed": "Actualización instalada",
+  "updates.native.installedHint":
+    "Reinicia la aplicación para terminar la instalación. Tu biblioteca y tu progreso de lectura no se modifican.",
+  "updates.native.relaunch": "Reiniciar ahora",
+  "updates.native.upToDateDetail":
+    "v{version} es la última versión publicada en GitHub.",
+  "updates.native.statusIdle": "Aún no se han buscado actualizaciones de GitHub",
+  "updates.native.notes": "Notas de la versión",
+  "updates.native.signature": "Verificación de firma Minisign",
+  "updates.native.progressLabel": "Progreso de descarga de la actualización de GitHub",
+  "updates.native.errorCheck":
+    "No se pudo contactar con el servicio de actualizaciones de GitHub. Revisa la conexión e inténtalo de nuevo.",
+  "updates.native.errorInstall":
+    "La descarga o instalación de la actualización falló. La versión actual no se ha modificado.",
+  "updates.native.errorRelaunch":
+    "No se pudo reiniciar la aplicación. Cierra y abre MangaReader manualmente.",
 };
 const ja: Record<keyof typeof zhCN, string> = {
   "updates.tab": "更新",
@@ -595,6 +696,33 @@ const ja: Record<keyof typeof zhCN, string> = {
   "updates.securityConfigured": "設定済み",
   "updates.securityMissing": "未設定",
   "updates.mb": "{value} MB",
+  "updates.native.title": "GitHub 自動アップデート",
+  "updates.native.description":
+    "GitHub Releases から署名付きアップデートを確認します。ダウンロードとインストールは必ず手動で確認され、バックグラウンドでは実行されません。",
+  "updates.native.availableVersion": "利用可能なバージョン",
+  "updates.native.releasedAt": "公開日",
+  "updates.native.availableDetail":
+    "新しいバージョンが見つかりました。インストール前に Minisign 署名を検証します。",
+  "updates.native.downloadInstall": "ダウンロードしてインストール",
+  "updates.native.downloading": "更新パッケージをダウンロードしています…",
+  "updates.native.downloaded": "{size} ダウンロード済み",
+  "updates.native.preparing": "検証してインストーラーを起動しています…",
+  "updates.native.installed": "アップデートをインストールしました",
+  "updates.native.installedHint":
+    "インストールを完了するにはアプリを再起動してください。ライブラリと読書の進捗は影響を受けません。",
+  "updates.native.relaunch": "今すぐ再起動",
+  "updates.native.upToDateDetail":
+    "現在の v{version} は GitHub で公開されている最新バージョンです。",
+  "updates.native.statusIdle": "GitHub アップデートは未確認です",
+  "updates.native.notes": "リリースノート",
+  "updates.native.signature": "Minisign 署名検証",
+  "updates.native.progressLabel": "GitHub アップデートのダウンロード進捗",
+  "updates.native.errorCheck":
+    "GitHub の更新サービスに接続できませんでした。ネットワークを確認して再試行してください。",
+  "updates.native.errorInstall":
+    "アップデートのダウンロードまたはインストールに失敗しました。現在のバージョンは影響を受けません。",
+  "updates.native.errorRelaunch":
+    "アプリを再起動できませんでした。MangaReader を手動で閉じて開き直してください。",
 };
 const ko: Record<keyof typeof zhCN, string> = {
   "updates.tab": "업데이트",
@@ -719,6 +847,33 @@ const ko: Record<keyof typeof zhCN, string> = {
   "updates.securityConfigured": "구성됨",
   "updates.securityMissing": "구성되지 않음",
   "updates.mb": "{value} MB",
+  "updates.native.title": "GitHub 자동 업데이트",
+  "updates.native.description":
+    "GitHub Releases에서 서명된 업데이트를 확인합니다. 다운로드와 설치는 항상 사용자가 직접 확인하며 백그라운드에서 실행되지 않습니다.",
+  "updates.native.availableVersion": "사용 가능한 버전",
+  "updates.native.releasedAt": "공개 날짜",
+  "updates.native.availableDetail":
+    "새 버전을 찾았습니다. 설치 전에 Minisign 서명을 확인합니다.",
+  "updates.native.downloadInstall": "다운로드 및 설치",
+  "updates.native.downloading": "업데이트 패키지를 다운로드하는 중…",
+  "updates.native.downloaded": "{size} 다운로드됨",
+  "updates.native.preparing": "확인 후 설치 프로그램을 시작하는 중…",
+  "updates.native.installed": "업데이트 설치됨",
+  "updates.native.installedHint":
+    "설치를 마치려면 앱을 다시 시작하세요. 라이브러리와 읽기 진행률은 영향을 받지 않습니다.",
+  "updates.native.relaunch": "지금 다시 시작",
+  "updates.native.upToDateDetail":
+    "현재 v{version}은(는) GitHub에 공개된 최신 버전입니다.",
+  "updates.native.statusIdle": "GitHub 업데이트를 아직 확인하지 않음",
+  "updates.native.notes": "릴리스 노트",
+  "updates.native.signature": "Minisign 서명 확인",
+  "updates.native.progressLabel": "GitHub 업데이트 다운로드 진행률",
+  "updates.native.errorCheck":
+    "GitHub 업데이트 서비스에 연결하지 못했습니다. 네트워크를 확인한 후 다시 시도하세요.",
+  "updates.native.errorInstall":
+    "업데이트 다운로드 또는 설치에 실패했습니다. 현재 버전은 영향을 받지 않습니다.",
+  "updates.native.errorRelaunch":
+    "앱을 다시 시작하지 못했습니다. MangaReader를 직접 종료한 후 다시 여세요.",
 };
 
 export const updatesMessages = {

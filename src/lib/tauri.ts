@@ -8,6 +8,8 @@ export interface BookInfo {
   pageCount: number;
   currentPage: number;
   updatedAt: string;
+  /** 本地源路径已不存在（NotFound）；在线书恒为 false，需重新指定位置。 */
+  missing: boolean;
   /** 条漫滚动偏移百分比（0..1）；-1 = 无条漫阅读记录。 */
   scrollPct: number;
   /** local | generic_manga | anime（预留）。 */
@@ -192,6 +194,21 @@ export interface RemoveResult {
   errors: string[];
 }
 
+/**
+ * 单实例直开队列中的一条请求（首次 CLI 启动 / 二次双击文件入队）。
+ * `paths` 只用于展示 basename，不得原样落盘或写日志。
+ */
+export interface OpenWithRequest {
+  paths: string[];
+  /** 本次请求批量导入的成功 / 失败数量。 */
+  imported: number;
+  failed: number;
+  /** 可立即打开的本地书；失败或被跳过时为 null。 */
+  book: BookInfo | null;
+  /** 后端失败代码（非中文原文）；成功时为 null。 */
+  errorCode: string | null;
+}
+
 /** `clear_temp_cache` 结果：释放的字节数与删除的文件数。 */
 export interface ClearCacheResult {
   bytesFreed: number;
@@ -301,6 +318,11 @@ export const api = {
     invoke<ScanResult>("scan_library", { path }),  // 导入书籍（文件/文件夹路径数组）：同路径去重（已在书库中），软删过的恢复并续读。
   importBooks: (paths: string[]) =>
     invoke<ImportResult>("import_books", { paths }),
+  // 本地源路径丢失后的无损重定位：新 id = sha256(newPath)，进度/scrollPct/阅读日志由后端迁移。
+  relocateBook: (bookId: string, newPath: string) =>
+    invoke<BookInfo>("relocate_book", { bookId, newPath }),
+  // 单实例直开队列：FIFO 取一条 pending 请求（无则 null）；前端需循环取到 null。
+  takePendingOpen: () => invoke<OpenWithRequest | null>("take_pending_open"),
   // 移除（deleteSourceFiles=false，可逆）或删除源文件（true，不可逆+级联清理）。
   removeBooks: (ids: string[], deleteSourceFiles: boolean) =>
     invoke<RemoveResult>("remove_books", { ids, deleteSourceFiles }),

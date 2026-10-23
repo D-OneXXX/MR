@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Check, Layers } from "lucide-react";
+import { AlertTriangle, BookOpen, Check, Layers } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { api, type BookInfo } from "@/lib/tauri";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +17,8 @@ interface Props {
   /** 单击选中：传入封面矩形，便于上层做 shared-element。 */
   onSelect?: (bookId: string, originRect: DOMRect | null) => void;
   onOpen?: (bookId: string) => void;
+  /** 源文件丢失：单击/双击/Enter 一律转去「重新指定位置」，绝不进入阅读。 */
+  onMissing?: (bookId: string) => void;
   onContextMenu?: (e: React.MouseEvent, bookId: string) => void;
   /** 延迟单击，留出双击判定窗口，避免详情 sheet 抢走第二次点击。 */
   deferSelect?: boolean;
@@ -37,6 +39,7 @@ export default function BookCard({
   onToggleCheck,
   onSelect,
   onOpen,
+  onMissing,
   onContextMenu,
   deferSelect,
 }: Props) {
@@ -45,6 +48,7 @@ export default function BookCard({
   const [coverLoading, setCoverLoading] = useState(true);
   const clickTimer = useRef<number>(0);
   const isSeries = !!book.seriesId && (seriesCount ?? 1) > 1;
+  const missing = book.missing;
 
   useEffect(() => () => window.clearTimeout(clickTimer.current), []);
 
@@ -93,6 +97,15 @@ export default function BookCard({
       onToggleCheck?.(book.id);
       return;
     }
+    // 源文件丢失：延迟到双击窗口之后再弹「重新指定位置」，
+    // 避免第一次点击就把弹窗打开、第二次点击正好落在遮罩上把它关掉。
+    if (missing) {
+      clickTimer.current = window.setTimeout(() => {
+        clickTimer.current = 0;
+        onMissing?.(book.id);
+      }, 240);
+      return;
+    }
     const rect = e.currentTarget.getBoundingClientRect();
     if (deferSelect) {
       clickTimer.current = window.setTimeout(() => {
@@ -108,6 +121,10 @@ export default function BookCard({
     clearPendingClick();
     if (selectMode) {
       onToggleCheck?.(book.id);
+      return;
+    }
+    if (missing) {
+      onMissing?.(book.id);
       return;
     }
     if (openReader) onOpen?.(book.id);
@@ -130,6 +147,7 @@ export default function BookCard({
       ? t("card.ariaSeries", { count: formatNumber(seriesCount ?? 1) })
       : "",
     online: book.sourceType !== "local" ? t("card.ariaOnline") : "",
+    missing: missing ? t("card.ariaMissing") : "",
     hint: selectMode ? t("card.ariaHintSelect") : t("card.ariaHintOpen"),
   });
 
@@ -153,6 +171,10 @@ export default function BookCard({
       onDoubleClick={() => {
         if (selectMode) return;
         clearPendingClick();
+        if (missing) {
+          onMissing?.(book.id);
+          return;
+        }
         onOpen?.(book.id);
       }}
       onKeyDown={(e) => {
@@ -214,6 +236,16 @@ export default function BookCard({
             className="absolute right-2 top-2 z-10 shrink-0 whitespace-nowrap px-2 py-0.5 text-[10px] font-bold tracking-wide shadow-hard-sm"
           >
             {t("source.url")}
+          </Badge>
+        )}
+
+        {missing && (
+          <Badge
+            variant="warning"
+            className="absolute bottom-2 right-2 z-10 max-w-[calc(100%_-_1rem)] border-border bg-warning/95 px-2 py-0.5 text-[10px] font-bold text-background shadow-hard-sm"
+          >
+            <AlertTriangle />
+            <span className="min-w-0 truncate">{t("card.missing")}</span>
           </Badge>
         )}
       </div>

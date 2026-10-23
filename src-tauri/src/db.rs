@@ -325,6 +325,50 @@ pub fn upsert_online_book(
     Ok(())
 }
 
+/// 无损重定位：把一本书从旧 id/path 迁到新 id/path（单事务）。
+///
+/// - 保留 `scroll_pct` / `updated_at` / `source_type` / `meta_json`，清 `removed`；
+/// - `current_page` 按新页数钳制（`MIN(current_page, page_count-1)`）；
+/// - 阅读历史随书迁移：同日冲突取 `MAX(existing, migrated)`，绝不丢既有记录；
+/// - 过滤事件尽力迁移（唯一索引冲突忽略），不阻断主流程。
+pub fn relocate_book(
+    conn: &Connection,
+    old_id: &str,
+    new_id: &str,
+    path: &str,
+    title: &str,
+    page_count: u32,
+) -> Result<BookRow, BackendError> {
+    let tx = conn.unchecked_transaction()?;
+    let updated = tx.execute(
+        "UPDATE books SET id=?2, path=?3, title=?4, page_count=?5,
+            current_page=MIN(current_page, MAX(?5 - 1, 0)), removed=0
+         WHERE id=?1",
+        params![old_id, new_id, path, title, page_count as i64],
+    )?;
+    if updated == 0 {
+        return Err(BackendError::Msg("书籍不存在".into()));
+    }
+    if old_id != new_id {
+        // 先合并进新 id（同日取 MAX），再删旧行；顺序不能反，否则丢历史。
+        tx.execute(
+            "INSERT INTO reading_log(date, book_id, pages)
+             SELECT date, ?2, pages FROM reading_log WHERE book_id=?1
+             ON CONFLICT(date, book_id) DO UPDATE
+                SET pages=MAX(reading_log.pages, excluded.pages)",
+            params![old_id, new_id],
+        )?;
+        tx.execute("DELETE FROM reading_log WHERE book_id=?1", params![old_id])?;
+        // 唯一索引 (book_id, url, action) 冲突时跳过该条，绝不阻断重定位。
+        let _ = tx.execute(
+            "UPDATE OR IGNORE online_filter_events SET book_id=?2 WHERE book_id=?1",
+            params![old_id, new_id],
+        );
+    }
+    tx.commit()?;
+    get_book(conn, new_id)?.ok_or_else(|| BackendError::Msg("重定位后回读失败".into()))
+}
+
 pub fn get_book(conn: &Connection, id: &str) -> Result<Option<BookRow>, BackendError> {
     let mut stmt = conn.prepare(
         "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json FROM books WHERE id=?1",
@@ -1154,6 +1198,66 @@ mod tests {
         assert_eq!(stats.site_profiles, 0);
         assert_eq!(stats.rules, 0);
         assert_eq!(stats.blocked_total, 0);
+    }
+
+    // ---------- 无损重定位 ----------
+
+    #[test]
+    fn relocate_book_moves_id_and_keeps_progress_and_history() {
+        let conn = mem();
+        upsert_book(&conn, "old", "p/old", "第一卷", 30).unwrap();
+        set_progress(&conn, "old", 15, Some(0.5)).unwrap();
+        let history = reading_log_days(&conn, Some("old"), 7).unwrap();
+        assert_eq!(history, vec![(today_str(), 15)]);
+
+        let row = relocate_book(&conn, "old", "new", "q/新书.cbz", "新书", 30).unwrap();
+        assert_eq!(row.id, "new");
+        assert_eq!(row.path, "q/新书.cbz");
+        assert_eq!(row.title, "新书");
+        assert_eq!(row.current_page, 15, "重定位不得丢阅读进度");
+        assert_eq!(row.scroll_pct, 0.5, "条漫滚动偏移同样保留");
+        assert_eq!(row.source_type, "local");
+        assert!(get_book(&conn, "old").unwrap().is_none(), "旧 id 必须消失");
+        assert_eq!(
+            reading_log_days(&conn, Some("new"), 7).unwrap(),
+            history,
+            "阅读历史必须随书迁移"
+        );
+        assert!(
+            reading_log_days(&conn, Some("old"), 7).unwrap().is_empty(),
+            "旧 id 的历史不得残留"
+        );
+    }
+
+    #[test]
+    fn relocate_book_merges_history_and_clamps_progress() {
+        let conn = mem();
+        upsert_book(&conn, "old", "p/old", "旧", 30).unwrap();
+        set_progress(&conn, "old", 15, None).unwrap();
+        // 目标 id 同日已有 3 页（书籍行不存在也无妨）：迁移后取 MAX。
+        conn.execute(
+            "INSERT INTO reading_log(date, book_id, pages) VALUES (?1, 'new', 3)",
+            params![today_str()],
+        )
+        .unwrap();
+
+        let row = relocate_book(&conn, "old", "new", "p/new", "新", 5).unwrap();
+        assert_eq!(row.page_count, 5);
+        assert_eq!(row.current_page, 4, "页数缩小时 current_page 必须被钳制");
+        assert_eq!(
+            reading_log_days(&conn, Some("new"), 7).unwrap(),
+            vec![(today_str(), 15)],
+            "同日冲突应合并为 MAX(existing, migrated)"
+        );
+        assert!(reading_log_days(&conn, Some("old"), 7).unwrap().is_empty());
+    }
+
+    #[test]
+    fn relocate_book_rejects_unknown_id() {
+        let conn = mem();
+        assert!(relocate_book(&conn, "missing", "x", "p/x", "X", 3).is_err());
+        // 失败事务不得留下半迁移的新行。
+        assert!(get_book(&conn, "x").unwrap().is_none());
     }
 }
 

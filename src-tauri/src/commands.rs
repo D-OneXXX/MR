@@ -52,9 +52,24 @@ fn webtoon_ready(r: &db::BookRow) -> bool {
     }
 }
 
+/// 本地源路径是否“确实不存在”。
+///
+/// 只有 `NotFound` 才标记为缺失；权限不足、网络盘暂时不可达等错误不误判，
+/// 避免把可恢复的访问失败伪装成“用户移动了文件”。在线书恒为 false。
+fn local_source_missing(r: &db::BookRow) -> bool {
+    if r.source_type != "local" {
+        return false;
+    }
+    match std::fs::symlink_metadata(&r.path) {
+        Ok(_) => false,
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
 fn to_book_info(r: db::BookRow) -> BookInfo {
     let webtoon_ready = webtoon_ready(&r);
     let stored = serde_json::from_str::<crate::online::StoredMeta>(&r.meta_json).ok();
+    let missing = local_source_missing(&r);
     BookInfo {
         id: r.id,
         title: r.title,
@@ -69,6 +84,7 @@ fn to_book_info(r: db::BookRow) -> BookInfo {
         series_title: stored.as_ref().and_then(|m| m.series_title.clone()),
         chapter_index: stored.as_ref().and_then(|m| m.chapter_index),
         next_url: stored.and_then(|m| m.next_url),
+        missing,
     }
 }
 
@@ -527,7 +543,7 @@ fn dir_has_direct_images(p: &Path) -> bool {
 /// - 直下没有图片 → 按**书库根**扫描：含图片的子文件夹与 zip/cbz 逐个入库
 ///   （旧 scan_library 行为；此前误把它当单本书导致"文件夹装多本书"全失效）。
 /// - 子项导入走同一套去重/恢复逻辑；子项里既无图片也非压缩包的静默跳过。
-fn import_blocking(
+pub(crate) fn import_blocking(
     db_path: PathBuf,
     paths: Vec<String>,
 ) -> Result<Vec<ImportItemResult>, BackendError> {
@@ -709,6 +725,76 @@ pub async fn get_book(
             .map(to_book_info)
             .ok_or_else(|| "书籍不存在".to_string())
     })
+}
+
+/// 重定位核心（同步、可单测）：校验新源 → 迁移 id/path/进度/历史。
+fn relocate_book_impl(
+    conn: &rusqlite::Connection,
+    old_id: &str,
+    new_path: &str,
+) -> Result<db::BookRow, BackendError> {
+    let dest = new_path.trim().to_string();
+    if dest.is_empty() {
+        return Err(BackendError::Msg("请选择新的文件或文件夹位置".to_string()));
+    }
+    let path = PathBuf::from(&dest);
+    if !path.exists() {
+        return Err(BackendError::Msg("目标路径不存在，请重新选择".to_string()));
+    }
+    if path.is_file() && !source::is_archive_path(&path) {
+        return Err(BackendError::Msg(
+            "只支持 .zip/.cbz 压缩包或图片文件夹".to_string(),
+        ));
+    }
+    let source_handle = source::open_source(&path)?;
+    let page_count = source_handle.page_count()? as u32;
+    if page_count == 0 {
+        return Err(BackendError::Msg(
+            "新位置没有可读图片，无法重定位".to_string(),
+        ));
+    }
+
+    let old = db::get_book(conn, old_id)?
+        .ok_or_else(|| BackendError::Msg("书籍不存在".to_string()))?;
+    if old.source_type != "local" {
+        return Err(BackendError::Msg("只能重定位本地书籍".to_string()));
+    }
+    let new_id = db::book_id_for_path(&dest);
+    if old.id == new_id && old.path == dest {
+        return Ok(old);
+    }
+    if db::get_book(conn, &new_id)?.is_some() {
+        return Err(BackendError::Msg("目标路径已在书库中".to_string()));
+    }
+    db::relocate_book(conn, old_id, &new_id, &dest, &title_for(&path), page_count)
+}
+
+/// 失效路径无损重定位：
+/// - 只允许本地书；新位置必须是可读的 .zip/.cbz 或含直下图片的目录；
+/// - 新 id 仍保持 `sha256(newPath)` 不变量；
+/// - 事务内迁移阅读进度、条漫偏移、reading_log 与过滤事件归属；
+/// - 源句柄/渲染缓存按新旧 id 双双失效。
+#[tauri::command]
+pub async fn relocate_book(
+    state: State<'_, Arc<AppState>>,
+    book_id: String,
+    new_path: String,
+) -> Result<BookInfo, String> {
+    let db_path = state.db_path();
+    let old_id = book_id.clone();
+    let row = blocking(move || {
+        let conn = db::open(db_path)?;
+        db::init_schema(&conn)?;
+        relocate_book_impl(&conn, &old_id, &new_path)
+    })
+    .await?;
+
+    state.remove_book_caches(&book_id);
+    state.remove_book_caches(&row.id);
+    state.webtoon_layouts.lock().remove(&book_id);
+    state.webtoon_layouts.lock().remove(&row.id);
+    state.invalidate_sources();
+    Ok(to_book_info(row))
 }
 
 #[tauri::command]
@@ -3420,5 +3506,127 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(book.page_count, 2);
+    }
+
+    // ---------- 失效路径检测 + 无损重定位 ----------
+
+    fn book_row(id: &str, path: &str, source_type: &str) -> db::BookRow {
+        db::BookRow {
+            id: id.into(),
+            path: path.into(),
+            title: id.into(),
+            page_count: 1,
+            current_page: 0,
+            updated_at: String::new(),
+            scroll_pct: -1.0,
+            source_type: source_type.into(),
+            meta_json: "{}".into(),
+        }
+    }
+
+    #[test]
+    fn book_info_marks_missing_only_for_absent_local_sources() {
+        let dir = test_temp_dir("missing");
+        let path = dir.to_string_lossy().to_string();
+        let local = book_row("local", &path, "local");
+        assert!(!to_book_info(local.clone()).missing, "源目录存在时不得误报");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            to_book_info(local).missing,
+            "本地源被移动/删除后必须标记 missing"
+        );
+
+        // 在线书没有本地路径语义，恒为 false。
+        let online = book_row("online", "https://example.test/gallery/1", "generic_manga");
+        assert!(!to_book_info(online).missing);
+    }
+
+    #[test]
+    fn renamed_archive_keeps_page_fifteen_after_relocation() {
+        use std::io::Write as _;
+        use zip::write::SimpleFileOptions;
+
+        let dir = test_temp_dir("relocate-archive");
+        let old_path = dir.join("读到第15页.cbz");
+        {
+            let file = std::fs::File::create(&old_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            for index in 0..20 {
+                zip.start_file(format!("p{index:02}.png"), SimpleFileOptions::default())
+                    .unwrap();
+                zip.write_all(b"not-decoded-by-import").unwrap();
+            }
+            zip.finish().unwrap();
+        }
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_schema(&conn).unwrap();
+        let book = scan_single_book(&conn, &old_path).unwrap();
+        assert_eq!(book.page_count, 20);
+        db::set_progress(&conn, &book.id, 15, None).unwrap();
+
+        let new_path = dir.join("改名后的漫画.cbz");
+        std::fs::rename(&old_path, &new_path).unwrap();
+
+        let row = relocate_book_impl(
+            &conn,
+            &book.id,
+            &new_path.to_string_lossy(),
+        )
+        .unwrap();
+        assert_eq!(row.path, new_path.to_string_lossy());
+        assert_eq!(row.page_count, 20);
+        assert_eq!(row.current_page, 15, "重定位后必须仍停在第 15 页");
+        assert_eq!(
+            db::reading_log_days(&conn, Some(&row.id), 1).unwrap(),
+            vec![(db::today_str(), 15)]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn relocate_book_impl_repoints_book_and_rejects_occupied_target() {
+        let dir = test_temp_dir("relocate");
+        let old_dir = dir.join("old");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        tiny_png(&old_dir.join("p1.png"));
+        let new_dir = dir.join("new");
+        std::fs::create_dir_all(&new_dir).unwrap();
+        tiny_png(&new_dir.join("p1.png"));
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_schema(&conn).unwrap();
+        let old_path = old_dir.to_string_lossy().to_string();
+        let old_id = db::book_id_for_path(&old_path);
+        db::upsert_book(&conn, &old_id, &old_path, "旧", 1).unwrap();
+
+        let new_path = new_dir.to_string_lossy().to_string();
+        let row = relocate_book_impl(&conn, &old_id, &new_path).unwrap();
+        assert_eq!(row.id, db::book_id_for_path(&new_path));
+        assert_eq!(row.path, new_path);
+        assert_eq!(row.title, "new");
+        assert!(db::get_book(&conn, &old_id).unwrap().is_none());
+
+        // 目标已被另一本书占用 → 明确拒绝，不能覆盖。
+        let other_dir = dir.join("other");
+        std::fs::create_dir_all(&other_dir).unwrap();
+        tiny_png(&other_dir.join("p1.png"));
+        let other_path = other_dir.to_string_lossy().to_string();
+        let other_id = db::book_id_for_path(&other_path);
+        db::upsert_book(&conn, &other_id, &other_path, "other", 1).unwrap();
+        let err = relocate_book_impl(&conn, &row.id, &other_path)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "目标路径已在书库中");
+
+        // 目标不存在 → 明确报错。
+        let err = relocate_book_impl(&conn, &row.id, &dir.join("gone.cbz").to_string_lossy())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("目标路径不存在"), "{err}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

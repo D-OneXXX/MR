@@ -1,10 +1,10 @@
 [package]
 name = "manga-reader-tauri"
-version = "0.15.0"
+version = "0.16.0"
 description = "Local-first manga reader (Tauri 2 + React)"
 authors = ["manga-reader"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.90"
 
 [lib]
 name = "manga_reader_tauri_lib"
@@ -17,6 +17,12 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# 双击文件关联/二次启动：单实例唤醒并转发命令行路径。
+tauri-plugin-single-instance = "2"
+# 官方 Updater：GitHub Releases latest.json + minisign 签名校验。
+tauri-plugin-updater = "2"
+# 更新安装后的显式重启（用户点击后才调用）。
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

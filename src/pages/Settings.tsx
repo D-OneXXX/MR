@@ -79,6 +79,7 @@ import UpdatesPanel from "@/components/settings/UpdatesPanel";
 import PrivacyPanel from "@/components/settings/PrivacyPanel";
 import SupportPanel from "@/components/settings/SupportPanel";
 import OnlineFilterPanel from "@/components/settings/OnlineFilterPanel";
+import DataBackupPanel from "@/components/settings/DataBackupPanel";
 import { useSafeMode } from "@/features/safeMode/SafeModeContext";
 import { recordBreadcrumb } from "@/features/resilience";
 import ErrorState from "@/components/ErrorState";
@@ -1320,6 +1321,8 @@ export default function SettingsPage() {
                 {t("settings.stats.note")}
               </p>
             </Card>
+
+            <DataBackupPanel onRestored={load} />
 
             <SettingsSection
               icon={FolderOpen}

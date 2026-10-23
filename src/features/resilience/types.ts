@@ -41,6 +41,8 @@ export type BreadcrumbKind =
   | "readerMode"
   | "archiveImport"
   | "folderImport"
+  | "fileOpen"
+  | "relocateBook"
   | "onlineRead"
   | "settingsChange"
   | "themeChange"

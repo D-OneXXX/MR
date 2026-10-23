@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   BookOpen,
   CalendarDays,
   Check,
@@ -36,6 +37,8 @@ export interface BookDetailSheetProps {
   onRead: (book: BookInfo, page?: number) => void;
   onRemove: (book: BookInfo) => void;
   onDelete: (book: BookInfo) => void;
+  /** 文件位置失效：打开重定位引导。 */
+  onRelocate?: (book: BookInfo) => void;
 }
 
 function sortChapters(list: BookInfo[]): BookInfo[] {
@@ -65,6 +68,7 @@ export default function BookDetailSheet({
   onRead,
   onRemove,
   onDelete,
+  onRelocate,
 }: BookDetailSheetProps) {
   return (
     <Sheet open={open && book !== null} onOpenChange={onOpenChange}>
@@ -78,6 +82,7 @@ export default function BookDetailSheet({
           onRead={onRead}
           onRemove={onRemove}
           onDelete={onDelete}
+          onRelocate={onRelocate}
         />
       ) : null}
     </Sheet>
@@ -92,6 +97,7 @@ function BookDetailSheetBody({
   onRead,
   onRemove,
   onDelete,
+  onRelocate,
 }: {
   book: BookInfo;
   active: boolean;
@@ -100,11 +106,13 @@ function BookDetailSheetBody({
   onRead: (book: BookInfo, page?: number) => void;
   onRemove: (book: BookInfo) => void;
   onDelete: (book: BookInfo) => void;
+  onRelocate?: (book: BookInfo) => void;
 }) {
   const { t } = useI18n();
   const [cover, setCover] = useState<string | null>(null);
 
   const online = book.sourceType !== "local";
+  const missing = book.missing;
   const source = sourceDisplay(book);
   const sourceKindLabel = t(
     source.kind === "local" ? "source.local" : "source.online",
@@ -134,6 +142,11 @@ function BookDetailSheetBody({
   }, [active, book.id]);
 
   const startReading = (page: number) => {
+    if (book.missing) {
+      onOpenChange(false);
+      onRelocate?.(book);
+      return;
+    }
     onOpenChange(false);
     onRead(book, page);
   };
@@ -200,6 +213,12 @@ function BookDetailSheetBody({
               <Badge variant={online ? "secondary" : "muted"}>
                 {sourceKindLabel}
               </Badge>
+              {missing && (
+                <Badge variant="warning">
+                  <AlertTriangle />
+                  {t("card.missing")}
+                </Badge>
+              )}
               {book.seriesTitle && (
                 <Badge
                   variant="outline"
@@ -253,46 +272,89 @@ function BookDetailSheetBody({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="pill-primary"
-            size="pill-sm"
-            className="min-w-[128px] flex-1"
-            onClick={() => startReading(book.currentPage + 1)}
-          >
-            <Play className="fill-current" />
-            {t("book.continue")}
-          </Button>
-          <Button
-            variant="pill"
-            size="pill-sm"
-            className="whitespace-nowrap"
-            onClick={() => startReading(1)}
-          >
-            <RotateCcw />
-            {t("book.startOver")}
-          </Button>
-        </div>
+        {missing ? (
+          <div className="rounded-xl border border-warning/40 bg-warning/10 p-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-foreground">
+                  {t("card.missing")}
+                </p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {t("book.missingNotice")}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button
+                variant="pill-primary"
+                size="pill-sm"
+                className="whitespace-nowrap"
+                onClick={() => {
+                  onOpenChange(false);
+                  onRelocate?.(book);
+                }}
+              >
+                <MapPin />
+                {t("relocate.choose")}
+              </Button>
+              <Button
+                variant="pill"
+                size="pill-sm"
+                className="whitespace-nowrap"
+                onClick={removeBook}
+              >
+                <Trash2 />
+                {t("relocate.remove")}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="pill-primary"
+              size="pill-sm"
+              className="min-w-[128px] flex-1"
+              onClick={() => startReading(book.currentPage + 1)}
+            >
+              <Play className="fill-current" />
+              {t("book.continue")}
+            </Button>
+            <Button
+              variant="pill"
+              size="pill-sm"
+              className="whitespace-nowrap"
+              onClick={() => startReading(1)}
+            >
+              <RotateCcw />
+              {t("book.startOver")}
+            </Button>
+          </div>
+        )}
       </SheetHeader>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
         <div className="flex flex-col gap-4">
-          <PageToc
-            bookId={book.id}
-            pageCount={book.pageCount}
-            currentPage={
-              book.currentPage > 0 ? book.currentPage + 1 : undefined
-            }
-            onSelect={startReading}
-          />
+          {missing ? null : (
+            <>
+              <PageToc
+                bookId={book.id}
+                pageCount={book.pageCount}
+                currentPage={
+                  book.currentPage > 0 ? book.currentPage + 1 : undefined
+                }
+                onSelect={startReading}
+              />
 
-          <SeriesSection
-            book={book}
-            active={active}
-            seriesBooks={seriesBooks}
-            onOpenChange={onOpenChange}
-            onRead={onRead}
-          />
+              <SeriesSection
+                book={book}
+                active={active}
+                seriesBooks={seriesBooks}
+                onOpenChange={onOpenChange}
+                onRead={onRead}
+              />
+            </>
+          )}
 
           <ActivitySection book={book} active={active} />
         </div>

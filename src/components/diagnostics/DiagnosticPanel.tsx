@@ -32,6 +32,8 @@ const ACTION_KEYS: Record<string, MessageKey> = {
   readerMode: "diagnostics.actionKind.readerMode",
   archiveImport: "diagnostics.actionKind.archiveImport",
   folderImport: "diagnostics.actionKind.folderImport",
+  fileOpen: "diagnostics.actionKind.fileOpen",
+  relocateBook: "diagnostics.actionKind.relocateBook",
   onlineRead: "diagnostics.actionKind.onlineRead",
   settingsChange: "diagnostics.actionKind.settingsChange",
   themeChange: "diagnostics.actionKind.themeChange",

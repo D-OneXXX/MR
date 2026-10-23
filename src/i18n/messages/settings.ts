@@ -208,6 +208,27 @@ const zhCN = {
   "settings.toast.pagesCleared": "页面缓存已清空",
   "settings.toast.tempCleared": "已清空临时缓存，释放 {size}",
   "settings.toast.saved": "设置已保存",
+
+  "settings.backup.title": "本地备份与恢复",
+  "settings.backup.description":
+    "把书库索引、阅读进度与偏好打包成单个备份文件；恢复前请先导出当前数据。",
+  "settings.backup.export": "导出本地备份 (.mrbackup / .zip)",
+  "settings.backup.exporting": "正在导出…",
+  "settings.backup.restore": "从备份恢复",
+  "settings.backup.restoring": "正在恢复…",
+  "settings.backup.saveTitle": "选择备份保存位置",
+  "settings.backup.pickTitle": "选择备份文件",
+  "settings.backup.filterName": "MangaReader 备份",
+  "settings.backup.note":
+    "备份包含书库索引、阅读进度、阅读统计、主题/语言/阅读器偏好与自学习过滤规则；不包含图片缓存、会话请求头、Cookie、过滤事件与内部版本标记。恢复会覆盖当前书库与阅读进度，建议先导出当前数据。",
+  "settings.backup.confirmTitle": "从备份恢复？",
+  "settings.backup.confirmMessage":
+    "这会覆盖当前书库、阅读进度与偏好设置，且无法撤销。备份文件：{file}",
+  "settings.backup.confirmRestore": "从备份恢复",
+  "settings.backup.exported": "已导出备份：{books} 本 · {size}",
+  "settings.backup.restored": "已从备份恢复：{books} 本 · {days} 天阅读记录",
+  "settings.backup.applied": "已应用备份中的主题、语言与阅读器偏好",
+  "settings.backup.error": "备份操作失败，请重试",
 } as const;
 
 type SettingsMessages = { [K in keyof typeof zhCN]: string };
@@ -421,6 +442,27 @@ const zhTW: SettingsMessages = {
   "settings.toast.pagesCleared": "頁面快取已清空",
   "settings.toast.tempCleared": "已清空臨時快取，釋放 {size}",
   "settings.toast.saved": "設定已儲存",
+
+  "settings.backup.title": "本機備份與還原",
+  "settings.backup.description":
+    "將書庫索引、閱讀進度與偏好打包成單一備份檔；還原前請先匯出目前資料。",
+  "settings.backup.export": "匯出本機備份 (.mrbackup / .zip)",
+  "settings.backup.exporting": "正在匯出…",
+  "settings.backup.restore": "從備份還原",
+  "settings.backup.restoring": "正在還原…",
+  "settings.backup.saveTitle": "選擇備份儲存位置",
+  "settings.backup.pickTitle": "選擇備份檔案",
+  "settings.backup.filterName": "MangaReader 備份",
+  "settings.backup.note":
+    "備份包含書庫索引、閱讀進度、閱讀統計、主題/語言/閱讀器偏好與自學過濾規則；不包含圖片快取、工作階段請求標頭、Cookie、過濾事件與內部版本標記。還原會覆蓋目前的書庫與閱讀進度，建議先匯出目前資料。",
+  "settings.backup.confirmTitle": "要從備份還原嗎？",
+  "settings.backup.confirmMessage":
+    "這會覆蓋目前的書庫、閱讀進度與偏好設定，且無法復原。備份檔案：{file}",
+  "settings.backup.confirmRestore": "從備份還原",
+  "settings.backup.exported": "已匯出備份：{books} 本 · {size}",
+  "settings.backup.restored": "已從備份還原：{books} 本 · {days} 天閱讀記錄",
+  "settings.backup.applied": "已套用備份中的主題、語言與閱讀器偏好",
+  "settings.backup.error": "備份操作失敗，請再試一次",
 };
 
 const en: SettingsMessages = {
@@ -633,6 +675,29 @@ const en: SettingsMessages = {
   "settings.toast.pagesCleared": "Page cache cleared",
   "settings.toast.tempCleared": "Temporary cache cleared, {size} freed",
   "settings.toast.saved": "Settings saved",
+
+  "settings.backup.title": "Local backup & restore",
+  "settings.backup.description":
+    "Pack the library index, reading progress and preferences into one backup file; export current data before restoring.",
+  "settings.backup.export": "Export local backup (.mrbackup / .zip)",
+  "settings.backup.exporting": "Exporting…",
+  "settings.backup.restore": "Restore from backup",
+  "settings.backup.restoring": "Restoring…",
+  "settings.backup.saveTitle": "Choose where to save the backup",
+  "settings.backup.pickTitle": "Choose a backup file",
+  "settings.backup.filterName": "MangaReader backup",
+  "settings.backup.note":
+    "The backup contains the library index, reading progress, reading stats, theme/language/reader preferences and self-learned filter rules. It does not include image caches, session request headers, cookies, filter events or internal version markers. Restoring overwrites the current library and reading progress, so export first.",
+  "settings.backup.confirmTitle": "Restore from this backup?",
+  "settings.backup.confirmMessage":
+    "This overwrites the current library, reading progress and preferences and cannot be undone. Backup file: {file}",
+  "settings.backup.confirmRestore": "Restore backup",
+  "settings.backup.exported": "Backup exported: {books} books · {size}",
+  "settings.backup.restored":
+    "Backup restored: {books} books · {days} reading days",
+  "settings.backup.applied":
+    "Theme, language and reader preferences from the backup were applied",
+  "settings.backup.error": "Backup operation failed. Please try again.",
 };
 
 const es: SettingsMessages = {
@@ -854,6 +919,30 @@ const es: SettingsMessages = {
   "settings.toast.tempCleared":
     "Caché temporal vaciada; se liberaron {size}",
   "settings.toast.saved": "Ajustes guardados",
+
+  "settings.backup.title": "Copia local y restauración",
+  "settings.backup.description":
+    "Empaqueta el índice de la biblioteca, el progreso de lectura y las preferencias en un solo archivo; exporta los datos actuales antes de restaurar.",
+  "settings.backup.export": "Exportar copia local (.mrbackup / .zip)",
+  "settings.backup.exporting": "Exportando…",
+  "settings.backup.restore": "Restaurar desde copia",
+  "settings.backup.restoring": "Restaurando…",
+  "settings.backup.saveTitle": "Elegir dónde guardar la copia",
+  "settings.backup.pickTitle": "Elegir un archivo de copia",
+  "settings.backup.filterName": "Copia de MangaReader",
+  "settings.backup.note":
+    "La copia incluye el índice de la biblioteca, el progreso y las estadísticas de lectura, las preferencias de tema/idioma/lector y las reglas de filtrado aprendidas. No incluye cachés de imágenes, cabeceras de sesión, cookies, eventos de filtrado ni marcas internas de versión. Restaurar sobrescribe la biblioteca y el progreso actuales, así que exporta primero.",
+  "settings.backup.confirmTitle": "¿Restaurar desde esta copia?",
+  "settings.backup.confirmMessage":
+    "Esto sobrescribe la biblioteca, el progreso de lectura y las preferencias actuales, y no se puede deshacer. Archivo: {file}",
+  "settings.backup.confirmRestore": "Restaurar copia",
+  "settings.backup.exported": "Copia exportada: {books} libros · {size}",
+  "settings.backup.restored":
+    "Copia restaurada: {books} libros · {days} días de lectura",
+  "settings.backup.applied":
+    "Se aplicaron el tema, el idioma y las preferencias de lectura de la copia",
+  "settings.backup.error":
+    "La operación de copia falló. Inténtalo de nuevo.",
 };
 
 const ja: SettingsMessages = {
@@ -1076,6 +1165,30 @@ const ja: SettingsMessages = {
   "settings.toast.tempCleared":
     "一時キャッシュを削除し、{size} を解放しました",
   "settings.toast.saved": "設定を保存しました",
+
+  "settings.backup.title": "ローカルバックアップと復元",
+  "settings.backup.description":
+    "書庫インデックス、読書進捗、設定を 1 つのバックアップファイルにまとめます。復元の前に現在のデータをエクスポートしてください。",
+  "settings.backup.export": "ローカルバックアップを書き出す (.mrbackup / .zip)",
+  "settings.backup.exporting": "書き出し中…",
+  "settings.backup.restore": "バックアップから復元",
+  "settings.backup.restoring": "復元中…",
+  "settings.backup.saveTitle": "バックアップの保存先を選択",
+  "settings.backup.pickTitle": "バックアップファイルを選択",
+  "settings.backup.filterName": "MangaReader バックアップ",
+  "settings.backup.note":
+    "バックアップには書庫インデックス、読書進捗、読書統計、テーマ/言語/リーダー設定、自動学習したフィルタールールが含まれます。画像キャッシュ、セッションのリクエストヘッダー、Cookie、フィルターイベント、内部バージョン印は含まれません。復元すると現在の書庫と読書進捗が上書きされるため、先に書き出すことをおすすめします。",
+  "settings.backup.confirmTitle": "このバックアップから復元しますか？",
+  "settings.backup.confirmMessage":
+    "現在の書庫、読書進捗、設定が上書きされ、元に戻せません。バックアップファイル: {file}",
+  "settings.backup.confirmRestore": "バックアップから復元",
+  "settings.backup.exported": "バックアップを書き出しました: {books} 冊 · {size}",
+  "settings.backup.restored":
+    "バックアップから復元しました: {books} 冊 · {days} 日分の読書記録",
+  "settings.backup.applied":
+    "バックアップのテーマ、言語、リーダー設定を適用しました",
+  "settings.backup.error":
+    "バックアップ操作に失敗しました。もう一度お試しください。",
 };
 
 const ko: SettingsMessages = {
@@ -1294,6 +1407,29 @@ const ko: SettingsMessages = {
   "settings.toast.tempCleared":
     "임시 캐시를 지우고 {size}를 확보했습니다",
   "settings.toast.saved": "설정이 저장되었습니다",
+
+  "settings.backup.title": "로컬 백업 및 복원",
+  "settings.backup.description":
+    "서재 인덱스, 읽기 진행률, 환경설정을 하나의 백업 파일로 묶습니다. 복원 전에 현재 데이터를 내보내세요.",
+  "settings.backup.export": "로컬 백업 내보내기 (.mrbackup / .zip)",
+  "settings.backup.exporting": "내보내는 중…",
+  "settings.backup.restore": "백업에서 복원",
+  "settings.backup.restoring": "복원하는 중…",
+  "settings.backup.saveTitle": "백업 저장 위치 선택",
+  "settings.backup.pickTitle": "백업 파일 선택",
+  "settings.backup.filterName": "MangaReader 백업",
+  "settings.backup.note":
+    "백업에는 서재 인덱스, 읽기 진행률, 읽기 통계, 테마/언어/리더 환경설정, 자체 학습 필터 규칙이 포함됩니다. 이미지 캐시, 세션 요청 헤더, 쿠키, 필터 이벤트, 내부 버전 표시는 포함되지 않습니다. 복원하면 현재 서재와 읽기 진행률을 덮어쓰므로 먼저 내보내는 것이 좋습니다.",
+  "settings.backup.confirmTitle": "이 백업에서 복원할까요?",
+  "settings.backup.confirmMessage":
+    "현재 서재, 읽기 진행률, 환경설정을 덮어쓰며 되돌릴 수 없습니다. 백업 파일: {file}",
+  "settings.backup.confirmRestore": "백업에서 복원",
+  "settings.backup.exported": "백업을 내보냈습니다: {books}권 · {size}",
+  "settings.backup.restored":
+    "백업에서 복원했습니다: {books}권 · {days}일 읽기 기록",
+  "settings.backup.applied":
+    "백업의 테마, 언어, 리더 환경설정을 적용했습니다",
+  "settings.backup.error": "백업 작업에 실패했습니다. 다시 시도하세요.",
 };
 
 export const settingsMessages = {

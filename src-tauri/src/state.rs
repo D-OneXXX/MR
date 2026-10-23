@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -352,6 +353,11 @@ pub struct AppState {
     db_path: Mutex<std::path::PathBuf>,
     handoff_runtime: Mutex<Option<HandoffRuntime>>,
     handoff_received: AtomicU32,
+    /// 文件关联/命令行直开的待处理请求（FIFO）。
+    ///
+    /// 只驻留内存；请求由 `open_with` 入队，前端通过 `take_pending_open`
+    /// 一次性消费。事件只是唤醒信号，重复事件不会重复打开同一本书。
+    pending_open: Mutex<VecDeque<crate::open_with::OpenWithRequest>>,
     pub _version: u64,
 }
 
@@ -375,8 +381,24 @@ impl AppState {
             db_path: Mutex::new(std::path::PathBuf::new()),
             handoff_runtime: Mutex::new(None),
             handoff_received: AtomicU32::new(0),
+            pending_open: Mutex::new(VecDeque::new()),
             _version: 3,
         }
+    }
+
+    /// 入队一次文件关联/命令行打开请求。只存内存。
+    pub fn push_open_request(&self, request: crate::open_with::OpenWithRequest) {
+        let mut queue = self.pending_open.lock();
+        // 上限防御：极端情况下（外部脚本连续拉起）最多保留 16 条。
+        if queue.len() >= 16 {
+            queue.pop_front();
+        }
+        queue.push_back(request);
+    }
+
+    /// 消费下一条打开请求；前端循环调用直到 None。
+    pub fn take_open_request(&self) -> Option<crate::open_with::OpenWithRequest> {
+        self.pending_open.lock().pop_front()
     }
 
     /// 开始新的 handoff 会话；旧会话会被取消，计数归零，辅助会话上下文一并清空。

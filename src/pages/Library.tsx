@@ -19,6 +19,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useI18n, translate } from "@/i18n";
 import { useSafeMode } from "@/features/safeMode/SafeModeContext";
+import { useWorkspace } from "@/features/workspace/WorkspaceContext";
 import { recordBreadcrumb } from "@/features/resilience";
 import {
   api,
@@ -44,6 +45,7 @@ import LibraryFilters, {
 import LibrarySearch from "@/components/library/LibrarySearch";
 import LibrarySelectionBar from "@/components/library/LibrarySelectionBar";
 import LibrarySkeleton from "@/components/library/LibrarySkeleton";
+import RelocateDialog from "@/components/library/RelocateDialog";
 
 const GROUP_KEY = "mr-library-group-series";
 const FILTER_KEY = "mr-library-source-filter";
@@ -97,6 +99,7 @@ function notifyError(cmd: string, error: unknown): void {
  */
 export default function LibraryPage() {
   const nav = useNavigate();
+  const ws = useWorkspace();
   const { t, formatNumber } = useI18n();
   const { active: safeMode } = useSafeMode();
   const [groupSeries, setGroupSeries] = useState(readGrouping);
@@ -112,6 +115,8 @@ export default function LibraryPage() {
   // 详情 Sheet：保留书籍快照，列表刷新时用最新数据覆盖展示。
   const [selectedBook, setSelectedBook] = useState<BookInfo | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  // 失效路径重定位引导（不进入 Reader，先让用户重新指定位置）。
+  const [relocatingBook, setRelocatingBook] = useState<BookInfo | null>(null);
 
   // 多选 + 右键菜单 + 删除确认
   const [selectMode, setSelectMode] = useState(false);
@@ -308,16 +313,40 @@ export default function LibraryPage() {
     setSheetOpen(true);
   }, []);
 
+  const findBook = useCallback(
+    (bookId: string) =>
+      books.find((item) => item.id === bookId) ??
+      allBooks.find((item) => item.id === bookId) ??
+      null,
+    [books, allBooks],
+  );
+
+  const openRelocate = useCallback((book: BookInfo) => {
+    setSheetOpen(false);
+    setSelectedBook(null);
+    setRelocatingBook(book);
+  }, []);
+
   const onCardSelect = useCallback(
     (bookId: string) => {
-      const book = books.find((item) => item.id === bookId);
-      if (book) openDetail(book);
+      const book = findBook(bookId);
+      if (!book) return;
+      if (book.missing) {
+        openRelocate(book);
+        return;
+      }
+      openDetail(book);
     },
-    [books, openDetail],
+    [findBook, openDetail, openRelocate],
   );
 
   const openReader = useCallback(
     (bookId: string, page?: number) => {
+      const book = findBook(bookId);
+      if (book?.missing) {
+        openRelocate(book);
+        return;
+      }
       setSheetOpen(false);
       // BookDetailSheet 契约：page 为 1-based 页码，直接映射到 Reader 的 ?page=。
       const suffix =
@@ -326,7 +355,20 @@ export default function LibraryPage() {
           : "";
       nav(`/reader/${encodeURIComponent(bookId)}${suffix}`);
     },
-    [nav],
+    [findBook, nav, openRelocate],
+  );
+
+  const onRelocated = useCallback(
+    (updated: BookInfo) => {
+      const previousId = relocatingBook?.id;
+      if (previousId) ws.replaceTab(previousId, updated.id);
+      setRelocatingBook(null);
+      toast(t("relocate.success", { title: updated.title }));
+      void reload(debounced);
+      // 重定位是用户显式动作：直接进入阅读器，后端已保留原进度。
+      nav(`/reader/${encodeURIComponent(updated.id)}`);
+    },
+    [debounced, nav, reload, relocatingBook, t, ws],
   );
 
   const toggleCheck = useCallback((bookId: string) => {
@@ -522,6 +564,14 @@ export default function LibraryPage() {
       }
     },
     [debounced, formatNumber, reload, selectedBook],
+  );
+
+  const onRemoveMissing = useCallback(
+    (book: BookInfo) => {
+      setRelocatingBook(null);
+      void doRemove([book.id]);
+    },
+    [doRemove],
   );
 
   const doDelete = useCallback(
@@ -768,6 +818,10 @@ export default function LibraryPage() {
                   }}
                   onSelect={onCardSelect}
                   onOpen={openReader}
+                  onMissing={(bookId) => {
+                    const book = findBook(bookId);
+                    if (book) openRelocate(book);
+                  }}
                   deferSelect
                 />
               ))}
@@ -805,9 +859,14 @@ export default function LibraryPage() {
               onSelect: () => openDetail(ctxBook),
             },
             {
-              label: t("menu.continue"),
+              label: ctxBook.missing
+                ? t("relocate.choose")
+                : t("menu.continue"),
               icon: <BookMarked />,
-              onSelect: () => openReader(ctxBook.id),
+              onSelect: () =>
+                ctxBook.missing
+                  ? openRelocate(ctxBook)
+                  : openReader(ctxBook.id),
             },
             {
               label: t("menu.remove"),
@@ -929,8 +988,19 @@ export default function LibraryPage() {
         seriesBooks={detailSeriesBooks}
         onRead={(book, page) => openReader(book.id, page)}
         onRemove={(book) => void doRemove([book.id])}
+        onRelocate={openRelocate}
         // Destructive source deletion goes through the shared confirm dialog.
         onDelete={(book) => setConfirmDelete([book])}
+      />
+
+      <RelocateDialog
+        book={relocatingBook}
+        open={relocatingBook !== null}
+        onOpenChange={(next) => {
+          if (!next) setRelocatingBook(null);
+        }}
+        onRelocated={onRelocated}
+        onRemove={onRemoveMissing}
       />
 
       {/* 拖入时的全屏覆盖提示（Tauri enter/over/leave/drop） */}

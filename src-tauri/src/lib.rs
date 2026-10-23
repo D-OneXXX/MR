@@ -1,6 +1,7 @@
 //! MangaReader 后端：书库、阅读、在线直读、更新、隐私与韧性。
 //! 前端契约见 `src/lib/tauri.ts`。
 
+mod backup;
 mod browser;
 pub mod cache;
 mod commands;
@@ -9,6 +10,7 @@ pub mod db;
 pub mod diagnostics;
 pub mod logging;
 mod online;
+mod open_with;
 mod paths;
 mod resilience;
 pub mod pipeline;
@@ -51,6 +53,9 @@ pub struct BookInfo {
     pub chapter_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_url: Option<String>,
+    /// 本地书源路径当前已不存在（在线书恒为 false）。前端据此显示
+    /// 「文件位置已变更」状态并提供无损重定位，不以崩溃或丢进度处理。
+    pub missing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,7 +227,7 @@ pub struct OnlineProbe {
 }
 
 /// 从 SQLite `settings` 表恢复持久化设置（无值则保留默认）。
-fn hydrate_settings(conn: &rusqlite::Connection, s: &mut Settings) {
+pub(crate) fn hydrate_settings(conn: &rusqlite::Connection, s: &mut Settings) {
     let get = |k: &str| db::get_setting(conn, k).unwrap_or(None);
     if let Some(v) = get("theme") {
         s.theme = v;
@@ -420,8 +425,17 @@ pub fn run() {
     let resilience_state = resilience::new_state();
     let app = tauri::Builder::default()
         .manage(resilience_state.clone())
+        // 单实例插件必须是第一个注册的插件：第二次双击文件时唤醒已有实例，
+        // 由回调把命令行路径转交给 open_with。
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            open_with::handle_launch(app, argv);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // 官方 Updater：GitHub Releases latest.json + minisign 校验。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // 仅提供用户显式点击后的重启命令。
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             diagnostics::install_panic_hook();
             // 1) 先锚定数据/缓存根（app_data_dir / app_cache_dir），再初始化日志。
@@ -434,6 +448,13 @@ pub fn run() {
             if let Err(e) = init_app(app) {
                 eprintln!("[backend] 初始化失败: {e}");
             }
+            // 4) 文件关联/命令行直开：首次启动在后台导入，完成后 ping 前端。
+            open_with::handle_launch(
+                app.handle(),
+                std::env::args_os()
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .collect(),
+            );
             if let Err(e) = resilience::initialize(app.handle(), &resilience_state) {
                 logging::log_error("startup", &format!("韧性守卫初始化失败：{e}"));
             }
@@ -456,6 +477,8 @@ pub fn run() {
             commands::remove_books,
             commands::list_books,
             commands::get_book,
+            commands::relocate_book,
+            open_with::take_pending_open,
             commands::get_next_book,
             commands::get_series_books,
             commands::list_entries,
@@ -473,6 +496,8 @@ pub fn run() {
             commands::clear_pages,
             commands::get_settings,
             commands::set_settings,
+            backup::export_backup,
+            backup::import_backup,
             commands::resolve_online_url,
             commands::test_online_connection,
             commands::import_resolved_pages,

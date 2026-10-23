@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -33,10 +33,38 @@ import { useI18n, type MessageKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { useUpdater } from "@/features/update/UpdateProvider";
 import {
+  checkNativeUpdate,
+  closeNativeUpdate,
+  installNativeUpdate,
+  isWindowsPlatform,
+  relaunchApp,
+  reportNativeUpdateFailure,
+  type NativeInstallEvent,
+  type NativeUpdateCheck,
+  type NativeUpdateInfo,
+} from "@/features/update/native";
+import {
   isUpdateChannel,
   type UpdateChannel,
   type UpdateKind,
 } from "@/features/update/types";
+
+type NativePhase =
+  | "idle"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "installed"
+  | "error";
+
+type NativeFailure = "check" | "install" | "relaunch";
+
+interface NativeDownloadState {
+  downloaded: number;
+  total: number | null;
+  percent: number | null;
+}
 
 function formatBytes(
   bytes: number,
@@ -123,6 +151,111 @@ export default function UpdatesPanel() {
   } = useUpdater();
   const [manifestUrl, setManifestUrl] = useState(prefs.manifestUrl);
   const [installing, setInstalling] = useState(false);
+  const [nativePhase, setNativePhase] = useState<NativePhase>("idle");
+  const [nativeInfo, setNativeInfo] = useState<NativeUpdateInfo | null>(null);
+  const [nativeDownload, setNativeDownload] =
+    useState<NativeDownloadState | null>(null);
+  const [nativeFailure, setNativeFailure] = useState<NativeFailure | null>(
+    null,
+  );
+  const [nativeUpToDate, setNativeUpToDate] = useState(false);
+  const [nativeRelaunching, setNativeRelaunching] = useState(false);
+  const nativePhaseRef = useRef<NativePhase>("idle");
+  const nativeCheckRef = useRef<NativeUpdateCheck | null>(null);
+  const nativeBusyRef = useRef(false);
+
+  const setNativePhaseSafe = (next: NativePhase) => {
+    nativePhaseRef.current = next;
+    setNativePhase(next);
+  };
+
+  // The Update handle owns a Rust-side resource: release it on unmount unless a
+  // download/install is still in flight.
+  useEffect(() => {
+    return () => {
+      const phase = nativePhaseRef.current;
+      if (phase === "downloading" || phase === "installing") return;
+      const held = nativeCheckRef.current;
+      nativeCheckRef.current = null;
+      if (held) void closeNativeUpdate(held.update);
+    };
+  }, []);
+
+  const handleNativeCheck = async () => {
+    if (nativeBusyRef.current) return;
+    nativeBusyRef.current = true;
+    setNativeFailure(null);
+    setNativeUpToDate(false);
+    setNativeInfo(null);
+    setNativeDownload(null);
+    setNativePhaseSafe("checking");
+    const previous = nativeCheckRef.current;
+    nativeCheckRef.current = null;
+    await closeNativeUpdate(previous?.update);
+    try {
+      const next = await checkNativeUpdate();
+      if (!next) {
+        setNativeUpToDate(true);
+        setNativePhaseSafe("idle");
+        return;
+      }
+      nativeCheckRef.current = next;
+      setNativeInfo(next.info);
+      setNativePhaseSafe("available");
+    } catch (reason) {
+      reportNativeUpdateFailure("check", reason);
+      setNativeFailure("check");
+      setNativePhaseSafe("error");
+    } finally {
+      nativeBusyRef.current = false;
+    }
+  };
+
+  const handleNativeInstall = async () => {
+    const held = nativeCheckRef.current;
+    if (!held || nativeBusyRef.current) return;
+    nativeBusyRef.current = true;
+    setNativeFailure(null);
+    setNativeDownload({ downloaded: 0, total: null, percent: null });
+    setNativePhaseSafe("downloading");
+    const onProgress = (event: NativeInstallEvent) => {
+      if (event.phase === "installing") {
+        setNativePhaseSafe("installing");
+        return;
+      }
+      setNativeDownload({
+        downloaded: event.downloaded,
+        total: event.total,
+        percent: event.percent,
+      });
+    };
+    try {
+      await installNativeUpdate(held.update, onProgress);
+      nativeCheckRef.current = null;
+      setNativeDownload(null);
+      setNativePhaseSafe("installed");
+    } catch (reason) {
+      reportNativeUpdateFailure("install", reason);
+      setNativeFailure("install");
+      setNativePhaseSafe("error");
+    } finally {
+      nativeBusyRef.current = false;
+    }
+  };
+
+  const handleNativeRelaunch = async () => {
+    if (nativeRelaunching) return;
+    setNativeRelaunching(true);
+    try {
+      await relaunchApp();
+    } catch (reason) {
+      reportNativeUpdateFailure("relaunch", reason);
+      setNativeFailure("relaunch");
+      setNativePhaseSafe("error");
+    } finally {
+      setNativeRelaunching(false);
+    }
+  };
 
   useEffect(() => {
     setManifestUrl(prefs.manifestUrl);
@@ -153,6 +286,46 @@ export default function UpdatesPanel() {
   const progressDownloaded = progress?.downloaded ?? 0;
   const fallback = result ? fallbackKey(result.fallbackReason) : null;
 
+  const nativeBusy =
+    nativePhase === "checking" ||
+    nativePhase === "downloading" ||
+    nativePhase === "installing";
+  const nativeCurrentVersion =
+    nativeInfo?.currentVersion ?? appInfo?.version ?? null;
+  const nativeReleaseDate = nativeInfo?.date ? new Date(nativeInfo.date) : null;
+  const nativeDateText =
+    nativeReleaseDate && !Number.isNaN(nativeReleaseDate.getTime())
+      ? formatDateTime(nativeReleaseDate, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        })
+      : null;
+  const nativeNotes = nativeInfo?.body?.trim() ?? "";
+  const nativeNeedsRelaunch = !isWindowsPlatform();
+  const nativeStatus =
+    nativePhase === "checking"
+      ? t("updates.checking")
+      : nativePhase === "available" && nativeInfo
+        ? t("updates.available", { version: nativeInfo.version })
+        : nativePhase === "downloading"
+          ? t("updates.native.downloading")
+          : nativePhase === "installing"
+            ? t("updates.native.preparing")
+            : nativePhase === "installed"
+              ? t("updates.native.installed")
+              : nativePhase === "error"
+                ? t("updates.error.title")
+                : nativeUpToDate
+                  ? t("updates.upToDate")
+                  : t("updates.native.statusIdle");
+  const nativeFailureText =
+    nativeFailure === "check"
+      ? t("updates.native.errorCheck")
+      : nativeFailure === "relaunch"
+        ? t("updates.native.errorRelaunch")
+        : t("updates.native.errorInstall");
+
   const commitUrl = () => {
     const next = manifestUrl.trim();
     if (next !== prefs.manifestUrl) updatePrefs({ manifestUrl: next });
@@ -170,6 +343,186 @@ export default function UpdatesPanel() {
 
   return (
     <div className="space-y-4">
+      <SettingsSection
+        icon={PackageOpen}
+        title={t("updates.native.title")}
+        description={t("updates.native.description")}
+        action={
+          <Button
+            type="button"
+            variant="pill-primary"
+            size="pill"
+            className="whitespace-nowrap"
+            disabled={nativeBusy || nativeRelaunching}
+            onClick={() => void handleNativeCheck()}
+          >
+            {nativePhase === "checking" ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <RefreshCw />
+            )}
+            {nativePhase === "checking"
+              ? t("updates.checking")
+              : t("updates.check")}
+          </Button>
+        }
+      >
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <InfoTile label={t("updates.version.current")}>
+            {nativeCurrentVersion ? `v${nativeCurrentVersion}` : "—"}
+          </InfoTile>
+          <InfoTile label={t("updates.native.availableVersion")}>
+            {nativeInfo ? `v${nativeInfo.version}` : "—"}
+          </InfoTile>
+          <InfoTile label={t("updates.native.releasedAt")}>
+            {nativeDateText ?? "—"}
+          </InfoTile>
+        </div>
+
+        {nativeUpToDate && nativePhase === "idle" ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t("updates.native.upToDateDetail", {
+              version: nativeCurrentVersion ?? "—",
+            })}
+          </p>
+        ) : null}
+
+        {nativeNotes && nativeInfo ? (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-foreground">
+              {t("updates.native.notes")}
+            </p>
+            <div className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-2xl border border-border bg-background/60 p-4 text-sm leading-relaxed text-muted-foreground">
+              {nativeNotes}
+            </div>
+          </div>
+        ) : null}
+
+        {nativePhase === "available" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="pill-primary"
+              size="pill"
+              className="whitespace-nowrap"
+              disabled={nativeBusy}
+              onClick={() => void handleNativeInstall()}
+            >
+              <Download />
+              {t("updates.native.downloadInstall")}
+            </Button>
+            <span className="text-[11px] leading-relaxed text-muted-foreground">
+              {t("updates.native.availableDetail")}
+            </span>
+          </div>
+        ) : null}
+
+        {nativePhase === "downloading" ? (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span className="font-mono tabular-nums">
+                {t("updates.native.downloaded", {
+                  size: formatBytes(
+                    nativeDownload?.downloaded ?? 0,
+                    locale,
+                    t("updates.sizeUnknown"),
+                  ),
+                })}
+              </span>
+              <span className="font-mono tabular-nums">
+                {nativeDownload?.percent == null
+                  ? t("updates.native.downloading")
+                  : t("updates.downloadProgress", {
+                      percent: String(nativeDownload.percent),
+                    })}
+              </span>
+            </div>
+            <Progress
+              value={nativeDownload?.percent ?? 0}
+              aria-label={t("updates.native.progressLabel")}
+              className="gap-2"
+            />
+          </div>
+        ) : null}
+
+        {nativePhase === "installing" ? (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" />
+            {t("updates.native.preparing")}
+          </p>
+        ) : null}
+
+        {nativePhase === "installed" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="success">
+              <CheckCircle2 />
+              {t("updates.native.installed")}
+            </Badge>
+            <span className="text-[11px] leading-relaxed text-muted-foreground">
+              {t("updates.native.installedHint")}
+            </span>
+            {nativeNeedsRelaunch ? (
+              <Button
+                type="button"
+                variant="pill-primary"
+                size="pill-sm"
+                className="whitespace-nowrap"
+                disabled={nativeRelaunching}
+                onClick={() => void handleNativeRelaunch()}
+              >
+                {nativeRelaunching ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Power />
+                )}
+                {nativeRelaunching
+                  ? t("updates.installing")
+                  : t("updates.native.relaunch")}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {nativePhase === "error" && nativeFailure ? (
+          <p className="break-words rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
+            {nativeFailureText}
+          </p>
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">
+          <span
+            className={cn(
+              "inline-flex items-center gap-2 text-xs font-medium",
+              nativePhase === "error"
+                ? "text-destructive"
+                : nativePhase === "installed" || nativeUpToDate
+                  ? "text-success"
+                  : "text-muted-foreground",
+            )}
+            aria-live="polite"
+          >
+            <span
+              className={cn(
+                "size-2 rounded-full",
+                nativeBusy
+                  ? "animate-pulse bg-primary"
+                  : nativePhase === "error"
+                    ? "bg-destructive"
+                    : nativePhase === "installed" || nativeUpToDate
+                      ? "bg-success"
+                      : "bg-muted-foreground",
+              )}
+              aria-hidden
+            />
+            {nativeStatus}
+          </span>
+          <Badge variant="success">
+            <ShieldCheck />
+            {t("updates.native.signature")}
+          </Badge>
+        </div>
+      </SettingsSection>
+
       <SettingsSection
         icon={PackageOpen}
         title={t("updates.title")}

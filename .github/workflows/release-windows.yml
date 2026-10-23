@@ -1,0 +1,88 @@
+name: Release (Windows)
+
+# Windows 主力发版通道：推送常规 v* 标签（不含 -linux 后缀）时触发，
+# 仅 windows-latest 节点编译 NSIS 安装包并发布 latest.json 更新清单，
+# 绝不被 Linux 构建拖慢或阻塞（Linux 走 release-linux-critical.yml）。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build signed Windows release (NSIS)
+    # Linux 高危补丁标签（v*-linux-sec* 等）不属于本通道。
+    if: ${{ !contains(github.ref_name, '-linux') }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "v${VERSION}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package.json version v${VERSION}." >&2
+            exit 1
+          fi
+          echo "Releasing v${VERSION} on Windows (NSIS)"
+
+      - name: Build and publish Tauri release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # 官方构建指纹：关于页/诊断快照显示 Official Release。
+          MR_BUILD_ORIGIN: official
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "MangaReader ${{ github.ref_name }}"
+          releaseBody: "See the assets to download and install this version."
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: "--bundles nsis"
+
+      # 通道清单接力：Windows 发版会成为最新 release，必须把 Linux 高危
+      # 补丁通道的 latest-linux-critical.json 一并带回本次发布，否则
+      # releases/latest/download/latest-linux-critical.json 会 404。
+      - name: Carry forward latest-linux-critical.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT="${GITHUB_REF_NAME}"
+          mkdir -p channel
+          for PREV in $(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[].tag_name'); do
+            if [ "$PREV" = "$CURRENT" ]; then continue; fi
+            if gh release download "$PREV" -p latest-linux-critical.json -D channel --clobber 2>/dev/null; then
+              echo "Carrying forward latest-linux-critical.json from ${PREV}"
+              gh release upload "$CURRENT" channel/latest-linux-critical.json --clobber
+              break
+            fi
+          done

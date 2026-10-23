@@ -1,0 +1,124 @@
+name: Release (Linux critical)
+
+# Linux 长期稳定分支的高危补丁通道：仅当推送 v*-linux-sec* 标签
+# （如 v0.17.1-linux-sec1）或手动 workflow_dispatch 触发时，才在
+# ubuntu-22.04 下编译 deb/rpm/AppImage 并发布 latest-linux-critical.json。
+# 日常功能更新不进本通道（Linux 功能扩展由社区非商用修改提供）。
+on:
+  push:
+    tags:
+      - "v*-linux-sec*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布标签（必须形如 v0.17.1-linux-sec1，且基础版本与 package.json 一致）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release-linux-critical:
+    name: Build signed Linux critical patch
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${TAG} on Linux (critical channel)"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install WebKitGTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify tag base version matches package.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          BASE="$(echo "${{ steps.tag.outputs.tag }}" | sed -E 's/-linux-sec.*//')"
+          if [ "v${VERSION}" != "${BASE}" ]; then
+            echo "Tag ${{ steps.tag.outputs.tag }} base ${BASE} does not match package.json version v${VERSION}." >&2
+            exit 1
+          fi
+
+      - name: Build Tauri bundles (deb / rpm / AppImage)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # 官方构建指纹：关于页/诊断快照显示 Official Release。
+          MR_BUILD_ORIGIN: official
+        run: npm run tauri -- build --bundles deb,rpm,appimage
+
+      - name: Generate latest-linux-critical.json
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: node scripts/make-linux-critical-manifest.mjs
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 通道清单接力：本次发布可能成为最新 release，必须把 Windows
+          # 常规通道的 latest.json 一并带回，否则
+          # releases/latest/download/latest.json 会 404。
+          mkdir -p channel
+          for PREV in $(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[].tag_name'); do
+            if [ "$PREV" = "$RELEASE_TAG" ]; then continue; fi
+            if gh release download "$PREV" -p latest.json -D channel --clobber 2>/dev/null; then
+              echo "Carrying forward latest.json from ${PREV}"
+              break
+            fi
+          done
+          NOTES="Linux 长期稳定分支高危安全/崩溃修复补丁。仅含安全与崩溃级修复，不含日常功能更新。"
+          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" \
+            --title "MangaReader $RELEASE_TAG (Linux critical)" \
+            --notes "$NOTES" || echo "release already exists"
+          gh release upload "$RELEASE_TAG" \
+            src-tauri/target/release/bundle/deb/*.deb \
+            src-tauri/target/release/bundle/rpm/*.rpm \
+            src-tauri/target/release/bundle/appimage/*.AppImage \
+            src-tauri/target/release/bundle/appimage/latest-linux-critical.json \
+            $(ls channel/latest.json 2>/dev/null || true) \
+            --clobber

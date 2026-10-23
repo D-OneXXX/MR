@@ -148,6 +148,7 @@ const zhCN = {
     "下载完成的安装包位于系统临时目录 /tmp/mangareader-updates/。",
   "updates.linux.libfuse2":
     "Ubuntu 22.04 及以上版本双击运行 AppImage 需要 libfuse2（sudo apt install libfuse2）。",
+  "updates.native.linuxCriticalChannel": "当前为 Linux 长期稳定分支：官方仅推送高危安全与崩溃修复补丁；日常功能扩展可由社区非商用修改提供。",
 } as const;
 
 const en: Record<keyof typeof zhCN, string> = {
@@ -314,6 +315,7 @@ const en: Record<keyof typeof zhCN, string> = {
     "Verified installers are staged in the system temp directory /tmp/mangareader-updates/.",
   "updates.linux.libfuse2":
     "Ubuntu 22.04+ needs libfuse2 to launch AppImages (sudo apt install libfuse2).",
+  "updates.native.linuxCriticalChannel": "You are on the Linux long-term stability branch: official updates only deliver critical security and crash fixes. Day-to-day features can come from community non-commercial modifications.",
 };
 
 const zhTW: Record<keyof typeof zhCN, string> = {
@@ -463,6 +465,7 @@ const zhTW: Record<keyof typeof zhCN, string> = {
     "下載完成的安裝包位於系統暫存目錄 /tmp/mangareader-updates/。",
   "updates.linux.libfuse2":
     "Ubuntu 22.04 及以上版本雙擊執行 AppImage 需要 libfuse2（sudo apt install libfuse2）。",
+  "updates.native.linuxCriticalChannel": "目前為 Linux 長期穩定分支：官方僅推送高危安全性與當機修復補丁；日常功能擴充可由社群非商業修改提供。",
 };
 const es: Record<keyof typeof zhCN, string> = {
   "updates.tab": "Actualizar",
@@ -628,6 +631,7 @@ const es: Record<keyof typeof zhCN, string> = {
     "Los instaladores verificados se guardan en el directorio temporal /tmp/mangareader-updates/.",
   "updates.linux.libfuse2":
     "Ubuntu 22.04+ necesita libfuse2 para ejecutar AppImages (sudo apt install libfuse2).",
+  "updates.native.linuxCriticalChannel": "Estás en la rama Linux de estabilidad a largo plazo: las actualizaciones oficiales solo entregan parches críticos de seguridad y de fallos. Las funciones cotidianas pueden provenir de modificaciones comunitarias no comerciales.",
 };
 const ja: Record<keyof typeof zhCN, string> = {
   "updates.tab": "更新",
@@ -793,6 +797,7 @@ const ja: Record<keyof typeof zhCN, string> = {
     "検証済みのインストーラーはシステムの一時ディレクトリ /tmp/mangareader-updates/ に保存されます。",
   "updates.linux.libfuse2":
     "Ubuntu 22.04 以降で AppImage を起動するには libfuse2 が必要です（sudo apt install libfuse2）。",
+  "updates.native.linuxCriticalChannel": "Linux 長期安定ブランチです。公式は重大なセキュリティ修正とクラッシュ修正のみを配信します。日常機能の拡張はコミュニティによる非商用改変で提供されます。",
 };
 const ko: Record<keyof typeof zhCN, string> = {
   "updates.tab": "업데이트",
@@ -958,6 +963,7 @@ const ko: Record<keyof typeof zhCN, string> = {
     "검증된 설치 패키지는 시스템 임시 디렉터리 /tmp/mangareader-updates/에 저장됩니다.",
   "updates.linux.libfuse2":
     "Ubuntu 22.04 이상에서 AppImage를 실행하려면 libfuse2가 필요합니다(sudo apt install libfuse2).",
+  "updates.native.linuxCriticalChannel": "Linux 장기 안정 브랜치입니다. 공식 업데이트는 중대 보안 및 크래시 수정만 전달하며, 일상 기능 확장은 커뮤니티 비상업 수정으로 제공될 수 있습니다.",
 };
 
 export const updatesMessages = {

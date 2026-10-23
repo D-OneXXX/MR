@@ -651,17 +651,72 @@ export function checkReleaseSurface(root, report) {
     }
   }
 
-  const workflow = read(".github/workflows/release.yml");
+  const windowsWorkflow = read(".github/workflows/release-windows.yml");
   for (const marker of [
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
     "uploadUpdaterJson: true",
     "tauri-apps/tauri-action@v1",
     "releaseDraft: false",
+    "MR_BUILD_ORIGIN: official",
+    "windows-latest",
   ]) {
-    if (!workflow.includes(marker)) {
-      errors.push(`release.yml 缺少 ${marker}`);
+    if (!windowsWorkflow.includes(marker)) {
+      errors.push(`release-windows.yml 缺少 ${marker}`);
     }
+  }
+  // Windows 常规通道绝不被 -linux 标签触发。
+  if (!windowsWorkflow.includes("contains(github.ref_name, '-linux')")) {
+    errors.push(
+      "release-windows.yml 必须排除 -linux 标签（contains(github.ref_name, '-linux')）",
+    );
+  }
+
+  const linuxWorkflow = read(".github/workflows/release-linux-critical.yml");
+  for (const marker of [
+    "TAURI_SIGNING_PRIVATE_KEY",
+    "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    "ubuntu-22.04",
+    "workflow_dispatch",
+    "v*-linux-sec*",
+    "latest-linux-critical.json",
+    "MR_BUILD_ORIGIN: official",
+    "make-linux-critical-manifest.mjs",
+  ]) {
+    if (!linuxWorkflow.includes(marker)) {
+      errors.push(`release-linux-critical.yml 缺少 ${marker}`);
+    }
+  }
+
+  // Linux 端 updater 端点必须独立指向高危补丁通道（平台专属配置覆盖）。
+  const linuxConf = parseJson("src-tauri/tauri.linux.conf.json");
+  if (linuxConf) {
+    const endpoints = Array.isArray(linuxConf.plugins?.updater?.endpoints)
+      ? linuxConf.plugins.updater.endpoints
+      : [];
+    if (
+      !endpoints.some((endpoint) =>
+        typeof endpoint === "string" ? endpoint.endsWith("latest-linux-critical.json") : false,
+      )
+    ) {
+      errors.push("tauri.linux.conf.json 的 updater 端点必须指向 latest-linux-critical.json");
+    }
+  }
+
+  // 双端锁定：CI 与打包配置不得出现 macOS 残留（runner / darwin / icns）。
+  const workflowsDir = path.join(root, ".github", "workflows");
+  if (fs.existsSync(workflowsDir)) {
+    for (const file of fs.readdirSync(workflowsDir).filter((name) => name.endsWith(".yml"))) {
+      const source = read(path.join(".github", "workflows", file));
+      for (const pattern of ["macos-", "aarch64-apple-darwin", "x86_64-apple-darwin"]) {
+        if (source.includes(pattern)) {
+          errors.push(`${file} 含 macOS 构建残留 ${pattern}`);
+        }
+      }
+    }
+  }
+  if (fs.existsSync(path.join(root, "src-tauri", "icons", "icon.icns"))) {
+    errors.push("src-tauri/icons/icon.icns 仍存在（macOS 图标残留）");
   }
 
   const lib = read("src-tauri/src/lib.rs");
@@ -708,7 +763,7 @@ export function checkReleaseSurface(root, report) {
       suite: "static",
       layer: "static",
       title: "文件关联/备份/Updater/单实例静态契约齐全",
-      details: "tauri.conf + updater capability + release.yml + 命令注册 + 三个入口文件",
+      details: "tauri.conf + tauri.linux.conf + 双发版流水线 + 命令注册 + 三个入口文件",
     });
   }
 }

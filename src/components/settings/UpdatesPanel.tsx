@@ -378,6 +378,14 @@ export default function UpdatesPanel() {
           </Button>
         }
       >
+        {isLinux ? (
+          <div className="flex items-start gap-2 rounded-2xl border border-border bg-background/60 p-3">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {t("updates.native.linuxCriticalChannel")}
+            </p>
+          </div>
+        ) : null}
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           <InfoTile label={t("updates.version.current")}>
             {nativeCurrentVersion ? `v${nativeCurrentVersion}` : "—"}

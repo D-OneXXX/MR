@@ -29,6 +29,7 @@ export default function OpenWithBridge() {
   const { t } = useI18n();
   const { active: safeModeActive } = useSafeMode();
   const draining = useRef(false);
+  const pingAgain = useRef(false);
   const safeModeRef = useRef(safeModeActive);
   safeModeRef.current = safeModeActive;
 
@@ -53,7 +54,10 @@ export default function OpenWithBridge() {
   };
 
   const drain = async () => {
-    if (draining.current) return;
+    if (draining.current) {
+      pingAgain.current = true;
+      return;
+    }
     draining.current = true;
     try {
       // FIFO：极端情况下同一次启动可能带多个路径，逐条消费直到空。
@@ -67,6 +71,11 @@ export default function OpenWithBridge() {
       // 错误内容可能含本地路径，不写日志。
     } finally {
       draining.current = false;
+      if (pingAgain.current) {
+        // 事件恰好在“取到 null”与“释放 draining”之间到达：再排一轮。
+        pingAgain.current = false;
+        void drain();
+      }
     }
   };
 
@@ -75,6 +84,7 @@ export default function OpenWithBridge() {
     let unlisten: (() => void) | undefined;
     void drain();
     listen<void>(OPEN_WITH_PENDING_EVENT, () => {
+      pingAgain.current = true;
       void drain();
     })
       .then((off) => {

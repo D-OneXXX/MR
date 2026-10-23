@@ -6,10 +6,12 @@
 ## 最近一次运行（0.16.0 Linux 移植验收）
 
 - 版本：`0.16.0`
-- 全量 E2E：**222/222（100%）**，P0=0 · P1=0 · P2=0 · P3=0
+- 全量 E2E：**222/222（100%）**（`release-surface` 静态守卫加入前的记录），
+  P0=0 · P1=0 · P2=0 · P3=0
   （visual / reader / online / cache / privacy / architecture / chaos 全绿；
   首次以新构建二进制运行时 online/architecture 出现过两例冷启动时序抖动，
   复跑两次均稳定通过，判定为 flake 而非缺陷）
+- 静态套件在新增 `release-surface` 守卫后单独复跑：**18/18**。
 - Rust 单测：**294 passed**（含 Linux 移植新增：ZIP GBK 条目名修复、
   gsettings/kioslaverc 代理解析、`/run/media`+`/mnt` 脱敏、DMABUF 决策表、
   deb/rpm/AppImage 格式解析）
@@ -37,7 +39,8 @@
   Rust 回归：`backup::tests` 5 项。
 - **Updater**：`tauri.conf.json` 的 `createUpdaterArtifacts` / `fileAssociations` /
   `plugins.updater` 公钥与 `latest.json` endpoint 已校验；设置页「GitHub 自动更新」
-  与「本地备份与恢复」面板在真实应用中可见；静态能力墙 17/17 通过。
+  与「本地备份与恢复」面板在真实应用中可见；静态套件（含 release-surface 守卫）
+  18/18 通过。
   **未实际发布 GitHub Release**，`latest.json` 生成由 `release.yml` 的
   `tauri-action@v1`（`uploadUpdaterJson: true`）保证，需用户配置签名 secrets 后推送 tag 验证。
 

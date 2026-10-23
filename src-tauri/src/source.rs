@@ -86,28 +86,106 @@ pub struct ZipEntryName {
 
 /// 非 UTF-8 ZIP 条目名修复（纯函数，任何平台都可测试）。
 ///
+/// 解码优先级：UTF-8 → GB18030 → Shift_JIS → zip crate 的 CP437 结果兜底。
 /// - 原始字节是合法 UTF-8 → 与 zip crate 解码一致，原样返回；
-/// - 否则按 GBK 解码；解码出现替换字符（说明不是 GBK）→ 回退 zip crate
-///   的 CP437 结果。Shift_JIS 压缩包可能被误判为 GBK 汉字，但只影响
-///   展示名，页序与读取不受影响（UTF-8 名与 ASCII 名走不到该分支）。
+/// - GB18030（GBK 超集，覆盖中文 Windows 打包工具写入的 CP936 字节）与
+///   Shift_JIS（日文原版包 CP932）都常能无错解出（双字节编码大量重叠），
+///   此时用**全角假名出现率**裁决：Shift_JIS 解码含平/片假名而 GB18030
+///   不含 → 判定日文包；半角片假名（GBK 汉字按 SJIS 解出的典型噪声）
+///   不作为日文证据；
+/// - 两种解码都出现替换字符 → 回退 zip crate 的 CP437 结果。
+///
+/// 修复只影响展示名——纯汉字日文名与中文名在无假名时无法区分，会按
+/// GB18030 展示（可能仍乱码），但 `lookup` 保证按索引读页 100% 命中、
+/// 自然序不受影响。
 fn fixup_entry_name(raw: &[u8], zip_decoded: &str) -> String {
     if std::str::from_utf8(raw).is_ok() {
         return zip_decoded.to_string();
     }
-    let (decoded, _, had_errors) = encoding_rs::GBK.decode(raw);
-    if had_errors {
-        zip_decoded.to_string()
-    } else {
-        decoded.into_owned()
+    let (gb, _, gb_errors) = encoding_rs::GB18030.decode(raw);
+    let (sj, _, sj_errors) = encoding_rs::SHIFT_JIS.decode(raw);
+    match (gb_errors, sj_errors) {
+        (false, true) => gb.into_owned(),
+        (true, false) => sj.into_owned(),
+        (false, false) => {
+            if has_fullwidth_kana(&sj) && !has_fullwidth_kana(&gb) {
+                sj.into_owned()
+            } else {
+                gb.into_owned()
+            }
+        }
+        (true, true) => zip_decoded.to_string(),
     }
 }
 
-/// 统一收集 zip/cbz 图片条目，并在打开阶段拒绝 zip bomb / 超大归档。
+/// 全角假名（平假名 U+3041..U+309F / 片假名 U+30A0..U+30FF）出现检测。
+/// 刻意不含半角片假名：GBK 汉字字节按 Shift_JIS 解码会大量产生半角片
+/// 假名噪声，不能作为日文证据。
+fn has_fullwidth_kana(s: &str) -> bool {
+    s.chars()
+        .any(|c| matches!(c, '\u{3041}'..='\u{309F}' | '\u{30A0}'..='\u{30FF}'))
+}
+
+/// 归档魔数嗅探：在交给 zip crate 之前先读文件头 8 字节，识别改后缀的
+/// 伪装包，避免把 RAR/7z 当 ZIP 解析时在深层爆出难懂错误或卡死。
+///
+/// - `50 4B 03 04`（本地文件头）/ `50 4B 05 06`（空归档中央目录）/
+///   `50 4B 07 08`（分卷数据描述）→ 合法 ZIP；
+/// - `52 61 72 21`（`Rar!`）→ RAR 改后缀伪装；
+/// - `37 7A BC AF 27 1C`（`7z\xBC\xAF'`）→ 7z 改后缀伪装；
+/// - 其它 → 非压缩包内容。
+///
+/// 错误文案内嵌括号形式稳定错误码（`archive-disguised-rar` 等），前端
+/// `src/features/errors/localize.ts` 据此映射六语提示。
+fn sniff_archive_magic(path: &Path) -> Result<(), BackendError> {
+    use std::io::Read as _;
+    let mut file = File::open(path)?;
+    let mut head = [0u8; 8];
+    let mut filled = 0;
+    while filled < head.len() {
+        match file.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) => return Err(BackendError::Io(e.to_string())),
+        }
+    }
+    let head = &head[..filled];
+    const ZIP_LOCAL: &[u8] = &[0x50, 0x4B, 0x03, 0x04];
+    const ZIP_EOCD: &[u8] = &[0x50, 0x4B, 0x05, 0x06];
+    const ZIP_SPAN: &[u8] = &[0x50, 0x4B, 0x07, 0x08];
+    const RAR: &[u8] = &[0x52, 0x61, 0x72, 0x21];
+    const SEVEN_Z: &[u8] = &[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C];
+    if head.starts_with(ZIP_LOCAL) || head.starts_with(ZIP_EOCD) || head.starts_with(ZIP_SPAN) {
+        return Ok(());
+    }
+    if head.starts_with(RAR) {
+        return Err(BackendError::Zip(
+            "该文件实际是 RAR 压缩包（仅改了后缀名），请转换为标准无密码 ZIP/CBZ 后再导入（archive-disguised-rar）".into(),
+        ));
+    }
+    if head.starts_with(SEVEN_Z) {
+        return Err(BackendError::Zip(
+            "该文件实际是 7z 压缩包（仅改了后缀名），请转换为标准无密码 ZIP/CBZ 后再导入（archive-disguised-7z）".into(),
+        ));
+    }
+    Err(BackendError::Zip(
+        "该文件不是有效的 ZIP/CBZ 压缩包，请转为标准无密码 ZIP/CBZ（archive-not-zip）".into(),
+    ))
+}
+
+/// 统一收集 zip/cbz 图片条目，并在打开阶段拒绝 zip bomb / 超大归档 / 加密包。
 fn zip_image_names(archive: &mut zip::ZipArchive<File>) -> Result<Vec<ZipEntryName>, BackendError> {
     let mut names = Vec::new();
     let mut total: u64 = 0;
     for index in 0..archive.len() {
-        let entry = archive.by_index(index)?;
+        // by_index_raw：只读中央目录元数据、不解密不解压——加密条目在这里
+        // 显式报结构化错误，而不是等读到该页时爆出底层解密失败。
+        let entry = archive.by_index_raw(index)?;
+        if entry.encrypted() {
+            return Err(BackendError::Zip(
+                "压缩包已加密或包含加密条目，请转为标准无密码 ZIP/CBZ 后再导入（archive-encrypted）".into(),
+            ));
+        }
         if entry.is_dir() || !is_image_name(entry.name()) {
             continue;
         }
@@ -224,6 +302,7 @@ pub struct ZipSource {
 
 impl ZipSource {
     pub fn open(path: &Path) -> Result<Self, BackendError> {
+        sniff_archive_magic(path)?;
         let file = File::open(path)?;
         let mut archive = zip::ZipArchive::new(file)?;
         let mut names = zip_image_names(&mut archive)?;
@@ -524,6 +603,7 @@ impl SourceHandle {
                 },
             })
         } else if is_archive_path(path) {
+            sniff_archive_magic(path)?;
             let file = File::open(path)?;
             let mut archive = zip::ZipArchive::new(file)?;
             let mut names = zip_image_names(&mut archive)?;
@@ -746,8 +826,70 @@ mod tests {
         let fixed = fixup_entry_name(&gbk_bytes, "mojibake");
         assert_eq!(fixed, "第01话/1.png");
 
-        // 既非 UTF-8 也非 GBK 的字节 → 回退 zip crate 的 CP437 解码结果。
+        // 既非 UTF-8 也非 GB18030/Shift_JIS 的字节 → 回退 zip crate 的 CP437 解码结果。
         assert_eq!(fixup_entry_name(&[0xff, 0xfe, 0x81, 0x30, 0x0a], "cp437"), "cp437");
+    }
+
+    #[test]
+    fn zip_entry_name_fixup_recovers_shift_jis_via_kana_tiebreak() {
+        // 日文原版包（CP932）：Shift_JIS 字节在 GB18030 下也能无错解出
+        // （得到生僻汉字噪声），靠全角假名出现率裁决为 Shift_JIS。
+        let (sj_bytes, _, _) = encoding_rs::SHIFT_JIS.encode("よるのゆめ/01.png");
+        assert!(std::str::from_utf8(&sj_bytes).is_err(), "Shift_JIS 字节不应是合法 UTF-8");
+        let fixed = fixup_entry_name(&sj_bytes, "mojibake");
+        assert_eq!(fixed, "よるのゆめ/01.png");
+
+        // GBK 汉字按 Shift_JIS 解码会得到半角片假名噪声——半角假名不算
+        // 日文证据，中文包必须仍按 GB18030 胜出。
+        let (gbk_bytes, _, _) = encoding_rs::GBK.encode("深夜食堂/第3卷");
+        let fixed = fixup_entry_name(&gbk_bytes, "mojibake");
+        assert_eq!(fixed, "深夜食堂/第3卷");
+    }
+
+    #[test]
+    fn sniff_archive_magic_flags_disguised_archives() {
+        use super::sniff_archive_magic;
+        let dir = std::env::temp_dir();
+        let tag = format!(
+            "mr-sniff-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        let write = |name: &str, bytes: &[u8]| {
+            let p = dir.join(format!("{tag}-{name}"));
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+
+        // 合法 ZIP 本地文件头。
+        let zip_path = write("ok.cbz", &[0x50, 0x4B, 0x03, 0x04, 0x00, 0x00]);
+        assert!(sniff_archive_magic(&zip_path).is_ok());
+
+        // RAR 改后缀（`Rar!`）。
+        let rar_path = write("fake-rar.cbz", &[0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00]);
+        let err = sniff_archive_magic(&rar_path).unwrap_err().to_string();
+        assert!(err.contains("archive-disguised-rar"), "got: {err}");
+
+        // 7z 改后缀（`7z BC AF 27 1C`）。
+        let sz_path = write(
+            "fake-7z.cbz",
+            &[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04],
+        );
+        let err = sniff_archive_magic(&sz_path).unwrap_err().to_string();
+        assert!(err.contains("archive-disguised-7z"), "got: {err}");
+
+        // 既不是 ZIP 也不是 RAR/7z 的杂项内容。
+        let junk_path = write("junk.cbz", b"not an archive at all..");
+        let err = sniff_archive_magic(&junk_path).unwrap_err().to_string();
+        assert!(err.contains("archive-not-zip"), "got: {err}");
+
+        for p in [zip_path, rar_path, sz_path, junk_path] {
+            let _ = std::fs::remove_file(p);
+        }
     }
 
     fn tiny_png() -> Vec<u8> {

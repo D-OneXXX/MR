@@ -87,6 +87,10 @@ const zhCN = {
   "source.hiddenAddress": "在线源地址（已脱敏）",
   "error.requestFailed": "调用 {cmd} 失败",
   "error.backendGeneric": "操作失败；详情已写入本地日志。",
+  "error.archiveDisguisedRar": "该文件实际是 RAR 压缩包（仅改了后缀名），请转换为标准无密码 ZIP/CBZ 后再导入",
+  "error.archiveDisguised7z": "该文件实际是 7z 压缩包（仅改了后缀名），请转换为标准无密码 ZIP/CBZ 后再导入",
+  "error.archiveNotZip": "该文件不是有效的 ZIP/CBZ 压缩包，请转为标准无密码 ZIP/CBZ",
+  "error.archiveEncrypted": "压缩包已加密或包含加密条目，请转为标准无密码 ZIP/CBZ 后再导入",
 } as const;
 
 type CommonMessages = { [K in keyof typeof zhCN]: string };
@@ -180,6 +184,10 @@ const zhTW: CommonMessages = {
   "source.hiddenAddress": "線上來源位址（已遮罩）",
   "error.requestFailed": "呼叫 {cmd} 失敗",
   "error.backendGeneric": "操作失敗；詳情已寫入本機日誌。",
+  "error.archiveDisguisedRar": "該檔案實際是 RAR 壓縮包（僅改了副檔名），請轉換為標準無密碼 ZIP/CBZ 後再匯入",
+  "error.archiveDisguised7z": "該檔案實際是 7z 壓縮包（僅改了副檔名），請轉換為標準無密碼 ZIP/CBZ 後再匯入",
+  "error.archiveNotZip": "該檔案不是有效的 ZIP/CBZ 壓縮包，請轉為標準無密碼 ZIP/CBZ",
+  "error.archiveEncrypted": "壓縮包已加密或包含加密條目，請轉為標準無密碼 ZIP/CBZ 後再匯入",
 };
 
 const en: CommonMessages = {
@@ -271,6 +279,10 @@ const en: CommonMessages = {
   "source.hiddenAddress": "Online source (sanitized)",
   "error.requestFailed": "Request failed: {cmd}",
   "error.backendGeneric": "The operation failed. Details were written to the local log.",
+  "error.archiveDisguisedRar": "This file is actually a RAR archive with a renamed extension. Please convert it to a standard, unencrypted ZIP/CBZ and import again.",
+  "error.archiveDisguised7z": "This file is actually a 7z archive with a renamed extension. Please convert it to a standard, unencrypted ZIP/CBZ and import again.",
+  "error.archiveNotZip": "This file is not a valid ZIP/CBZ archive. Please convert it to a standard, unencrypted ZIP/CBZ.",
+  "error.archiveEncrypted": "This archive is encrypted or contains encrypted entries. Please convert it to a standard, unencrypted ZIP/CBZ and import again.",
 };
 
 const es: CommonMessages = {
@@ -362,6 +374,10 @@ const es: CommonMessages = {
   "source.hiddenAddress": "Fuente en línea (oculta)",
   "error.requestFailed": "Error al llamar a {cmd}",
   "error.backendGeneric": "La operación falló. Los detalles se guardaron en el registro local.",
+  "error.archiveDisguisedRar": "Este archivo es en realidad un comprimido RAR con la extensión renombrada. Conviértelo a un ZIP/CBZ estándar sin contraseña e impórtalo de nuevo.",
+  "error.archiveDisguised7z": "Este archivo es en realidad un comprimido 7z con la extensión renombrada. Conviértelo a un ZIP/CBZ estándar sin contraseña e impórtalo de nuevo.",
+  "error.archiveNotZip": "Este archivo no es un ZIP/CBZ válido. Conviértelo a un ZIP/CBZ estándar sin contraseña.",
+  "error.archiveEncrypted": "Este comprimido está cifrado o contiene entradas cifradas. Conviértelo a un ZIP/CBZ estándar sin contraseña e impórtalo de nuevo.",
 };
 
 const ja: CommonMessages = {
@@ -453,6 +469,10 @@ const ja: CommonMessages = {
   "source.hiddenAddress": "オンラインソース（秘匿）",
   "error.requestFailed": "{cmd} の呼び出しに失敗しました",
   "error.backendGeneric": "操作に失敗しました。詳細はローカルログに記録しました。",
+  "error.archiveDisguisedRar": "このファイルは実は拡張子を変えただけの RAR 圧縮ファイルです。パスワードなしの標準 ZIP/CBZ に変換してから読み込んでください。",
+  "error.archiveDisguised7z": "このファイルは実は拡張子を変えただけの 7z 圧縮ファイルです。パスワードなしの標準 ZIP/CBZ に変換してから読み込んでください。",
+  "error.archiveNotZip": "このファイルは有効な ZIP/CBZ 圧縮ファイルではありません。パスワードなしの標準 ZIP/CBZ に変換してください。",
+  "error.archiveEncrypted": "この圧縮ファイルは暗号化されているか、暗号化されたエントリを含みます。パスワードなしの標準 ZIP/CBZ に変換してから読み込んでください。",
 };
 
 const ko: CommonMessages = {
@@ -544,6 +564,10 @@ const ko: CommonMessages = {
   "source.hiddenAddress": "온라인 소스(숨김)",
   "error.requestFailed": "{cmd} 호출 실패",
   "error.backendGeneric": "작업에 실패했습니다. 자세한 내용은 로컬 로그에 기록했습니다.",
+  "error.archiveDisguisedRar": "이 파일은 확장자만 바꾼 RAR 압축 파일입니다. 암호 없는 표준 ZIP/CBZ로 변환한 뒤 다시 가져오세요.",
+  "error.archiveDisguised7z": "이 파일은 확장자만 바꾼 7z 압축 파일입니다. 암호 없는 표준 ZIP/CBZ로 변환한 뒤 다시 가져오세요.",
+  "error.archiveNotZip": "이 파일은 유효한 ZIP/CBZ 압축 파일이 아닙니다. 암호 없는 표준 ZIP/CBZ로 변환하세요.",
+  "error.archiveEncrypted": "이 압축 파일은 암호화되어 있거나 암호화된 항목을 포함합니다. 암호 없는 표준 ZIP/CBZ로 변환한 뒤 다시 가져오세요.",
 };
 
 export const commonMessages = {

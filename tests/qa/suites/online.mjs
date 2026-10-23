@@ -33,6 +33,145 @@ export async function runOnlineSuite(ctx, report) {
   }
   await enableOnline(page);
 
+  // ---------- 严格防盗链：精确 Referer + 标准桌面 Chrome UA ----------
+  // A per-run token keeps the manifest URL (and therefore the book id) unique,
+  // so a stale L2 render cache can never mask a Referer/UA regression.
+  const protectedReset = fixture.protected?.reset;
+  const protectedStats = fixture.protected?.stats;
+  if (typeof protectedReset !== "function" || typeof protectedStats !== "function") {
+    fail(report, {
+      id: "online:protected-fixture",
+      suite: "online",
+      layer: "infrastructure",
+      title: "防盗链夹具未暴露请求日志",
+      severity: "P1",
+      location: "tests/qa/lib/online-fixture.mjs",
+      expected: "fixture.protected.reset() / stats()",
+      actual: String(typeof protectedReset),
+    });
+  } else {
+    protectedReset();
+    const manifestUrl = `${fixture.origin}${fixture.protected.manifestPath}?token=qa-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let protectedBook = null;
+    let resolveError = null;
+    try {
+      protectedBook = await invoke(page, "resolve_online_url", { url: manifestUrl });
+    } catch (error) {
+      resolveError = String(error);
+    }
+    if (!protectedBook || pageCount(protectedBook) !== 2) {
+      fail(report, {
+        id: "online:protected-manifest",
+        suite: "online",
+        layer: "integration",
+        title: "受保护 JSON 清单无法解析为 2 页",
+        severity: "P1",
+        details: resolveError || JSON.stringify(protectedBook),
+        location: "src-tauri/src/online/direct.rs / commands.rs",
+        expected: "2 页清单入库（受保护图片需 Referer + Mozilla UA）",
+        actual: resolveError || `${pageCount(protectedBook)} 页`,
+      });
+    } else {
+      ok(report, {
+        id: "online:protected-manifest",
+        suite: "online",
+        layer: "integration",
+        title: "受保护 JSON 清单解析为 2 页",
+        details: `${protectedBook.title} · ${pageCount(protectedBook)} 页`,
+      });
+    }
+
+    if (protectedBook) {
+      const read = await invokeSafe(page, "get_page", {
+        bookId: protectedBook.id,
+        index: 0,
+      });
+      const stats = protectedStats();
+      let display = null;
+      let header = null;
+      if (read.ok && typeof read.value?.dataUrl === "string") {
+        const comma = read.value.dataUrl.indexOf(",");
+        const encoded = comma >= 0 ? read.value.dataUrl.slice(comma + 1) : "";
+        header = Buffer.from(encoded, "base64").subarray(0, 8).toString("hex");
+        display = await page.eval(`(async () => {
+          const img = new Image();
+          img.src = ${JSON.stringify(read.value.dataUrl)};
+          try {
+            await img.decode();
+            return { ok: true, width: img.naturalWidth, height: img.naturalHeight };
+          } catch (error) {
+            return { ok: false, error: String(error) };
+          }
+        })()`);
+      }
+      const dataUrlOk =
+        read.ok && /^data:image\/(?:png|jpeg|webp|gif);base64,/.test(read.value?.dataUrl || "");
+      const bytesOk =
+        header !== null &&
+        (header.startsWith("89504e47") ||
+          header.startsWith("ffd8ff") ||
+          header.startsWith("47494638") ||
+          header.startsWith("52494646"));
+      const displayable = display?.ok === true && display.width > 0 && display.height > 0;
+      const referers = new Set(stats.requests.map((entry) => entry.referer));
+      const agents = stats.requests.map((entry) => entry.userAgent);
+      const gateOk =
+        stats.total > 0 &&
+        stats.rejected === 0 &&
+        stats.missingReferer === 0 &&
+        stats.wrongReferer === 0 &&
+        stats.missingUserAgent === 0 &&
+        referers.size === 1 &&
+        referers.has(manifestUrl) &&
+        agents.every((agent) => String(agent || "").includes("Mozilla/5.0"));
+      if (!read.ok || !dataUrlOk || !bytesOk || !displayable || !gateOk) {
+        fail(report, {
+          id: "online:protected-referer-ua",
+          suite: "online",
+          layer: "integration",
+          title: "严格防盗链图床读页失败（Referer 或桌面 UA 不达标）",
+          severity: "P1",
+          details: JSON.stringify({
+            error: read.ok ? null : read.error,
+            dataUrl: read.value?.dataUrl?.slice(0, 32) ?? null,
+            header,
+            display,
+            stats: {
+              expectedReferer: stats.expectedReferer,
+              total: stats.total,
+              authorized: stats.authorized,
+              rejected: stats.rejected,
+              missingReferer: stats.missingReferer,
+              wrongReferer: stats.wrongReferer,
+              missingUserAgent: stats.missingUserAgent,
+              lastReferer: stats.lastReferer,
+              lastUserAgent: stats.lastUserAgent,
+              lastRejectedReferer: stats.lastRejectedReferer,
+              lastRejectedUserAgent: stats.lastRejectedUserAgent,
+            },
+          }),
+          location: "src-tauri/src/online/mod.rs ONLINE_UA / online/source.rs referer",
+          expected:
+            "get_page 成功且浏览器可解码；fixture 收到的 Referer 精确等于清单 URL，UA 含 Mozilla/5.0，无 403",
+          actual: read.ok
+            ? `Referer=${stats.lastReferer} · UA=${stats.lastUserAgent} · rejected=${stats.rejected}`
+            : read.error,
+          rootCause:
+            "在线 UA 仍是 MangaReader/0.1 online-direct（非桌面 Chrome），严格防盗链站点返回 403",
+          fix: "将 ONLINE_UA 改为标准桌面 Chrome UA，并保持同一清单 URL 作为页请求 Referer",
+        });
+      } else {
+        ok(report, {
+          id: "online:protected-referer-ua",
+          suite: "online",
+          layer: "integration",
+          title: "严格防盗链图床按精确 Referer + 桌面 UA 读页成功",
+          details: `${stats.authorized} 次授权请求 · UA=${stats.lastUserAgent}`,
+        });
+      }
+    }
+  }
+
   const probe = await invoke(page, "test_online_connection", {
     url: `${fixture.origin}/manifest-noise.json`,
   });

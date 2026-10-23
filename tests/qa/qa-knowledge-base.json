@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-22T23:27:39.489Z",
+  "updatedAt": "2026-10-23T03:30:26.936Z",
   "regressions": [
     {
       "id": "REG-WT-ANCHOR",
@@ -320,14 +320,14 @@
       "title": "未补零页码按字典序排列（1,10,11,2）",
       "severity": "P1",
       "status": "fixed",
-      "location": "src-tauri/src/source.rs",
+      "location": "src-tauri/src/source.rs:112,165,382",
       "trigger": "文件夹含 1.png / 2.png / 10.png / 11.png",
       "expected": "1 → 2 → 10 → 11",
       "actual": "1 → 10 → 11 → 2",
       "rootCause": "FolderSource/ZipSource 使用 Vec::sort() 字典序，未复用 commands.rs 的 natural_cmp",
       "fix": "文件夹/ZIP 复用 natural_cmp 自然排序",
       "firstSeen": "2026-10-22T19:12:31.629Z",
-      "lastSeen": "2026-10-22T22:23:35.982Z",
+      "lastSeen": "2026-10-23T03-10-51-475Z",
       "evidence": "runtime",
       "verification": "1,2,10,11 顺序正确",
       "fixedAt": "2026-10-22T22:23:35.982Z"

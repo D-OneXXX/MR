@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use rusqlite::Connection;
 
 use crate::cache::ImageCache;
+use crate::disk_cache::{self, OnlinePageCache};
 use crate::render_cache::RenderCache;
 use crate::source::SourceHandle;
 use crate::Settings;
@@ -48,16 +49,47 @@ pub(crate) fn effective_online_headers(saved: &str, session: Option<&str>) -> St
         .to_string()
 }
 
-/// 渲染缓存根目录：环境变量优先（测试隔离），否则默认本地数据目录。
-fn default_render_root() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("MR_RENDER_CACHE_DIR") {
-        if !p.trim().is_empty() {
-            return std::path::PathBuf::from(p);
+/// 缓存根环境变量只接受绝对路径，且不得等于数据目录或它的祖先；
+/// 否则回退到数据目录下的安全子目录，避免清理命令误删 `library.db`。
+fn safe_cache_root(raw: &str, fallback: std::path::PathBuf) -> std::path::PathBuf {
+    let candidate = std::path::PathBuf::from(raw.trim());
+    if !candidate.is_absolute() || candidate.parent().is_none() {
+        return fallback;
+    }
+    let candidate = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+    if let Ok(data) = crate::data_dir() {
+        let data = std::fs::canonicalize(&data).unwrap_or(data);
+        if candidate == data || data.starts_with(&candidate) {
+            return fallback;
         }
     }
-    dirs::data_local_dir()
+    candidate
+}
+
+/// 渲染缓存根目录：环境变量优先（测试隔离），否则默认本地数据目录。
+fn default_render_root() -> std::path::PathBuf {
+    let fallback = dirs::data_local_dir()
         .map(|d| d.join("com.local.manga-reader").join("render_cache"))
-        .unwrap_or_else(std::env::temp_dir)
+        .unwrap_or_else(|| std::env::temp_dir().join("manga-reader-render-cache"));
+    if let Ok(p) = std::env::var("MR_RENDER_CACHE_DIR") {
+        if !p.trim().is_empty() {
+            return safe_cache_root(&p, fallback);
+        }
+    }
+    fallback
+}
+
+/// 在线原图缓存根目录：与渲染缓存同级，便于统一统计与 LRU 淘汰。
+fn default_online_cache_root() -> std::path::PathBuf {
+    let fallback = dirs::data_local_dir()
+        .map(|d| d.join("com.local.manga-reader").join("online_cache"))
+        .unwrap_or_else(|| std::env::temp_dir().join("manga-reader-online-cache"));
+    if let Ok(p) = std::env::var("MR_ONLINE_CACHE_DIR") {
+        if !p.trim().is_empty() {
+            return safe_cache_root(&p, fallback);
+        }
+    }
+    fallback
 }
 
 pub(crate) struct HandoffRuntime {
@@ -99,6 +131,10 @@ pub struct AppState {
     pub webtoon_layouts: Mutex<HashMap<String, Arc<Vec<(u32, u32)>>>>,
     /// 磁盘渲染缓存（成品 JPEG，二次访问 ~1ms）。
     pub render: RenderCache,
+    /// 在线原图磁盘 L2（URL+Referer 哈希，LRU）。
+    pub online_cache: Arc<OnlinePageCache>,
+    /// 磁盘缓存写入压力：累计超过阈值即后台统一 trim。
+    cache_pressure: AtomicU64,
     db_path: Mutex<std::path::PathBuf>,
     handoff_runtime: Mutex<Option<HandoffRuntime>>,
     handoff_received: AtomicU32,
@@ -119,6 +155,8 @@ impl AppState {
             tile_lock: Mutex::new(()),
             webtoon_layouts: Mutex::new(HashMap::new()),
             render: RenderCache::new(default_render_root()),
+            online_cache: Arc::new(OnlinePageCache::new(default_online_cache_root())),
+            cache_pressure: AtomicU64::new(0),
             db_path: Mutex::new(std::path::PathBuf::new()),
             handoff_runtime: Mutex::new(None),
             handoff_received: AtomicU32::new(0),
@@ -243,10 +281,12 @@ impl AppState {
             let headers = effective_online_headers(&s.online_headers, session_headers.as_deref());
             let transport = crate::online::http::UreqTransport::new(&s.online_proxy, &headers)?;
             Arc::new(SourceHandle::open_online(
+                book_id.to_string(),
                 path,
                 stored.pages,
                 Arc::new(transport),
                 s.online_concurrency as usize,
+                Some(self.online_cache.clone()),
             )?)
         } else if source_type == "anime" {
             return Err(crate::source::BackendError::Msg(
@@ -287,6 +327,69 @@ impl AppState {
         pool.clear();
     }
 
+    /// 当前磁盘缓存软上限（字节）。内存设置只做展示，真正淘汰在空闲/启动时执行。
+    pub fn disk_cache_limit_bytes(&self) -> u64 {
+        disk_cache::budget_bytes(self.settings.lock().disk_cache_budget_mb)
+    }
+
+    /// (总占用, 渲染缓存, 在线原图缓存)
+    pub fn disk_cache_totals(&self) -> (u64, u64, u64) {
+        let render = self.render.disk_bytes();
+        let online = self.online_cache.disk_bytes();
+        (render.saturating_add(online), render, online)
+    }
+
+    /// 两个缓存根共用一个预算，按文件 mtime 最旧优先淘汰。
+    pub fn trim_disk_cache(&self) -> u64 {
+        self.cache_pressure.store(0, Ordering::Relaxed);
+        let budget = self.disk_cache_limit_bytes();
+        disk_cache::trim_total(
+            &[self.render.root(), self.online_cache.root()],
+            budget,
+        )
+    }
+
+    /// 累计写盘超过阈值时后台触发统一淘汰；由取页/切片路径在落盘后调用。
+    /// 大章节连续阅读也能在超过 256MB 后尽快回到软上限，而不必等 5 分钟巡检。
+    pub fn note_cache_write(self: &Arc<Self>, bytes: usize) {
+        if bytes == 0 {
+            return;
+        }
+        const TRIGGER_BYTES: u64 = 256 * 1024 * 1024;
+        let total = self
+            .cache_pressure
+            .fetch_add(bytes as u64, Ordering::Relaxed)
+            .saturating_add(bytes as u64);
+        if total >= TRIGGER_BYTES {
+            self.cache_pressure.store(0, Ordering::Relaxed);
+            let state = self.clone();
+            std::thread::spawn(move || {
+                state.trim_disk_cache();
+            });
+        }
+    }
+
+    /// 后台执行统一淘汰，避免设置保存/翻页路径被大目录扫描阻塞。
+    pub fn trim_disk_cache_async(self: &Arc<Self>) {
+        let state = self.clone();
+        std::thread::spawn(move || {
+            let removed = state.trim_disk_cache();
+            if removed > 0 {
+                crate::logging::log_error(
+                    "cache",
+                    &format!("磁盘缓存超出软上限，已按 LRU 释放 {removed} 字节"),
+                );
+            }
+        });
+    }
+
+    /// 删除一本书的全部派生缓存（内存、渲染 L2、在线原图 L2）。
+    pub fn remove_book_caches(&self, book_id: &str) {
+        self.cache.remove_book(book_id);
+        self.render.remove_book(book_id);
+        self.online_cache.remove_book(book_id);
+    }
+
     pub fn set_db_path(&self, p: std::path::PathBuf) {
         *self.db_path.lock() = p;
     }
@@ -307,7 +410,7 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::{effective_online_headers, AppState};
+    use super::{effective_online_headers, safe_cache_root, AppState};
     use crate::source::{BackendError, SourceHandle};
 
     fn test_state() -> AppState {
@@ -348,6 +451,18 @@ mod tests {
             .write_image(&[255, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
             .expect("编码测试 PNG");
         std::fs::write(path, buf).expect("写入测试 PNG");
+    }
+
+    #[test]
+    fn cache_root_override_rejects_relative_and_file_system_root() {
+        let fallback = std::path::PathBuf::from("safe-fallback");
+        assert_eq!(
+            safe_cache_root("relative/cache", fallback.clone()),
+            fallback
+        );
+        assert_eq!(safe_cache_root("   ", fallback.clone()), fallback);
+        #[cfg(windows)]
+        assert_eq!(safe_cache_root(r"C:\", fallback.clone()), fallback);
     }
 
     #[test]

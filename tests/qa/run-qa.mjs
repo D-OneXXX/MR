@@ -22,6 +22,7 @@ import { runStaticSuite } from "./suites/static.mjs";
 import { runVisualSuite } from "./suites/visual.mjs";
 import { runReaderSuite } from "./suites/reader.mjs";
 import { runOnlineSuite } from "./suites/online.mjs";
+import { runCacheSuite } from "./suites/cache.mjs";
 import { runPrivacySuite } from "./suites/privacy.mjs";
 import { runChaosSuite } from "./suites/chaos.mjs";
 
@@ -151,7 +152,7 @@ async function main() {
   const staticResult = { id: "static", title: "静态与版本红线", run: runStaticSuite };
   await runOne(report, { root: ROOT, artifactDir: ARTIFACT_ROOT }, staticResult);
 
-  if (ONLY && ONLY !== "visual" && ONLY !== "reader" && ONLY !== "online" && ONLY !== "privacy" && ONLY !== "chaos") {
+  if (ONLY && ONLY !== "visual" && ONLY !== "reader" && ONLY !== "online" && ONLY !== "cache" && ONLY !== "privacy" && ONLY !== "chaos") {
     finalize(report);
     return;
   }
@@ -176,6 +177,7 @@ async function main() {
       { id: "visual", title: "双主题与六语种排版", run: runVisualSuite },
       { id: "reader", title: "阅读器与条漫压测", run: runReaderSuite },
       { id: "online", title: "在线直读与噪音过滤", run: runOnlineSuite },
+      { id: "cache", title: "磁盘缓存上限与清理隔离", run: runCacheSuite },
       { id: "privacy", title: "隐私脱敏与版本展示", run: runPrivacySuite },
       { id: "chaos", title: "混沌、安全模式与恢复", run: runChaosSuite },
     ].filter((suite) => !ONLY || suite.id === ONLY);

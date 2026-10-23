@@ -168,6 +168,40 @@ function writeNaturalFolder(root) {
   return dir;
 }
 
+function writeNaturalLabelsFolder(root) {
+  const dir = path.join(root, "QA Natural Chapters");
+  fs.mkdirSync(dir, { recursive: true });
+  // Written in lexicographic order (第10/第11 before 第1/第2); natural sorting
+  // must yield 1, 2, 10, 11 rather than the on-disk/zip order.
+  for (const [index, name] of ["第10话.png", "第1话.png", "第11话.png", "第2话.png"].entries()) {
+    const hue = (index * 47 + 130) % 255;
+    fs.writeFileSync(
+      path.join(dir, name),
+      makePng(360, 540, [hue, (hue + 60) % 255, (hue + 120) % 255]),
+    );
+  }
+  return dir;
+}
+
+/** 20-page CBZ written in lexicographic order (1,10,11,...,19,2,20,3...). */
+function writeNaturalArchive(root) {
+  const names = Array.from({ length: 20 }, (_, index) => `${index + 1}.png`);
+  const widths = Object.fromEntries(
+    names.map((name) => [Number(name.replace(".png", "")), 400 + Number(name.replace(".png", "")) * 8]),
+  );
+  const entries = [...names].sort().map((name) => {
+    const page = Number(name.replace(".png", ""));
+    const hue = (page * 13) % 255;
+    return [
+      name,
+      makePng(widths[page], 800, [hue, (hue + 70) % 255, (hue + 140) % 255]),
+    ];
+  });
+  const archive = path.join(root, "QA_Natural_20.cbz");
+  fs.writeFileSync(archive, makeZip(entries));
+  return { archive, widths };
+}
+
 export function createQaFixtures(root) {
   fs.rmSync(root, { recursive: true, force: true });
   fs.mkdirSync(root, { recursive: true });
@@ -175,6 +209,8 @@ export function createQaFixtures(root) {
   const folder = writeBookFolder(root, "QA Local Folder", 10, 640, 960);
   const longWebtoon = writeBookFolder(root, "QA Long Webtoon", 125, 360, 1080);
   const naturalOrder = writeNaturalFolder(root);
+  const naturalLabels = writeNaturalLabelsFolder(root);
+  const naturalArchive = writeNaturalArchive(root);
 
   const cjkDir = path.join(root, "中文目录 含空格");
   fs.mkdirSync(cjkDir, { recursive: true });
@@ -192,10 +228,21 @@ export function createQaFixtures(root) {
     folder,
     longWebtoon,
     naturalOrder,
+    naturalLabels,
+    naturalArchive: naturalArchive.archive,
     cjkArchive,
     zipPath,
     broken,
-    importOrder: [folder, naturalOrder, cjkArchive, zipPath, longWebtoon, broken],
+    importOrder: [
+      folder,
+      naturalOrder,
+      naturalLabels,
+      naturalArchive.archive,
+      cjkArchive,
+      zipPath,
+      longWebtoon,
+      broken,
+    ],
     expected: {
       folderPages: 10,
       cjkPages: 6,
@@ -203,6 +250,9 @@ export function createQaFixtures(root) {
       webtoonPages: 125,
       naturalPages: 4,
       naturalOrder: ["1.png", "2.png", "10.png", "11.png"],
+      naturalArchiveOrder: Array.from({ length: 20 }, (_, index) => `${index + 1}.png`),
+      naturalArchiveWidths: naturalArchive.widths,
+      naturalLabelsOrder: ["第1话.png", "第2话.png", "第10话.png", "第11话.png"],
     },
   };
 }

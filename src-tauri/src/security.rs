@@ -172,8 +172,14 @@ pub async fn clear_online_traces(
 
     state.cache.clear_pages();
     state.cache.clear_thumbs();
+    state.webtoon_layouts.lock().clear();
     state.render.clear_all();
+    state.online_cache.clear_all();
     *state.session_online_headers.lock() = None;
+    // 池中的 transport 仍可能内嵌旧 Cookie/请求头；必须整体作废，
+    // 否则清理后继续阅读会复用已清除凭据的句柄。
+    state.invalidate_sources();
+    state.trim_disk_cache();
 
     let windows = app.webview_windows();
     let mut webviews_cleared: u32 = 0;
@@ -432,7 +438,10 @@ fn cache_totals(state: &AppState) -> (u64, u64) {
     let (page_thumb_bytes, _, _, _, webtoon_bytes, _) = state.cache.stats();
     (
         page_thumb_bytes.saturating_add(webtoon_bytes),
-        state.render.disk_bytes(),
+        state
+            .render
+            .disk_bytes()
+            .saturating_add(state.online_cache.disk_bytes()),
     )
 }
 

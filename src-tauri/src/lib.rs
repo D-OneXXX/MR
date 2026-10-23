@@ -4,6 +4,7 @@
 mod browser;
 pub mod cache;
 mod commands;
+pub mod disk_cache;
 pub mod db;
 pub mod diagnostics;
 pub mod logging;
@@ -82,6 +83,11 @@ pub struct MemoryStats {
     /// 条漫切片缓存（字节/片数）。
     pub webtoon_bytes: u64,
     pub webtoon_tiles: usize,
+    /// 统一磁盘缓存：渲染成品 + 在线原图，二者共用同一软上限。
+    pub disk_cache_bytes: u64,
+    pub disk_cache_limit_bytes: u64,
+    pub render_cache_bytes: u64,
+    pub online_cache_bytes: u64,
 }
 
 /// 条漫布局数据：单页源图尺寸（header 解析，不解码）。
@@ -170,7 +176,10 @@ pub struct RemoveResult {
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub theme: String,
+    /// 内存页/缩略图 LRU 预算（MB）。
     pub cache_budget_mb: u32,
+    /// 磁盘缓存软上限（MB）：渲染成品 + 在线原图共用。
+    pub disk_cache_budget_mb: u32,
     pub library_dir: String,
     /// 实验性功能：条漫模式。默认关闭；关闭时版式只在单页/双页间切换。
     pub experimental_webtoon: bool,
@@ -189,6 +198,7 @@ impl Default for Settings {
         Self {
             theme: "dark".into(),
             cache_budget_mb: 128,
+            disk_cache_budget_mb: disk_cache::DEFAULT_DISK_CACHE_MB,
             library_dir: String::new(),
             experimental_webtoon: false,
             experimental_online: false,
@@ -218,6 +228,9 @@ fn hydrate_settings(conn: &rusqlite::Connection, s: &mut Settings) {
     }
     if let Some(v) = get("cache_budget_mb").and_then(|v| v.parse::<u32>().ok()) {
         s.cache_budget_mb = v.clamp(16, 2048);
+    }
+    if let Some(v) = get("disk_cache_budget_mb").and_then(|v| v.parse::<u32>().ok()) {
+        s.disk_cache_budget_mb = disk_cache::clamp_budget_mb(v);
     }
     if let Some(v) = get("library_dir") {
         s.library_dir = v;
@@ -296,8 +309,9 @@ fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
     }
     if migration.clear_disk_cache {
         // MAJOR/downgrade/unknown metadata may point at incompatible render
-        // artifacts. Removing the derived directory never touches the library.
+        // artifacts. Removing the derived directories never touches the library.
         state.render.clear_all();
+        state.online_cache.clear_all();
     }
     if let Err(err) = state.db.with(|conn| {
         versioning::record_run_version(conn, current_version).map_err(|err| err.to_string())
@@ -347,10 +361,16 @@ pub fn run() {
             if let Err(e) = resilience::initialize(app.handle(), &resilience_state) {
                 logging::log_error("startup", &format!("韧性守卫初始化失败：{e}"));
             }
-            // 启动时后台 trim 磁盘渲染缓存（≤2GB，按 mtime 删最旧）。
+            // 启动时后台 trim 统一磁盘缓存（render + online，共用软上限）。
             let st2 = app.state::<Arc<AppState>>().inner().clone();
             std::thread::spawn(move || {
-                st2.render.trim(crate::render_cache::RENDER_DISK_BUDGET);
+                st2.trim_disk_cache();
+            });
+            // 空闲兜底：每 5 分钟复查一次，避免长时间阅读只写不淘汰。
+            let st3 = app.state::<Arc<AppState>>().inner().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(300));
+                st3.trim_disk_cache();
             });
             Ok(())
         })
@@ -366,6 +386,7 @@ pub fn run() {
             commands::get_page,
             commands::get_thumbnail,
             commands::clear_thumbnail_cache,
+            commands::clear_temp_cache,
             commands::get_webtoon_layout,
             commands::get_webtoon_tile,
             commands::get_memory_stats,
@@ -429,8 +450,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
     app.run(|app_handle, event| {
-        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
-            app_handle.state::<Arc<AppState>>().cancel_handoff();
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            let state = app_handle.state::<Arc<AppState>>();
+            state.cancel_handoff();
+            // 退出前做最后一次统一淘汰；只动派生缓存，不碰 SQLite。
+            state.trim_disk_cache();
         }
     });
 }

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { invoke } from "../lib/app.mjs";
+import { invoke, invokeSafe } from "../lib/app.mjs";
 import { fail, note, ok } from "../lib/report.mjs";
 
 const CLS_PROBE = `(() => {
@@ -22,6 +22,14 @@ const WEBTOON_LABEL = `(() => {
   for (const el of document.querySelectorAll("[data-reader-hud]")) {
     const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
     if (/%/.test(text) && /\\d+\\s*\\/\\s*\\d+/.test(text)) return text;
+  }
+  return null;
+})()`;
+
+const PAGE_COUNTER = `(() => {
+  for (const el of document.querySelectorAll("[data-reader-hud] .mono")) {
+    const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
+    if (/^\\d+\\s*\\/\\s*\\d+$/.test(text)) return text;
   }
   return null;
 })()`;
@@ -119,6 +127,182 @@ export async function runReaderSuite(ctx, report) {
         details: names.join(" → "),
       });
     }
+  }
+
+  const naturalZip = byFragment("QA_Natural_20");
+  const expectedArchiveOrder = ctx.fixtures.expected.naturalArchiveOrder;
+  if (!naturalZip) {
+    fail(report, {
+      id: "reader:natural-order-cbz",
+      suite: "reader",
+      layer: "integration",
+      title: "字典序写入的 20 页 CBZ 未入库",
+      severity: "P1",
+      details: "QA_Natural_20.cbz fixture missing from list_books",
+      location: "src-tauri/src/commands.rs: import_books",
+      expected: "CBZ 条目 1.png ... 20.png 正常入库",
+      actual: "书库中找不到该 fixture",
+    });
+  } else {
+    let names = [];
+    try {
+      const entries = await invoke(page, "list_entries", { bookId: naturalZip.id });
+      names = Array.isArray(entries) ? entries.map((entry) => entry.name) : [];
+    } catch (error) {
+      names = [`<error:${String(error)}>`];
+    }
+    const orderOk = JSON.stringify(names) === JSON.stringify(expectedArchiveOrder);
+    const firstRead = await invokeSafe(page, "get_page", {
+      bookId: naturalZip.id,
+      index: 0,
+    });
+    const tenthRead = await invokeSafe(page, "get_page", {
+      bookId: naturalZip.id,
+      index: 9,
+    });
+    const width = (result) =>
+      result.ok ? Number(result.value?.orig_width ?? result.value?.origWidth ?? 0) : 0;
+    const widths = ctx.fixtures.expected.naturalArchiveWidths;
+    const firstOk = firstRead.ok && width(firstRead) === widths[1];
+    const tenthOk = tenthRead.ok && width(tenthRead) === widths[10];
+    if (!orderOk || !firstOk || !tenthOk) {
+      fail(report, {
+        id: "reader:natural-order-cbz",
+        suite: "reader",
+        layer: "integration",
+        title: "字典序写入的 CBZ 未按自然序 1..20 排列",
+        severity: "P1",
+        details: JSON.stringify({
+          names,
+          expected: expectedArchiveOrder,
+          first: { ok: firstRead.ok, width: width(firstRead), expected: widths[1], error: firstRead.error },
+          tenth: { ok: tenthRead.ok, width: width(tenthRead), expected: widths[10], error: tenthRead.error },
+        }),
+        location: "src-tauri/src/source.rs: ZipSource/SourceHandle names.sort_by",
+        expected: "list_entries = 1..20；第 1 页原宽 408、第 10 页原宽 480",
+        actual: `${names.join(",")} · page1=${width(firstRead)} · page10=${width(tenthRead)}`,
+        rootCause: "ZIP/CBZ 条目排序退回 Vec::sort() 字典序",
+        fix: "ZipSource 与 SourceHandle 统一使用 natural_cmp",
+      });
+    } else {
+      ok(report, {
+        id: "reader:natural-order-cbz",
+        suite: "reader",
+        layer: "integration",
+        title: "字典序写入的 CBZ 按自然序 1..20 排列",
+        details: `${names.length} 页 · 第1页 408px · 第10页 480px`,
+      });
+    }
+  }
+
+  const naturalLabels = byFragment("QA Natural Chapters");
+  const expectedLabelOrder = ctx.fixtures.expected.naturalLabelsOrder;
+  if (!naturalLabels) {
+    fail(report, {
+      id: "reader:natural-order-labels",
+      suite: "reader",
+      layer: "integration",
+      title: "第2话/第10话 命名夹具未入库",
+      severity: "P2",
+      details: "QA Natural Chapters fixture missing from list_books",
+      location: "tests/qa/lib/fixtures.mjs",
+      expected: expectedLabelOrder.join(" → "),
+      actual: "书库中找不到该 fixture",
+    });
+  } else {
+    let labelNames = [];
+    try {
+      const entries = await invoke(page, "list_entries", {
+        bookId: naturalLabels.id,
+      });
+      labelNames = Array.isArray(entries) ? entries.map((entry) => entry.name) : [];
+    } catch (error) {
+      labelNames = [`<error:${String(error)}>`];
+    }
+    if (JSON.stringify(labelNames) !== JSON.stringify(expectedLabelOrder)) {
+      fail(report, {
+        id: "reader:natural-order-labels",
+        suite: "reader",
+        layer: "integration",
+        title: "第10话排在第2话之前（章节命名未自然排序）",
+        severity: "P1",
+        details: JSON.stringify({ labelNames, expected: expectedLabelOrder }),
+        location: "src-tauri/src/source.rs: FolderSource",
+        expected: expectedLabelOrder.join(" → "),
+        actual: labelNames.join(" → "),
+        rootCause: "文件夹条目按字典序而非数字段排序",
+        fix: "统一使用 natural_cmp 比较器",
+      });
+    } else {
+      ok(report, {
+        id: "reader:natural-order-labels",
+        suite: "reader",
+        layer: "integration",
+        title: "第1/2/10/11话章节命名按自然序排列",
+        details: labelNames.join(" → "),
+      });
+    }
+  }
+
+  if (naturalZip) {
+    const readCounter = async (id) => {
+      await page.waitFor("!!document.querySelector('.reader-img')", {
+        timeout: 12_000,
+        label: `reader ${id}`,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const label = await page.eval(PAGE_COUNTER);
+      const parsed = pageNumberFromLabel(label);
+      return { label, ...(parsed || {}) };
+    };
+    let first = null;
+    let tenth = null;
+    let uiError = null;
+    try {
+      await ctx.goto(`#/reader/${encodeURIComponent(naturalZip.id)}?page=1`);
+      await page.waitFor(
+        "!!document.querySelector('.reader-img[data-idx=\"0\"]')",
+        { timeout: 12_000, label: "natural cbz page 1" },
+      );
+      first = await readCounter("page 1");
+      await ctx.goto("#/");
+      await page.waitFor("!!document.querySelector('main')", { timeout: 8000 });
+      await ctx.goto(`#/reader/${encodeURIComponent(naturalZip.id)}?page=10`);
+      await page.waitFor(
+        "!!document.querySelector('.reader-img[data-idx=\"9\"]')",
+        { timeout: 12_000, label: "natural cbz page 10" },
+      );
+      tenth = await readCounter("page 10");
+    } catch (error) {
+      uiError = String(error);
+    }
+    const uiOk =
+      first?.page === 1 &&
+      first?.total === 20 &&
+      tenth?.page === 10 &&
+      tenth?.total === 20;
+    if (!uiOk) {
+      fail(report, {
+        id: "reader:natural-order-reader",
+        suite: "reader",
+        layer: "e2e",
+        title: "阅读器打开首屏/第 10 页时页码与自然序不一致",
+        severity: "P1",
+        details: JSON.stringify({ first, tenth, error: uiError }),
+        location: "src/pages/Reader.tsx / src-tauri/src/source.rs",
+        expected: "pages = 20；打开第 1 页显示 1/20，跳转第 10 页显示 10/20",
+        actual: uiError || `${first?.label} → ${tenth?.label}`,
+      });
+    } else {
+      ok(report, {
+        id: "reader:natural-order-reader",
+        suite: "reader",
+        layer: "e2e",
+        title: "阅读器第 1 页/第 10 页与自然序条目一致",
+        details: `${first.label} → ${tenth.label}`,
+      });
+    }
+    await ctx.goto("#/");
   }
 
   for (const [name, book, expectedPages] of [

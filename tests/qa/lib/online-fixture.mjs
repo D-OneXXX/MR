@@ -31,6 +31,49 @@ export async function startOnlineFixture(port = 0) {
   register("qrcode.png", 300, 300, [10, 10, 10]);
   register("extras/credits-final-01.png", 800, 1200, [200, 80, 80]);
   register("extras/credits-final-02.png", 800, 1200, [200, 80, 80]);
+  // Strict anti-hotlink fixture: only served when the Referer is the exact
+  // manifest URL and the User-Agent is a standard desktop Chrome UA.
+  register("protected/1.png", 800, 1200, [210, 60, 60]);
+  register("protected/2.png", 800, 1200, [60, 160, 210]);
+
+  const protectedState = {
+    expectedReferer: null,
+    requests: [],
+    manifestRequests: [],
+  };
+
+  const resetProtected = () => {
+    protectedState.expectedReferer = null;
+    protectedState.requests = [];
+    protectedState.manifestRequests = [];
+  };
+
+  const protectedStats = () => {
+    const requests = protectedState.requests.map((entry) => ({ ...entry }));
+    const rejected = requests.filter((entry) => !entry.ok);
+    const last = requests.at(-1) || null;
+    return {
+      expectedReferer: protectedState.expectedReferer,
+      total: requests.length,
+      authorized: requests.length - rejected.length,
+      rejected: rejected.length,
+      missingReferer: rejected.filter((entry) => entry.reason === "missing-referer")
+        .length,
+      wrongReferer: rejected.filter((entry) => entry.reason === "wrong-referer")
+        .length,
+      missingUserAgent: rejected.filter(
+        (entry) => entry.reason === "missing-user-agent",
+      ).length,
+      lastReferer: last?.referer ?? null,
+      lastUserAgent: last?.userAgent ?? null,
+      lastRejectedReferer: rejected.at(-1)?.referer ?? null,
+      lastRejectedUserAgent: rejected.at(-1)?.userAgent ?? null,
+      requests,
+      manifestRequests: protectedState.manifestRequests.map((entry) => ({
+        ...entry,
+      })),
+    };
+  };
 
   // Telegram/Telegraph fixtures. The embed endpoint intentionally changes the
   // first photo URL after the first request to emulate an expired CDN signature.
@@ -73,6 +116,61 @@ export async function startOnlineFixture(port = 0) {
     const origin = `http://127.0.0.1:${server.address().port}`;
     const pathname = url.pathname.replace(/^\/+/, "");
 
+    if (url.pathname === "/protected/manifest.json") {
+      const manifestUrl = `${origin}${url.pathname}${url.search}`;
+      protectedState.expectedReferer = manifestUrl;
+      protectedState.manifestRequests.push({
+        url: manifestUrl,
+        referer: request.headers.referer ?? null,
+        userAgent: request.headers["user-agent"] ?? null,
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          version: 1,
+          title: "QA Protected Manifest",
+          pages: [
+            { url: `${origin}/protected/1.png`, width: 800, height: 1200 },
+            { url: `${origin}/protected/2.png`, width: 800, height: 1200 },
+          ],
+        }),
+      );
+      return;
+    }
+    if (url.pathname === "/protected/1.png" || url.pathname === "/protected/2.png") {
+      const referer = request.headers.referer ?? null;
+      const userAgent = request.headers["user-agent"] ?? null;
+      const expectedReferer = protectedState.expectedReferer;
+      const reason = !referer
+        ? "missing-referer"
+        : referer !== expectedReferer
+          ? "wrong-referer"
+          : !String(userAgent || "").includes("Mozilla/5.0")
+            ? "missing-user-agent"
+            : null;
+      protectedState.requests.push({
+        path: url.pathname,
+        referer,
+        userAgent,
+        expectedReferer,
+        ok: reason === null,
+        reason,
+      });
+      if (reason !== null) {
+        response.writeHead(403, {
+          "content-type": "text/plain",
+          "cache-control": "no-store",
+        });
+        response.end(`forbidden: ${reason}`);
+        return;
+      }
+      response.writeHead(200, {
+        "content-type": "image/png",
+        "cache-control": "no-store",
+      });
+      response.end(imageBuffer(pathname));
+      return;
+    }
     if (pathname === "tg-old-1.png") {
       response.writeHead(403, { "content-type": "text/plain" });
       response.end("expired");
@@ -267,6 +365,11 @@ export async function startOnlineFixture(port = 0) {
   return {
     port: actualPort,
     origin: `http://127.0.0.1:${actualPort}`,
+    protected: {
+      manifestPath: "/protected/manifest.json",
+      stats: protectedStats,
+      reset: resetProtected,
+    },
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }

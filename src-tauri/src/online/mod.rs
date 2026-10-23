@@ -20,8 +20,9 @@ pub const MANIFEST_MAX_BYTES: usize = 2 * 1024 * 1024;
 pub const PAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
 /// 单本在线书的最大页数。
 pub const MAX_PAGES: usize = 5000;
-/// 在线请求使用的 User-Agent。
-pub const ONLINE_UA: &str = "MangaReader/0.1 online-direct";
+/// 在线请求使用的标准桌面浏览器 User-Agent（防盗链图床常按 UA 拒绝自定义客户端）。
+pub const ONLINE_UA: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
 
 /// Telegram 等会过期的图片源坐标；图片直链失效时按此重新解析。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -433,6 +434,13 @@ mod tests {
     fn network_error_has_single_prefix() {
         let e: BackendError = OnlineError::Network("连接失败".into()).into();
         assert_eq!(e.to_string(), "网络错误：连接失败");
+    }
+
+    #[test]
+    fn online_ua_is_standard_desktop_browser() {
+        assert!(ONLINE_UA.starts_with("Mozilla/5.0"), "{ONLINE_UA}");
+        assert!(ONLINE_UA.contains("Windows NT 10.0"), "{ONLINE_UA}");
+        assert!(ONLINE_UA.contains("Chrome/"), "{ONLINE_UA}");
     }
 
     #[test]

@@ -173,6 +173,12 @@ pub fn normalize_settings(
         db::set_setting(conn, "cache_budget_mb", &budget.to_string())?;
         repaired.push("cache_budget_mb".to_string());
     }
+    let disk_budget = crate::disk_cache::clamp_budget_mb(settings.disk_cache_budget_mb);
+    if disk_budget != settings.disk_cache_budget_mb {
+        settings.disk_cache_budget_mb = disk_budget;
+        db::set_setting(conn, "disk_cache_budget_mb", &disk_budget.to_string())?;
+        repaired.push("disk_cache_budget_mb".to_string());
+    }
     let concurrency = settings.online_concurrency.clamp(1, 8);
     if concurrency != settings.online_concurrency {
         settings.online_concurrency = concurrency;

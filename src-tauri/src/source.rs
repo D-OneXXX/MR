@@ -138,7 +138,7 @@ impl FolderSource {
             })
             .collect();
         files.sort_by(|a, b| {
-            crate::commands::natural_cmp(
+            crate::commands::natural_cmp_path(
                 &a.to_string_lossy(),
                 &b.to_string_lossy(),
             )
@@ -192,7 +192,7 @@ impl ZipSource {
         let file = File::open(path)?;
         let mut archive = zip::ZipArchive::new(file)?;
         let mut names = zip_image_names(&mut archive)?;
-        names.sort_by(|a, b| crate::commands::natural_cmp(a, b));
+        names.sort_by(|a, b| crate::commands::natural_cmp_path(a, b));
         Ok(Self {
             path: path.to_path_buf(),
             names,
@@ -290,25 +290,32 @@ impl ImageSource for AnySource {
 /// Telegram 等 CDN 直链带时效签名：遇到 403/404 时按页锚点静默刷新一次并
 /// 写回本句柄的内存页表；持久化仍只保存 `channel + message_id` 坐标。
 pub struct OnlineSource {
+    book_id: String,
     pages: parking_lot::Mutex<Vec<PageRef>>,
     http: Arc<dyn HttpTransport>,
     permits: Arc<BlockingSemaphore>,
     /// 整本规范化 URL：作为单页请求的 Referer/Origin 来源（防盗链站点需要）。
     referer: String,
+    /// 在线原图磁盘 L2；按 book + URL + Referer 缓存，离线重读不再发请求。
+    cache: Option<Arc<crate::disk_cache::OnlinePageCache>>,
 }
 
 impl OnlineSource {
     pub fn new(
+        book_id: String,
         pages: Vec<PageRef>,
         http: Arc<dyn HttpTransport>,
         concurrency: usize,
         referer: String,
+        cache: Option<Arc<crate::disk_cache::OnlinePageCache>>,
     ) -> Self {
         Self {
+            book_id,
             pages: parking_lot::Mutex::new(pages),
             http,
             permits: Arc::new(BlockingSemaphore::new(concurrency)),
             referer,
+            cache,
         }
     }
 
@@ -369,6 +376,15 @@ impl ImageSource for OnlineSource {
 
     fn read_raw(&self, index: usize) -> Result<RawPage, BackendError> {
         let mut page = self.page_at(index)?;
+        // 原图磁盘 L2：命中时不占用并发许可，也不发起网络请求。
+        if let Some(cache) = &self.cache {
+            if let Some(hit) = cache.get(&self.book_id, &page.url, &self.referer) {
+                return Ok(RawPage {
+                    bytes: hit.bytes,
+                    ext: hit.ext,
+                });
+            }
+        }
         // 每本书独立的并发闸门：限制同时在途的页面下载数。
         let _guard = self.permits.acquire();
         let mut resp = self.get_page(&page, index)?;
@@ -433,6 +449,9 @@ impl ImageSource for OnlineSource {
                 )))
             }
         };
+        if let Some(cache) = &self.cache {
+            cache.put(&self.book_id, &page.url, &self.referer, ext, &resp.body);
+        }
         Ok(RawPage {
             bytes: resp.body,
             ext: ext.into(),
@@ -471,7 +490,7 @@ impl SourceHandle {
             let file = File::open(path)?;
             let mut archive = zip::ZipArchive::new(file)?;
             let mut names = zip_image_names(&mut archive)?;
-            names.sort_by(|a, b| crate::commands::natural_cmp(a, b));
+            names.sort_by(|a, b| crate::commands::natural_cmp_path(a, b));
             Ok(Self {
                 path: path.to_path_buf(),
                 kind: HandleKind::Zip {
@@ -493,14 +512,23 @@ impl SourceHandle {
 
     /// 在线源句柄：`canonical_url` 同时作为路径标识与整本 Referer。
     pub fn open_online(
+        book_id: String,
         canonical_url: String,
         pages: Vec<PageRef>,
         http: Arc<dyn HttpTransport>,
         concurrency: usize,
+        cache: Option<Arc<crate::disk_cache::OnlinePageCache>>,
     ) -> Result<Self, BackendError> {
         Ok(Self {
             path: PathBuf::from(&canonical_url),
-            kind: HandleKind::Online(OnlineSource::new(pages, http, concurrency, canonical_url)),
+            kind: HandleKind::Online(OnlineSource::new(
+                book_id,
+                pages,
+                http,
+                concurrency,
+                canonical_url,
+                cache,
+            )),
         })
     }
 
@@ -693,7 +721,14 @@ mod tests {
     #[test]
     fn online_source_reads_pages_and_names() {
         let http = Arc::new(FakeHttp::ok(tiny_png()));
-        let src = super::OnlineSource::new(pages(), http.clone(), 2, "http://x/gallery/1".into());
+        let src = super::OnlineSource::new(
+            "book-test".into(),
+            pages(),
+            http.clone(),
+            2,
+            "http://x/gallery/1".into(),
+            None,
+        );
         assert_eq!(src.page_count().unwrap(), 2);
         assert_eq!(src.entry_names().unwrap(), vec!["001.png", "002.png"]);
         let raw = src.read_raw(0).unwrap();
@@ -723,10 +758,12 @@ mod tests {
         ];
         for (name, bytes, ext) in cases {
             let src = super::OnlineSource::new(
+                "book-test".into(),
                 pages(),
                 Arc::new(FakeHttp::ok(bytes.to_vec())),
                 1,
                 "http://x/gallery/1".into(),
+                None,
             );
             let raw = src
                 .read_raw(0)
@@ -736,10 +773,12 @@ mod tests {
 
         // 可识别但不支持编码的 BMP：明确报错，而不是当成未知图片放行。
         let bmp = super::OnlineSource::new(
+            "book-test".into(),
             pages(),
             Arc::new(FakeHttp::ok(b"BM\x00\x00\x00\x00".to_vec())),
             1,
             "http://x/gallery/1".into(),
+            None,
         );
         let err = bmp
             .read_raw(0)
@@ -752,10 +791,12 @@ mod tests {
     #[test]
     fn online_source_rejects_bad_status_and_non_image() {
         let bad_status = super::OnlineSource::new(
+            "book-test".into(),
             pages(),
             Arc::new(FakeHttp::status(404, b"missing".to_vec())),
             1,
             "http://x/gallery/1".into(),
+            None,
         );
         let err = bad_status
             .read_raw(0)
@@ -765,10 +806,12 @@ mod tests {
         assert!(err.contains("HTTP 404"), "{err}");
 
         let not_image = super::OnlineSource::new(
+            "book-test".into(),
             pages(),
             Arc::new(FakeHttp::ok(b"plain text".to_vec())),
             1,
             "http://x/gallery/1".into(),
+            None,
         );
         let err = not_image
             .read_raw(0)
@@ -838,15 +881,98 @@ mod tests {
             }),
         };
         let src = super::OnlineSource::new(
+            "book-test".into(),
             vec![page],
             Arc::new(RefreshingHttp),
             1,
             "https://t.me/testchannel/102".into(),
+            None,
         );
         let raw = src.read_raw(0).expect("刷新后应读到新 CDN 地址");
         assert!(!raw.bytes.is_empty());
         assert_eq!(raw.ext, "png");
         assert_eq!(src.page_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn zip_entries_use_natural_order_and_nested_paths() {
+        use std::io::Write as _;
+        use zip::write::SimpleFileOptions;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "mr-zip-order-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("order.cbz");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        // 写入顺序故意是字典序错乱的；读取必须按自然页序返回。
+        for name in [
+            "10.jpg",
+            "2.png",
+            "1.jpg",
+            "20.jpg",
+            "11.jpg",
+            "chap10/1.png",
+            "chap2/10.png",
+            "chap2/2.png",
+        ] {
+            zip.start_file(name, SimpleFileOptions::default()).unwrap();
+            zip.write_all(b"x").unwrap();
+        }
+        zip.finish().unwrap();
+
+        let source = super::ZipSource::open(&path).unwrap();
+        assert_eq!(
+            source.entry_names().unwrap(),
+            vec![
+                "1.jpg",
+                "2.png",
+                "10.jpg",
+                "11.jpg",
+                "20.jpg",
+                "chap2/2.png",
+                "chap2/10.png",
+                "chap10/1.png",
+            ],
+            "混合扩展名与多级目录都必须按页号自然排序"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn online_source_reuses_disk_page_cache() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mr-source-cache-{}-{nanos}",
+            std::process::id()
+        ));
+        let cache = Arc::new(crate::disk_cache::OnlinePageCache::new(
+            root.join("online"),
+        ));
+        let http = Arc::new(FakeHttp::ok(tiny_png()));
+        let src = super::OnlineSource::new(
+            "book-test".into(),
+            pages(),
+            http.clone(),
+            1,
+            "http://x/gallery/1".into(),
+            Some(cache.clone()),
+        );
+        src.read_raw(0).unwrap();
+        src.read_raw(0).unwrap();
+        assert_eq!(http.requests.lock().unwrap().len(), 1, "第二遍应命中磁盘");
+        assert!(cache.disk_bytes() > 0);
+        assert_eq!(cache.file_count(), 1);
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -858,10 +984,12 @@ mod tests {
     #[test]
     fn online_handle_rejects_header_probe() {
         let handle = super::SourceHandle::open_online(
+            "book-test".into(),
             "http://x/gallery/1".into(),
             pages(),
             Arc::new(FakeHttp::ok(tiny_png())),
             2,
+            None,
         )
         .unwrap();
         assert_eq!(handle.page_count().unwrap(), 2);

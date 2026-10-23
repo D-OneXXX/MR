@@ -89,6 +89,7 @@ import { toast, toastErr } from "@/components/Toast";
 const DEFAULT_FORM: Settings = {
   theme: "system",
   cacheBudgetMb: 128,
+  diskCacheBudgetMb: 2048,
   libraryDir: "",
   experimentalWebtoon: false,
   experimentalOnline: false,
@@ -151,6 +152,12 @@ function sumLast7Days(heatmap: Dashboard["heatmap"]): number {
 function formatMb(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "0.0 MB";
   return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+/** 缓存占用百分比：非法值/零上限安全，结果限制在 0-100。 */
+function cachePercent(used: number, limit: number): number {
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) return 0;
+  return Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
 }
 
 function MetricCard({
@@ -235,6 +242,7 @@ export default function SettingsPage() {
   const [sessionActive, setSessionActive] = useState(false);
   const [clearingThumbs, setClearingThumbs] = useState(false);
   const [clearingPages, setClearingPages] = useState(false);
+  const [clearingTemp, setClearingTemp] = useState(false);
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [dashLoading, setDashLoading] = useState(true);
   const [dashError, setDashError] = useState<string | null>(null);
@@ -582,6 +590,24 @@ export default function SettingsPage() {
     }
   };
 
+  const onClearTemp = async () => {
+    if (clearingTemp) return;
+    setClearingTemp(true);
+    try {
+      const result = await api.clearTempCache();
+      toast(
+        t("settings.toast.tempCleared", {
+          size: formatMb(result.bytesFreed),
+        }),
+      );
+      await refreshMemory();
+    } catch (e) {
+      toastErr("clear_temp_cache", e);
+    } finally {
+      setClearingTemp(false);
+    }
+  };
+
   const onSave = async () => {
     // 设置尚未载入（或载入失败）时表单仍是默认值，禁止写库。
     if (loading || loadError || saving || experimentalBusy !== null) return;
@@ -620,10 +646,13 @@ export default function SettingsPage() {
   };
 
   const ready = !loading && !loadError;
-  const cachePct =
-    mem && mem.cacheLimitBytes > 0
-      ? Math.min(100, Math.round((mem.cacheBytes / mem.cacheLimitBytes) * 100))
-      : 0;
+  const cachePct = mem ? cachePercent(mem.cacheBytes, mem.cacheLimitBytes) : 0;
+  const diskCachePct = mem
+    ? cachePercent(mem.diskCacheBytes, mem.diskCacheLimitBytes)
+    : 0;
+  const diskBudgetMb = Number.isFinite(form.diskCacheBudgetMb)
+    ? Math.min(10240, Math.max(500, form.diskCacheBudgetMb))
+    : 2048;
   const last7Pages = dash ? sumLast7Days(dash.heatmap) : 0;
   const statusText = loading
     ? t("settings.status.loading")
@@ -722,6 +751,7 @@ export default function SettingsPage() {
             </TabsTrigger>
             <TabsTrigger
               value="cache"
+              data-testid="settings-tab-cache"
               className="h-9 flex-none gap-2 whitespace-nowrap rounded-full px-3.5 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground data-active:border-border data-active:bg-primary data-active:text-primary-foreground data-active:shadow-hard-sm dark:data-active:border-border dark:data-active:bg-primary dark:data-active:text-primary-foreground sm:px-4"
             >
               <HardDrive className="size-4" />
@@ -1417,6 +1447,105 @@ export default function SettingsPage() {
             </SettingsSection>
 
             <SettingsSection
+              icon={HardDrive}
+              title={t("settings.cache.diskTitle")}
+              description={t("settings.cache.diskDescription")}
+            >
+              <div
+                className="flex flex-wrap items-center justify-between gap-2"
+                data-testid="disk-cache-usage"
+              >
+                <Label htmlFor="disk-cache-budget">
+                  {t("settings.cache.diskLabel")}
+                </Label>
+                <Badge
+                  variant="secondary"
+                  className="font-mono px-3 py-1 tabular-nums"
+                >
+                  {formatNumber(diskBudgetMb)} MB
+                </Badge>
+              </div>
+              <Slider
+                id="disk-cache-budget"
+                value={[diskBudgetMb]}
+                min={500}
+                max={10240}
+                step={256}
+                disabled={saving}
+                onValueChange={(value) =>
+                  set(
+                    "diskCacheBudgetMb",
+                    typeof value === "number" ? value : (value[0] ?? 2048),
+                  )
+                }
+                getAriaLabel={() => t("settings.cache.diskAria")}
+              />
+              <div className="flex justify-between text-[11px] text-muted-foreground">
+                <span>{formatNumber(500)} MB</span>
+                <span>{formatNumber(10240)} MB</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t("settings.cache.diskHint")}
+              </p>
+
+              {mem ? (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="font-medium text-muted-foreground">
+                      {t("settings.cache.diskUsage")}
+                    </span>
+                    <span className="font-mono font-semibold tabular-nums">
+                      {formatMb(mem.diskCacheBytes)} /{" "}
+                      {formatMb(mem.diskCacheLimitBytes)} ·{" "}
+                      {formatNumber(diskCachePct)}%
+                    </span>
+                  </div>
+                  <Progress value={diskCachePct} />
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <MemoryTile
+                      label={t("settings.cache.diskRender")}
+                      value={formatMb(mem.renderCacheBytes)}
+                    />
+                    <MemoryTile
+                      label={t("settings.cache.diskOnline")}
+                      value={formatMb(mem.onlineCacheBytes)}
+                    />
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.cache.diskEmpty")}
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="pill"
+                  size="pill"
+                  className="whitespace-nowrap"
+                  data-testid="clear-temp-cache"
+                  onClick={() => void onClearTemp()}
+                  disabled={
+                    clearingTemp || clearingThumbs || clearingPages || saving
+                  }
+                >
+                  {clearingTemp ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <Trash2 />
+                  )}
+                  {clearingTemp
+                    ? t("settings.cache.clearingTemp")
+                    : t("settings.cache.clearTemp")}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t("settings.cache.clearTempHint")}
+              </p>
+            </SettingsSection>
+
+            <SettingsSection
               icon={Database}
               title={t("settings.cache.maintenanceTitle")}
               description={t("settings.cache.maintenanceDescription")}
@@ -1428,7 +1557,9 @@ export default function SettingsPage() {
                   size="pill"
                   className="whitespace-nowrap"
                   onClick={() => void onClearThumbs()}
-                  disabled={clearingThumbs || clearingPages || saving}
+                  disabled={
+                    clearingThumbs || clearingPages || clearingTemp || saving
+                  }
                 >
                   {clearingThumbs ? (
                     <Loader2 className="animate-spin" />
@@ -1445,7 +1576,9 @@ export default function SettingsPage() {
                   size="pill"
                   className="whitespace-nowrap"
                   onClick={() => void onClearPages()}
-                  disabled={clearingPages || clearingThumbs || saving}
+                  disabled={
+                    clearingPages || clearingThumbs || clearingTemp || saving
+                  }
                 >
                   {clearingPages ? (
                     <Loader2 className="animate-spin" />

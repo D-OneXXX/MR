@@ -290,7 +290,12 @@ export default function LibraryPage() {
       const ai = a.chapterIndex ?? Number.MAX_SAFE_INTEGER;
       const bi = b.chapterIndex ?? Number.MAX_SAFE_INTEGER;
       if (ai !== bi) return ai - bi;
-      return a.updatedAt.localeCompare(b.updatedAt);
+      return (
+        a.title.localeCompare(b.title, "zh", {
+          numeric: true,
+          sensitivity: "base",
+        }) || a.updatedAt.localeCompare(b.updatedAt)
+      );
     });
   }, [accessibleAllBooks, selectedBook]);
 

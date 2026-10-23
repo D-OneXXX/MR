@@ -17,7 +17,7 @@ const zhCN = {
   "privacy.storage.progress":
     "阅读进度、阅读历史与统计，同样只写入本机 SQLite。",
   "privacy.storage.cache":
-    "页面、缩略图与条漫切片缓存，保存在本机应用数据目录。",
+    "页面、缩略图、条漫切片与在线原图缓存，保存在本机应用数据目录。",
   "privacy.storage.settings":
     "主题、界面语言、阅读偏好与更新偏好，保存在本机 SQLite 或 localStorage。",
   "privacy.network.title": "联网触发项",
@@ -139,7 +139,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "privacy.storage.progress":
     "Reading progress, history and statistics, also written only to local SQLite.",
   "privacy.storage.cache":
-    "Page, thumbnail and webtoon tile caches in the local app data directory.",
+    "Page, thumbnail, webtoon tile and online-original caches in the local app data directory.",
   "privacy.storage.settings":
     "Theme, UI language, reading preferences and update preferences in local SQLite or localStorage.",
   "privacy.network.title": "When the network is used",
@@ -264,7 +264,7 @@ const zhTW: Record<keyof typeof zhCN, string> = {
   "privacy.storage.progress":
     "閱讀進度、閱讀紀錄與統計，同樣只寫入本機 SQLite。",
   "privacy.storage.cache":
-    "頁面、縮圖與條漫切片快取，儲存在本機應用程式資料目錄。",
+    "頁面、縮圖、條漫切片與線上原圖快取，儲存在本機應用程式資料目錄。",
   "privacy.storage.settings":
     "主題、介面語言、閱讀偏好與更新偏好，儲存在本機 SQLite 或 localStorage。",
   "privacy.network.title": "連網觸發項目",
@@ -386,7 +386,7 @@ const es: Record<keyof typeof zhCN, string> = {
   "privacy.storage.progress":
     "Progreso de lectura, historial y estadísticas, también solo en SQLite local.",
   "privacy.storage.cache":
-    "Caché de páginas, miniaturas y viñetas de webtoon en el directorio local de datos de la aplicación.",
+    "Caché de páginas, miniaturas, viñetas de webtoon y originales en línea en el directorio local de datos de la aplicación.",
   "privacy.storage.settings":
     "Tema, idioma de la interfaz, preferencias de lectura y de actualización en SQLite local o localStorage.",
   "privacy.network.title": "Cuándo se usa la red",
@@ -516,7 +516,7 @@ const ja: Record<keyof typeof zhCN, string> = {
   "privacy.storage.progress":
     "読書進捗、読書履歴、統計もローカルの SQLite にのみ書き込まれます。",
   "privacy.storage.cache":
-    "ページ、サムネイル、Webtoon タイルのキャッシュは、ローカルのアプリデータディレクトリに保存されます。",
+    "ページ、サムネイル、Webtoon タイル、オンライン原画のキャッシュは、ローカルのアプリデータディレクトリに保存されます。",
   "privacy.storage.settings":
     "テーマ、UI 言語、読書設定、更新設定は、ローカルの SQLite または localStorage に保存されます。",
   "privacy.network.title": "ネットワークを使う場面",
@@ -642,7 +642,7 @@ const ko: Record<keyof typeof zhCN, string> = {
   "privacy.storage.progress":
     "읽기 진행률, 읽기 기록, 통계도 로컬 SQLite에만 기록됩니다.",
   "privacy.storage.cache":
-    "페이지, 썸네일, 웹툰 타일 캐시는 로컬 앱 데이터 디렉터리에 저장됩니다.",
+    "페이지, 썸네일, 웹툰 타일, 온라인 원본 캐시는 로컬 앱 데이터 디렉터리에 저장됩니다.",
   "privacy.storage.settings":
     "테마, UI 언어, 읽기 설정, 업데이트 설정은 로컬 SQLite 또는 localStorage에 저장됩니다.",
   "privacy.network.title": "네트워크를 사용하는 경우",

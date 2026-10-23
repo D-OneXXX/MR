@@ -1,29 +1,32 @@
 //! 磁盘渲染缓存（L2）：成品 JPEG 按 (book_id, index, 请求尺寸) 落盘。
 //!
 //! 命中路径 = 一次 SSD 读（~1ms）+ base64，跳过 开卷/解压/解码/缩放/编码 全管线，
-//! 这是「毫秒级翻页」的主力。预算 2GB，超限按 mtime 删最旧；删除书籍时整目录级联清理。
+//! 这是「毫秒级翻页」的主力。容量与在线原图缓存共用同一软上限，
+//! 由 `AppState::trim_disk_cache` 按 mtime 统一 LRU；删除书籍时整目录级联清理。
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-/// 磁盘渲染缓存总预算：2GB（约数千页成品图）。
-pub const RENDER_DISK_BUDGET: u64 = 2 * 1024 * 1024 * 1024;
-/// 自上次 trim 起累计写入超过该值就再 trim 一次。
-const TRIM_INTERVAL_BYTES: u64 = 256 * 1024 * 1024;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
 pub struct RenderCache {
     root: PathBuf,
-    written_since_trim: std::sync::Arc<AtomicU64>,
+}
+
+/// 缓存目录名只接受受控值：生产 book_id 是 64 位 SHA-256 hex，原样使用；
+/// 其他任意来源（测试/异常 DB/路径穿越）一律再哈希，避免 `..` 越出缓存根。
+fn safe_book_id(book_id: &str) -> String {
+    if book_id.len() == 64 && book_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        book_id.to_ascii_lowercase()
+    } else {
+        hex::encode(Sha256::digest(book_id.as_bytes()))
+    }
 }
 
 impl RenderCache {
     pub fn new(root: PathBuf) -> Self {
-        Self {
-            root,
-            written_since_trim: std::sync::Arc::new(AtomicU64::new(0)),
-        }
+        Self { root }
     }
 
     pub fn root(&self) -> &Path {
@@ -31,7 +34,7 @@ impl RenderCache {
     }
 
     fn book_dir(&self, book_id: &str) -> PathBuf {
-        self.root.join(book_id)
+        self.root.join(safe_book_id(book_id))
     }
 
     fn file_path(&self, book_id: &str, index: u32, req_w: u32, req_h: u32) -> PathBuf {
@@ -39,12 +42,24 @@ impl RenderCache {
             .join(format!("{index:06}@{req_w}x{req_h}.jpg"))
     }
 
-    /// 命中返回成品 JPEG 字节。
+    /// 命中返回成品 JPEG 字节；非 JPEG 的坏缓存立即删除并视为 miss。
     pub fn get(&self, book_id: &str, index: u32, req_w: u32, req_h: u32) -> Option<Vec<u8>> {
-        let mut f = std::fs::File::open(self.file_path(book_id, index, req_w, req_h)).ok()?;
+        let path = self.file_path(book_id, index, req_w, req_h);
+        let mut f = std::fs::File::open(&path).ok()?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf).ok()?;
+        if image::guess_format(&buf).ok() != Some(image::ImageFormat::Jpeg) {
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+        // 访问即刷新 mtime，统一 trim 才是真正 LRU，而不是只看写入时间。
+        crate::disk_cache::touch_file(&path);
         Some(buf)
+    }
+
+    /// 删除单页成品（坏缓存自愈用）。
+    pub fn remove_page(&self, book_id: &str, index: u32, req_w: u32, req_h: u32) {
+        let _ = std::fs::remove_file(self.file_path(book_id, index, req_w, req_h));
     }
 
     /// 落盘（原子写：tmp + rename），失败静默（缓存永远不该拖垮主流程）。
@@ -57,7 +72,6 @@ impl RenderCache {
         let tmp = dir.join(format!(".tmp-{index:06}@{req_w}x{req_h}"));
         if std::fs::write(&tmp, bytes).is_ok() {
             let _ = std::fs::rename(&tmp, &final_path);
-            self.written_since_trim.fetch_add(bytes.len() as u64, Ordering::Relaxed);
         } else {
             let _ = std::fs::remove_file(&tmp);
         }
@@ -65,14 +79,25 @@ impl RenderCache {
 
     /// 条漫切片存取：文件名 `{index:06}t{tile:02}@{w}.jpg`。
     pub fn get_tile(&self, book_id: &str, index: u32, tile: u32, w: u32) -> Option<Vec<u8>> {
-        let mut f = std::fs::File::open(
-            self.book_dir(book_id)
-                .join(format!("{index:06}t{tile:02}@{w}.jpg")),
-        )
-        .ok()?;
+        let path = self
+            .book_dir(book_id)
+            .join(format!("{index:06}t{tile:02}@{w}.jpg"));
+        let mut f = std::fs::File::open(&path).ok()?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf).ok()?;
+        if image::guess_format(&buf).ok() != Some(image::ImageFormat::Jpeg) {
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+        crate::disk_cache::touch_file(&path);
         Some(buf)
+    }
+
+    pub fn remove_tile(&self, book_id: &str, index: u32, tile: u32, w: u32) {
+        let _ = std::fs::remove_file(
+            self.book_dir(book_id)
+                .join(format!("{index:06}t{tile:02}@{w}.jpg")),
+        );
     }
 
     pub fn put_tile(&self, book_id: &str, index: u32, tile: u32, w: u32, bytes: &[u8]) {
@@ -122,82 +147,23 @@ impl RenderCache {
 
     /// 清空整个渲染缓存。
     pub fn clear_all(&self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        crate::disk_cache::clear_dir(&self.root);
     }
 
     /// 统计磁盘占用（字节）。
     pub fn disk_bytes(&self) -> u64 {
-        walk_size(&self.root)
+        crate::disk_cache::dir_bytes(&self.root)
     }
 
-    /// 超预算按 mtime 从旧到新删除，直到 ≤ budget。启动与大量写入后调用。
+    /// 缓存文件数（清理结果展示用）。
+    pub fn file_count(&self) -> u64 {
+        crate::disk_cache::count_files(&self.root)
+    }
+
+    /// 超预算按 mtime 从旧到新删除，直到 ≤ budget。单测/维护入口；
+    /// 运行时统一淘汰由 `AppState::trim_disk_cache` 跨两个缓存根执行。
     pub fn trim(&self, budget: u64) {
-        if self.disk_bytes() <= budget {
-            return;
-        }
-        let mut files: Vec<(std::time::SystemTime, PathBuf, u64)> = Vec::new();
-        collect(&self.root, &mut files);
-        files.sort_by_key(|(t, _, _)| *t);
-        let mut total: u64 = files.iter().map(|(_, _, s)| s).sum();
-        for (_, path, size) in files {
-            if total <= budget {
-                break;
-            }
-            if std::fs::remove_file(path).is_ok() {
-                total = total.saturating_sub(size);
-            }
-        }
-        cleanup_empty_dirs(&self.root);
-        self.written_since_trim.store(0, Ordering::Relaxed);
-    }
-
-    /// 写入量累积过阈值时在后台线程 trim（不阻塞请求）。
-    pub fn maybe_trim(&self, budget: u64) {
-        if self.written_since_trim.load(Ordering::Relaxed) > TRIM_INTERVAL_BYTES {
-            let this = self.clone();
-            std::thread::spawn(move || this.trim(budget));
-        }
-    }
-}
-
-fn walk_size(dir: &Path) -> u64 {
-    let mut total = 0;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if let Ok(md) = e.metadata() {
-                total += md.len();
-            }
-        }
-    }
-    total
-}
-
-fn collect(dir: &Path, out: &mut Vec<(std::time::SystemTime, PathBuf, u64)>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect(&p, out);
-        } else if let Ok(md) = e.metadata() {
-            let mtime = md.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            out.push((mtime, p, md.len()));
-        }
-    }
-}
-
-fn cleanup_empty_dirs(root: &Path) {
-    let Ok(rd) = std::fs::read_dir(root) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            // remove_dir 只删空目录，非空自动失败，无需预检。
-            let _ = std::fs::remove_dir(&p);
-        }
+        crate::disk_cache::trim_total(&[&self.root], budget);
     }
 }
 
@@ -206,11 +172,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn corrupt_l2_jpeg_is_dropped_instead_of_poisoning_cache() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "mr-rc-bad-{}-{nanos}",
+            std::process::id()
+        ));
+        let rc = RenderCache::new(dir.clone());
+        rc.put("book1", 3, 800, 1200, b"not-a-jpeg");
+        assert_eq!(rc.get("book1", 3, 800, 1200), None);
+        assert_eq!(rc.disk_bytes(), 0, "坏文件应从 L2 删除");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn remove_book_hashes_unsafe_book_id() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "mr-rc-safe-{}-{nanos}",
+            std::process::id()
+        ));
+        let rc = RenderCache::new(base.join("render"));
+        std::fs::create_dir_all(&base).unwrap();
+        let victim = base.join("victim.txt");
+        std::fs::write(&victim, b"keep").unwrap();
+        rc.put("../../victim.txt", 0, 100, 100, b"jpeg");
+        rc.remove_book("../../victim.txt");
+        assert!(victim.exists(), "任意 book_id 不得越出缓存根删除文件");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
     fn put_get_remove_roundtrip() {
+        use image::ImageEncoder as _;
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .write_image(&[255, 0, 0], 1, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
         let dir = std::env::temp_dir().join(format!("mr-rc-{}", std::process::id()));
         let rc = RenderCache::new(dir.clone());
-        rc.put("book1", 3, 800, 1200, b"jpeg-bytes");
-        assert_eq!(rc.get("book1", 3, 800, 1200).as_deref(), Some(b"jpeg-bytes".as_slice()));
+        rc.put("book1", 3, 800, 1200, &jpeg);
+        assert_eq!(rc.get("book1", 3, 800, 1200).as_deref(), Some(jpeg.as_slice()));
         assert_eq!(rc.get("book1", 4, 800, 1200), None);
         rc.remove_book("book1");
         assert_eq!(rc.get("book1", 3, 800, 1200), None);

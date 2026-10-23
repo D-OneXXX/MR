@@ -20,12 +20,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-sidecar/models/ 
-sidecar/.venv/ 
-sidecar/boot*.log 
-sidecar/ocr-ctc.zip
-__pycache__/
-*.py[cod]
 
 # Isolated worktrees
 .worktrees/

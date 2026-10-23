@@ -145,6 +145,7 @@ export async function startQaApp({
       ...process.env,
       MR_DATA_DIR: dataDir,
       MR_RENDER_CACHE_DIR: path.join(dataDir, "render_cache"),
+      MR_ONLINE_CACHE_DIR: path.join(dataDir, "online_cache"),
       WEBVIEW2_USER_DATA_FOLDER: webviewDir,
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
       QA_CDP_PORT: String(cdpPort),

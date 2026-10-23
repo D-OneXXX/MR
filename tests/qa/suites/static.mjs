@@ -13,6 +13,117 @@ function walk(dir, out = []) {
   return out;
 }
 
+/**
+ * Remove Rust line/block comments while keeping string literals and newlines.
+ * Comments may legitimately document "无 sidecar"; only executable code should
+ * trip the sidecar guard.
+ */
+function stripRustComments(source) {
+  let out = "";
+  let index = 0;
+  let blockDepth = 0;
+  let inString = false;
+  while (index < source.length) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (blockDepth > 0) {
+      if (char === "/" && next === "*") {
+        blockDepth += 1;
+        out += "  ";
+        index += 2;
+        continue;
+      }
+      if (char === "*" && next === "/") {
+        blockDepth -= 1;
+        out += "  ";
+        index += 2;
+        continue;
+      }
+      out += char === "\n" ? "\n" : " ";
+      index += 1;
+      continue;
+    }
+    if (inString) {
+      out += char;
+      if (char === "\\") {
+        out += next ?? "";
+        index += 2;
+        continue;
+      }
+      if (char === '"') inString = false;
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      out += char;
+      index += 1;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      while (index < source.length && source[index] !== "\n") {
+        out += " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      blockDepth = 1;
+      out += "  ";
+      index += 2;
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
+}
+
+const SIDECAR_PATTERNS = [
+  {
+    name: "Python 自启 Command",
+    regex: /\bCommand\s*::\s*new\s*\(\s*"(?:python(?:3(?:\.\d+)?)?(?:\.exe)?|py)"\s*\)/i,
+  },
+  {
+    name: "硬编码 8500 端口",
+    regex: /\b8500\b/,
+  },
+  {
+    name: "sidecar 进程启动",
+    regex:
+      /(?:\bCommand\s*::\s*new(?:_sidecar)?\s*\(\s*"[^"]*sidecar[^"]*"|\.sidecar\s*\(|\bsidecar\b[\s\S]{0,160}?\.(?:spawn|output|status)\s*\()/i,
+  },
+];
+
+function scanSidecarSources(root) {
+  const sourceRoot = path.join(root, "src-tauri", "src");
+  if (!fs.existsSync(sourceRoot)) return [];
+  const hits = [];
+  for (const file of walk(sourceRoot)) {
+    if (!file.endsWith(".rs")) continue;
+    if (file.split(path.sep).includes("target")) continue;
+    const code = stripRustComments(fs.readFileSync(file, "utf8"));
+    for (const pattern of SIDECAR_PATTERNS) {
+      const global = new RegExp(
+        pattern.regex.source,
+        pattern.regex.flags.includes("g")
+          ? pattern.regex.flags
+          : `${pattern.regex.flags}g`,
+      );
+      for (const match of code.matchAll(global)) {
+        const line = code.slice(0, match.index).split("\n").length;
+        hits.push({
+          file: path.relative(root, file),
+          line,
+          name: pattern.name,
+          snippet: match[0].replace(/\s+/g, " ").slice(0, 80),
+        });
+      }
+    }
+  }
+  return hits;
+}
+
 function loadTsObject(source, exportName) {
   const js = ts.transpileModule(source, {
     compilerOptions: {
@@ -280,6 +391,70 @@ export async function runStaticSuite(ctx, report) {
       suite: "static",
       layer: "static",
       title: "已砍掉模块无前端可见入口",
+    });
+  }
+
+  let sidecarHits = [];
+  try {
+    sidecarHits = scanSidecarSources(root);
+  } catch (error) {
+    sidecarHits = [
+      {
+        file: "src-tauri/src",
+        line: 0,
+        name: "扫描失败",
+        snippet: String(error),
+      },
+    ];
+  }
+  if (sidecarHits.length) {
+    fail(report, {
+      id: "static:no-python-sidecar",
+      suite: "static",
+      layer: "static",
+      title: "后端残留 Python/sidecar 进程自启痕迹",
+      severity: "P1",
+      details: sidecarHits
+        .map((hit) => `${hit.file}:${hit.line} [${hit.name}] ${hit.snippet}`)
+        .join(" | "),
+      location: `${sidecarHits[0].file}:${sidecarHits[0].line}`,
+      expected: "src-tauri/src 无 Command::new(python/python3)、8500 端口硬编码与 sidecar 启动调用",
+      actual: sidecarHits.map((hit) => `${hit.file}:${hit.line} ${hit.name}`).join(", "),
+      rootCause: "本地推理服务 sidecar 被重新引入或启动代码未清理",
+      fix: "删除 Python 自启/8500 端口/sidecar 进程启动代码；注释说明不受影响",
+    });
+  } else {
+    ok(report, {
+      id: "static:no-python-sidecar",
+      suite: "static",
+      layer: "static",
+      title: "后端无 Python/sidecar 进程自启痕迹",
+      details: "注释已剥离；仅扫描可执行代码",
+    });
+  }
+
+  const sidecarModule = path.join(root, "src-tauri", "src", "sidecar.rs");
+  if (fs.existsSync(sidecarModule)) {
+    fail(report, {
+      id: "static:no-sidecar-module",
+      suite: "static",
+      layer: "static",
+      title: "sidecar 模块文件仍存在",
+      severity: "P1",
+      details: path.relative(root, sidecarModule),
+      location: path.relative(root, sidecarModule),
+      expected: "src-tauri/src/sidecar.rs 不存在",
+      actual: "文件存在",
+      rootCause: "sidecar 模块未彻底移除",
+      fix: "删除 sidecar.rs 及其 mod 声明",
+    });
+  } else {
+    ok(report, {
+      id: "static:no-sidecar-module",
+      suite: "static",
+      layer: "static",
+      title: "sidecar 模块文件已移除",
+      details: "src-tauri/src/sidecar.rs 不存在",
     });
   }
 

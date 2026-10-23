@@ -1,6 +1,6 @@
 # MangaReader 技术文档
 
-> 应用版本：`0.13.0`。`package.json` 是版本单一事实源，`npm run version:sync` 同步
+> 应用版本：`0.14.0`。`package.json` 是版本单一事实源，`npm run version:sync` 同步
 > `tauri.conf.json`、`Cargo.toml`、`Cargo.lock`、`package-lock.json`；前端版本由 Vite 注入。
 
 - [README](../README.md)
@@ -43,11 +43,16 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 
 - `library.db`：书库、进度、设置、在线规则、app_meta。
 - `logs/app.log`：错误日志。
-- `render_cache/`：磁盘成品缓存（≤2 GiB，启动时按 mtime 清理）。
+- `render_cache/`：本地/在线页面的成品 JPEG、封面与条漫切片。
+- `online_cache/`：在线原图（按 book + URL + Referer 哈希命名，不含原始 URL）。
+- 两个缓存目录共用 `diskCacheBudgetMb` 软上限（默认 2048 MB，可调 500–10240 MB）；
+  读取时刷新文件 mtime，启动、累计写盘 256 MB、每 5 分钟与退出时按最旧优先 LRU 清理。
+  清理只删除派生目录，绝不触碰 `library.db`、书库记录或阅读进度。
 - `downloads/` / `downloads/telegram/`：内嵌浏览器 / Telegram 附件。
 - `safe-mode.json`、`crash-guard.json`：安全模式与启动守卫。
 
-环境变量：`MR_DATA_DIR`、`MR_RENDER_CACHE_DIR`、`WEBVIEW2_USER_DATA_FOLDER`（主要用于 QA 隔离）。
+环境变量：`MR_DATA_DIR`、`MR_RENDER_CACHE_DIR`、`MR_ONLINE_CACHE_DIR`、
+`WEBVIEW2_USER_DATA_FOLDER`（主要用于 QA 隔离）。
 
 ## 5. 数据模型
 
@@ -75,13 +80,22 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 | `lib.rs` | 设置、启动迁移、命令注册、数据目录 |
 | `commands.rs` | 书库/取页/进度/设置/在线导入/过滤标记恢复 |
 | `source.rs` | 文件夹/zip/在线源；自然排序、zip bomb 上限、CDN 刷新 |
-| `pipeline.rs` / `cache.rs` / `render_cache.rs` | 解码缩放、三级缓存、条漫切片 |
+| `pipeline.rs` / `cache.rs` / `render_cache.rs` / `disk_cache.rs` | 解码缩放、三级内存缓存、渲染 L2、在线原图 L2 与统一 LRU |
 | `online/{mod,http,direct,html,filter,telegram,handoff}.rs` | 在线直读全链路 |
 | `browser.rs` | 独立浏览器窗口、下载捕获、zip/cbz 导入 |
 | `update.rs` | 更新清单、签名、下载、安装与重启 |
 | `diagnostics.rs` | 诊断包、脱敏、Prompt 导出 |
 | `resilience.rs` | 心跳、连点、恢复窗、安全模式 |
 | `security.rs` / `versioning.rs` / `system_proxy.rs` | 隐私检查、版本迁移、系统代理 |
+
+### 6.1 自然序
+
+- `natural_cmp` 用于卷/话标题：数字段按数值比较，数字与非数字结构不同时保持字典序，
+  避免把「第10话」和「第2卷」混排。
+- `natural_cmp_path` 用于文件夹、ZIP/CBZ 条目：逐级目录比较，文件名按 token 比较并忽略
+  `_ - .` 与空白，因此 `page_2 < page_10`；`1.jpg / 2.png / 10.jpg` 混合扩展名也按页号。
+- 递归扫描子目录、合集章节与前端章节列表使用同一顺序；`01.jpg` 与 `1.jpg` 数值相同时
+  以稳定字典序兜底，保证跨平台结果一致。
 
 ## 7. 在线直读
 
@@ -134,7 +148,19 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 无登录、无 Cookie、无 WebView 脚本注入。QA 专用 `MR_TELEGRAM_TEST_ORIGIN` 只在
   debug 构建且仅接受 loopback。
 
-### 7.6 请求头作用域
+### 7.6 图片请求代理与磁盘缓存
+
+- 前端不直接请求第三方图床：在线页、封面、过滤预览都通过 Rust `get_page` /
+  `get_thumbnail` / `get_filtered_preview` 返回 data URL，因此不存在浏览器 CORS 问题。
+- 单页请求自动携带整本规范化 URL 作为 Referer/Origin；跨 origin 时去掉 query/fragment。
+  UA 固定为标准桌面 Chrome，复用设置中的系统/自定义 HTTP(S)/SOCKS5 代理。
+- 原图按 `book_id + URL + Referer` 哈希落 `online_cache/`；成品 JPEG 落 `render_cache/`。
+  两层都命中时不再发网络请求；403/404 的 Telegram 直链仍按消息锚点刷新。
+- 两目录由 `AppState::trim_disk_cache` 共用软上限（设置项 `diskCacheBudgetMb`，500–10240 MB）；
+  读取刷新 mtime，按最旧优先淘汰；设置页可查看占用/分项并一键清空临时缓存。
+- `clear_temp_cache` 同时清空内存页/缩略图/条漫切片与两个磁盘目录，但不删除 SQLite 的任何行。
+
+### 7.7 请求头作用域
 
 - 支持 JSON 对象或单行 Cookie；禁止 Host/Content-Length/Connection/Transfer-Encoding；
   拒绝 CRLF。
@@ -181,8 +207,9 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 
 只读 / 书库：`scan_library`、`import_books`、`remove_books`、`list_books`、`get_book`、
 `get_next_book`、`get_series_books`、`list_entries`、`get_page`、`get_thumbnail`、
-`clear_thumbnail_cache`、`get_webtoon_layout`、`get_webtoon_tile`、`get_memory_stats`、
-`get_dashboard`、`get_reading_log`、`get_reading_by_book`、`set_progress`、`clear_pages`。
+`clear_thumbnail_cache`、`clear_temp_cache`、`get_webtoon_layout`、`get_webtoon_tile`、
+`get_memory_stats`、`get_dashboard`、`get_reading_log`、`get_reading_by_book`、`set_progress`、
+`clear_pages`。
 
 设置与在线：`get_settings`、`set_settings`、`resolve_online_url`、`test_online_connection`、
 `import_resolved_pages`、`resolve_online_batch`、`resolve_telegram_channel`、
@@ -205,8 +232,9 @@ npm run test:version
 node tests\qa\run-qa.mjs
 ```
 
-QA 覆盖：静态/版本红线、双主题六语种、阅读器导入与 125 页条漫压测、在线 30 页噪音与
-推广图学习、Telegram 频道/消息/403 自愈、诊断脱敏、混沌/恢复窗/安全模式。
+QA 覆盖：静态/版本红线、双主题六语种、阅读器导入与 125 页条漫压测、自然序（20 页 CBZ /
+中文章节名）、在线 30 页噪音与推广图学习、严格 Referer + 桌面 UA 防盗链、Telegram
+频道/消息/403 自愈、磁盘缓存上限/清理隔离、诊断脱敏、混沌/恢复窗/安全模式。
 运行报告写入 `tests/qa/reports/latest.md`（生成物不提交）。
 
 ## 13. 已知限制

@@ -128,21 +128,32 @@ const zhCN = {
   "settings.stats.note":
     "只统计本机阅读记录中实际翻过的页面；未打开的书与未记录进度不计入。",
 
-  "settings.cache.budgetTitle": "缓存预算",
+  "settings.cache.budgetTitle": "内存缓存预算",
   "settings.cache.budgetDescription":
-    "预算越高，翻页越顺滑，但进程内存占用也越高。",
+    "内存预算越高，翻页越顺滑，但进程内存占用也越高。",
   "settings.cache.budgetLabel": "内存缓存预算",
-  "settings.cache.budgetAria": "缓存预算（MB）",
-  "settings.cache.budgetHint": "保存后立即套用到页面与缩略图缓存。",
+  "settings.cache.budgetAria": "内存缓存预算（MB）",
+  "settings.cache.budgetHint": "保存后立即套用到页面与缩略图的内存缓存。",
+  "settings.cache.diskTitle": "磁盘缓存",
+  "settings.cache.diskDescription":
+    "渲染结果与在线原图共用同一份磁盘缓存，超出上限时会自动清理较旧的文件。",
+  "settings.cache.diskLabel": "磁盘缓存上限",
+  "settings.cache.diskAria": "磁盘缓存上限（MB）",
+  "settings.cache.diskHint":
+    "保存后立即套用；降低上限后，超出部分会在后续访问时清理。",
+  "settings.cache.diskUsage": "磁盘占用",
+  "settings.cache.diskRender": "渲染缓存",
+  "settings.cache.diskOnline": "在线原图",
+  "settings.cache.diskEmpty": "暂无磁盘缓存统计。",
   "settings.cache.memoryTitle": "内存使用",
   "settings.cache.memoryDescription": "本次运行的内存与缓存快照。",
-  "settings.cache.budgetUsage": "预算使用",
+  "settings.cache.budgetUsage": "内存预算使用",
   "settings.cache.process": "进程占用",
   "settings.cache.imageCache": "图片缓存",
   "settings.cache.cachedPages": "缓存页面",
   "settings.cache.cachedThumbs": "封面缩略图",
   "settings.cache.webtoonCache": "条漫缓存",
-  "settings.cache.limit": "预算上限",
+  "settings.cache.limit": "内存上限",
   "settings.cache.empty": "暂无内存统计。",
   "settings.cache.pagesValue": "{count} 页",
   "settings.cache.thumbsValue": "{count} 张",
@@ -156,6 +167,10 @@ const zhCN = {
   "settings.cache.purging": "清理中…",
   "settings.cache.clearHint":
     "封面缓存清空后，重新进入书库会自动生成。",
+  "settings.cache.clearTemp": "一键清空临时缓存",
+  "settings.cache.clearingTemp": "正在清空…",
+  "settings.cache.clearTempHint":
+    "清除内存页缓存、渲染成品与在线原图；封面会按需重建，书库和阅读进度不受影响。",
 
   "settings.status.loading": "正在加载设置…",
   "settings.status.loadFailed": "设置未加载",
@@ -180,6 +195,7 @@ const zhCN = {
   "settings.toast.thumbsCleared":
     "已清除 {count} 个封面缓存，重新进入书库将自动重建",
   "settings.toast.pagesCleared": "页面缓存已清空",
+  "settings.toast.tempCleared": "已清空临时缓存，释放 {size}",
   "settings.toast.saved": "设置已保存",
 } as const;
 
@@ -314,21 +330,32 @@ const zhTW: SettingsMessages = {
   "settings.stats.note":
     "只統計本機閱讀記錄中實際翻過的頁面；未開啟的書與未記錄進度不計入。",
 
-  "settings.cache.budgetTitle": "快取預算",
+  "settings.cache.budgetTitle": "記憶體快取預算",
   "settings.cache.budgetDescription":
-    "預算越高，翻頁越順暢，但處理程序記憶體占用也越高。",
+    "記憶體預算越高，翻頁越順暢，但處理程序記憶體占用也越高。",
   "settings.cache.budgetLabel": "記憶體快取預算",
-  "settings.cache.budgetAria": "快取預算（MB）",
-  "settings.cache.budgetHint": "儲存後立即套用到頁面與縮圖快取。",
+  "settings.cache.budgetAria": "記憶體快取預算（MB）",
+  "settings.cache.budgetHint": "儲存後立即套用到頁面與縮圖的記憶體快取。",
+  "settings.cache.diskTitle": "磁碟快取",
+  "settings.cache.diskDescription":
+    "渲染結果與線上原圖共用同一份磁碟快取，超過上限時會自動清理較舊的檔案。",
+  "settings.cache.diskLabel": "磁碟快取上限",
+  "settings.cache.diskAria": "磁碟快取上限（MB）",
+  "settings.cache.diskHint":
+    "儲存後立即套用；調低上限後，超出部分會在後續存取時清理。",
+  "settings.cache.diskUsage": "磁碟占用",
+  "settings.cache.diskRender": "渲染快取",
+  "settings.cache.diskOnline": "線上原圖",
+  "settings.cache.diskEmpty": "暫無磁碟快取統計。",
   "settings.cache.memoryTitle": "記憶體使用",
   "settings.cache.memoryDescription": "本次執行的記憶體與快取快照。",
-  "settings.cache.budgetUsage": "預算使用",
+  "settings.cache.budgetUsage": "記憶體預算使用",
   "settings.cache.process": "處理程序占用",
   "settings.cache.imageCache": "圖片快取",
   "settings.cache.cachedPages": "快取頁面",
   "settings.cache.cachedThumbs": "封面縮圖",
   "settings.cache.webtoonCache": "條漫快取",
-  "settings.cache.limit": "預算上限",
+  "settings.cache.limit": "記憶體上限",
   "settings.cache.empty": "暫無記憶體統計。",
   "settings.cache.pagesValue": "{count} 頁",
   "settings.cache.thumbsValue": "{count} 張",
@@ -342,6 +369,10 @@ const zhTW: SettingsMessages = {
   "settings.cache.purging": "清理中…",
   "settings.cache.clearHint":
     "封面快取清空後，重新進入書庫會自動產生。",
+  "settings.cache.clearTemp": "一鍵清空臨時快取",
+  "settings.cache.clearingTemp": "正在清空…",
+  "settings.cache.clearTempHint":
+    "清除記憶體頁面快取、渲染成品與線上原圖；封面會按需重建，書庫與閱讀進度不受影響。",
 
   "settings.status.loading": "正在載入設定…",
   "settings.status.loadFailed": "設定未載入",
@@ -366,6 +397,7 @@ const zhTW: SettingsMessages = {
   "settings.toast.thumbsCleared":
     "已清除 {count} 個封面快取，重新進入書庫將自動重建",
   "settings.toast.pagesCleared": "頁面快取已清空",
+  "settings.toast.tempCleared": "已清空臨時快取，釋放 {size}",
   "settings.toast.saved": "設定已儲存",
 };
 
@@ -498,22 +530,33 @@ const en: SettingsMessages = {
   "settings.stats.note":
     "Only pages actually turned in local reading history are counted; unopened books and unrecorded progress are excluded.",
 
-  "settings.cache.budgetTitle": "Cache budget",
+  "settings.cache.budgetTitle": "Memory cache budget",
   "settings.cache.budgetDescription":
-    "A higher budget makes page turns smoother but increases process memory use.",
+    "A higher memory budget makes page turns smoother but increases process memory use.",
   "settings.cache.budgetLabel": "Memory cache budget",
-  "settings.cache.budgetAria": "Cache budget (MB)",
+  "settings.cache.budgetAria": "Memory cache budget (MB)",
   "settings.cache.budgetHint":
-    "Applied to page and thumbnail caches immediately after saving.",
+    "Applied to the in-memory page and thumbnail caches immediately after saving.",
+  "settings.cache.diskTitle": "Disk cache",
+  "settings.cache.diskDescription":
+    "Rendered pages and online originals share one disk cache; older files are evicted automatically when the limit is exceeded.",
+  "settings.cache.diskLabel": "Disk cache limit",
+  "settings.cache.diskAria": "Disk cache limit (MB)",
+  "settings.cache.diskHint":
+    "Applied immediately after saving; lowering the limit cleans up excess files on later access.",
+  "settings.cache.diskUsage": "Disk usage",
+  "settings.cache.diskRender": "Render cache",
+  "settings.cache.diskOnline": "Online originals",
+  "settings.cache.diskEmpty": "No disk cache stats yet.",
   "settings.cache.memoryTitle": "Memory usage",
   "settings.cache.memoryDescription": "Memory and cache snapshot for this run.",
-  "settings.cache.budgetUsage": "Budget usage",
+  "settings.cache.budgetUsage": "Memory budget usage",
   "settings.cache.process": "Process",
   "settings.cache.imageCache": "Image cache",
   "settings.cache.cachedPages": "Cached pages",
   "settings.cache.cachedThumbs": "Cover thumbnails",
   "settings.cache.webtoonCache": "Webtoon cache",
-  "settings.cache.limit": "Budget limit",
+  "settings.cache.limit": "Memory limit",
   "settings.cache.empty": "No memory stats yet.",
   "settings.cache.pagesValue": "{count} pages",
   "settings.cache.thumbsValue": "{count} thumbs",
@@ -527,6 +570,10 @@ const en: SettingsMessages = {
   "settings.cache.purging": "Purging…",
   "settings.cache.clearHint":
     "Cover thumbnails regenerate automatically the next time you open the library.",
+  "settings.cache.clearTemp": "Clear temporary cache",
+  "settings.cache.clearingTemp": "Clearing…",
+  "settings.cache.clearTempHint":
+    "Clears in-memory pages, rendered files and online originals; covers rebuild as needed, while the library and reading progress are unaffected.",
 
   "settings.status.loading": "Loading settings…",
   "settings.status.loadFailed": "Settings not loaded",
@@ -551,6 +598,7 @@ const en: SettingsMessages = {
   "settings.toast.thumbsCleared":
     "Cleared {count} cover thumbnails; they will rebuild when you reopen the library",
   "settings.toast.pagesCleared": "Page cache cleared",
+  "settings.toast.tempCleared": "Temporary cache cleared, {size} freed",
   "settings.toast.saved": "Settings saved",
 };
 
@@ -685,23 +733,34 @@ const es: SettingsMessages = {
   "settings.stats.note":
     "Solo se cuentan las páginas realmente pasadas en el historial local; los libros sin abrir y el progreso no registrado no cuentan.",
 
-  "settings.cache.budgetTitle": "Presupuesto de caché",
+  "settings.cache.budgetTitle": "Presupuesto de caché en memoria",
   "settings.cache.budgetDescription":
-    "Un presupuesto mayor hace más fluido el cambio de página, pero usa más memoria del proceso.",
+    "Un presupuesto de memoria mayor hace más fluido el cambio de página, pero usa más memoria del proceso.",
   "settings.cache.budgetLabel": "Presupuesto de caché en memoria",
-  "settings.cache.budgetAria": "Presupuesto de caché (MB)",
+  "settings.cache.budgetAria": "Presupuesto de caché en memoria (MB)",
   "settings.cache.budgetHint":
-    "Se aplica a la caché de páginas y miniaturas al guardar.",
+    "Se aplica a la caché de páginas y miniaturas en memoria al guardar.",
+  "settings.cache.diskTitle": "Caché en disco",
+  "settings.cache.diskDescription":
+    "Las páginas renderizadas y los originales en línea comparten una caché en disco; los archivos antiguos se eliminan al superar el límite.",
+  "settings.cache.diskLabel": "Límite de caché en disco",
+  "settings.cache.diskAria": "Límite de caché en disco (MB)",
+  "settings.cache.diskHint":
+    "Se aplica al guardar; al bajar el límite, el exceso se limpia en accesos posteriores.",
+  "settings.cache.diskUsage": "Uso en disco",
+  "settings.cache.diskRender": "Caché de renderizado",
+  "settings.cache.diskOnline": "Originales en línea",
+  "settings.cache.diskEmpty": "Aún no hay estadísticas de caché en disco.",
   "settings.cache.memoryTitle": "Uso de memoria",
   "settings.cache.memoryDescription":
     "Instantánea de memoria y caché de esta ejecución.",
-  "settings.cache.budgetUsage": "Uso del presupuesto",
+  "settings.cache.budgetUsage": "Uso del presupuesto de memoria",
   "settings.cache.process": "Proceso",
   "settings.cache.imageCache": "Caché de imágenes",
   "settings.cache.cachedPages": "Páginas en caché",
   "settings.cache.cachedThumbs": "Miniaturas de portada",
   "settings.cache.webtoonCache": "Caché de webtoon",
-  "settings.cache.limit": "Límite del presupuesto",
+  "settings.cache.limit": "Límite de memoria",
   "settings.cache.empty": "Aún no hay estadísticas de memoria.",
   "settings.cache.pagesValue": "{count} páginas",
   "settings.cache.thumbsValue": "{count} miniaturas",
@@ -715,6 +774,10 @@ const es: SettingsMessages = {
   "settings.cache.purging": "Limpiando…",
   "settings.cache.clearHint":
     "Las miniaturas de portada se regeneran al volver a abrir la biblioteca.",
+  "settings.cache.clearTemp": "Vaciar caché temporal",
+  "settings.cache.clearingTemp": "Vaciando…",
+  "settings.cache.clearTempHint":
+    "Borra las páginas en memoria, los archivos renderizados y los originales en línea; las portadas se reconstruyen cuando haga falta y la biblioteca y el progreso no se ven afectados.",
 
   "settings.status.loading": "Cargando ajustes…",
   "settings.status.loadFailed": "Ajustes no cargados",
@@ -744,6 +807,8 @@ const es: SettingsMessages = {
   "settings.toast.thumbsCleared":
     "Se borraron {count} miniaturas; se reconstruirán al reabrir la biblioteca",
   "settings.toast.pagesCleared": "Caché de páginas vaciada",
+  "settings.toast.tempCleared":
+    "Caché temporal vaciada; se liberaron {size}",
   "settings.toast.saved": "Ajustes guardados",
 };
 
@@ -878,23 +943,34 @@ const ja: SettingsMessages = {
   "settings.stats.note":
     "ローカルの読書履歴で実際にめくったページのみを集計します。未開封の本や記録されていない進捗は含みません。",
 
-  "settings.cache.budgetTitle": "キャッシュ予算",
+  "settings.cache.budgetTitle": "メモリキャッシュ予算",
   "settings.cache.budgetDescription":
-    "予算を増やすとページめくりが滑らかになりますが、プロセスのメモリ使用量も増えます。",
+    "メモリ予算を増やすとページめくりが滑らかになりますが、プロセスのメモリ使用量も増えます。",
   "settings.cache.budgetLabel": "メモリキャッシュ予算",
-  "settings.cache.budgetAria": "キャッシュ予算（MB）",
+  "settings.cache.budgetAria": "メモリキャッシュ予算（MB）",
   "settings.cache.budgetHint":
-    "保存後、ページとサムネイルのキャッシュにすぐ適用されます。",
+    "保存後、ページとサムネイルのメモリキャッシュにすぐ適用されます。",
+  "settings.cache.diskTitle": "ディスクキャッシュ",
+  "settings.cache.diskDescription":
+    "レンダリング画像とオンライン原画は同じディスクキャッシュを共有し、上限を超えると古いファイルから自動削除されます。",
+  "settings.cache.diskLabel": "ディスクキャッシュ上限",
+  "settings.cache.diskAria": "ディスクキャッシュ上限（MB）",
+  "settings.cache.diskHint":
+    "保存後すぐに適用されます。上限を下げた場合、超過分は以降のアクセス時に整理されます。",
+  "settings.cache.diskUsage": "ディスク使用量",
+  "settings.cache.diskRender": "レンダリングキャッシュ",
+  "settings.cache.diskOnline": "オンライン原画",
+  "settings.cache.diskEmpty": "ディスクキャッシュの統計はまだありません。",
   "settings.cache.memoryTitle": "メモリ使用量",
   "settings.cache.memoryDescription":
     "今回の実行のメモリとキャッシュのスナップショット。",
-  "settings.cache.budgetUsage": "予算の使用率",
+  "settings.cache.budgetUsage": "メモリ予算の使用率",
   "settings.cache.process": "プロセス",
   "settings.cache.imageCache": "画像キャッシュ",
   "settings.cache.cachedPages": "キャッシュ済みページ",
   "settings.cache.cachedThumbs": "表紙サムネイル",
   "settings.cache.webtoonCache": "Webtoon キャッシュ",
-  "settings.cache.limit": "予算上限",
+  "settings.cache.limit": "メモリ上限",
   "settings.cache.empty": "メモリ統計はまだありません。",
   "settings.cache.pagesValue": "{count} ページ",
   "settings.cache.thumbsValue": "{count} 枚",
@@ -908,6 +984,10 @@ const ja: SettingsMessages = {
   "settings.cache.purging": "クリーンアップ中…",
   "settings.cache.clearHint":
     "表紙キャッシュは、次にライブラリを開いたときに自動で再生成されます。",
+  "settings.cache.clearTemp": "一時キャッシュを一括削除",
+  "settings.cache.clearingTemp": "削除中…",
+  "settings.cache.clearTempHint":
+    "メモリ上のページ、レンダリング済みファイル、オンライン原画を削除します。表紙は必要に応じて再生成され、ライブラリと読書進捗には影響しません。",
 
   "settings.status.loading": "設定を読み込み中…",
   "settings.status.loadFailed": "設定が未読み込み",
@@ -938,6 +1018,8 @@ const ja: SettingsMessages = {
   "settings.toast.thumbsCleared":
     "{count} 件の表紙キャッシュを消去しました。ライブラリを開き直すと再生成されます",
   "settings.toast.pagesCleared": "ページキャッシュを空にしました",
+  "settings.toast.tempCleared":
+    "一時キャッシュを削除し、{size} を解放しました",
   "settings.toast.saved": "設定を保存しました",
 };
 
@@ -1072,22 +1154,33 @@ const ko: SettingsMessages = {
   "settings.stats.note":
     "로컬 읽기 기록에서 실제로 넘긴 페이지만 집계합니다. 열지 않은 책과 기록되지 않은 진행률은 제외됩니다.",
 
-  "settings.cache.budgetTitle": "캐시 예산",
+  "settings.cache.budgetTitle": "메모리 캐시 예산",
   "settings.cache.budgetDescription":
-    "예산이 높을수록 페이지 넘김이 부드러워지지만 프로세스 메모리 사용량도 늘어납니다.",
+    "메모리 예산이 높을수록 페이지 넘김이 부드러워지지만 프로세스 메모리 사용량도 늘어납니다.",
   "settings.cache.budgetLabel": "메모리 캐시 예산",
-  "settings.cache.budgetAria": "캐시 예산(MB)",
+  "settings.cache.budgetAria": "메모리 캐시 예산(MB)",
   "settings.cache.budgetHint":
-    "저장하면 페이지와 썸네일 캐시에 즉시 적용됩니다.",
+    "저장하면 페이지와 썸네일 메모리 캐시에 즉시 적용됩니다.",
+  "settings.cache.diskTitle": "디스크 캐시",
+  "settings.cache.diskDescription":
+    "렌더링 이미지와 온라인 원본이 하나의 디스크 캐시를 공유하며, 한도를 넘으면 오래된 파일부터 자동으로 정리됩니다.",
+  "settings.cache.diskLabel": "디스크 캐시 상한",
+  "settings.cache.diskAria": "디스크 캐시 상한(MB)",
+  "settings.cache.diskHint":
+    "저장 후 즉시 적용됩니다. 상한을 낮추면 초과분은 이후 접근 시 정리됩니다.",
+  "settings.cache.diskUsage": "디스크 사용량",
+  "settings.cache.diskRender": "렌더링 캐시",
+  "settings.cache.diskOnline": "온라인 원본",
+  "settings.cache.diskEmpty": "아직 디스크 캐시 통계가 없습니다.",
   "settings.cache.memoryTitle": "메모리 사용량",
   "settings.cache.memoryDescription": "이번 실행의 메모리와 캐시 스냅숏입니다.",
-  "settings.cache.budgetUsage": "예산 사용률",
+  "settings.cache.budgetUsage": "메모리 예산 사용률",
   "settings.cache.process": "프로세스",
   "settings.cache.imageCache": "이미지 캐시",
   "settings.cache.cachedPages": "캐시된 페이지",
   "settings.cache.cachedThumbs": "표지 썸네일",
   "settings.cache.webtoonCache": "웹툰 캐시",
-  "settings.cache.limit": "예산 상한",
+  "settings.cache.limit": "메모리 상한",
   "settings.cache.empty": "아직 메모리 통계가 없습니다.",
   "settings.cache.pagesValue": "{count}페이지",
   "settings.cache.thumbsValue": "{count}개",
@@ -1101,6 +1194,10 @@ const ko: SettingsMessages = {
   "settings.cache.purging": "정리 중…",
   "settings.cache.clearHint":
     "표지 캐시는 서재에 다시 들어가면 자동으로 생성됩니다.",
+  "settings.cache.clearTemp": "임시 캐시 한 번에 지우기",
+  "settings.cache.clearingTemp": "지우는 중…",
+  "settings.cache.clearTempHint":
+    "메모리 페이지, 렌더링된 파일, 온라인 원본을 지웁니다. 표지는 필요할 때 다시 생성되며 서재와 읽기 진행률에는 영향을 주지 않습니다.",
 
   "settings.status.loading": "설정 불러오는 중…",
   "settings.status.loadFailed": "설정이 로드되지 않음",
@@ -1128,6 +1225,8 @@ const ko: SettingsMessages = {
   "settings.toast.thumbsCleared":
     "표지 캐시 {count}개를 지웠습니다. 서재에 다시 들어가면 자동으로 생성됩니다",
   "settings.toast.pagesCleared": "페이지 캐시를 비웠습니다",
+  "settings.toast.tempCleared":
+    "임시 캐시를 지우고 {size}를 확보했습니다",
   "settings.toast.saved": "설정이 저장되었습니다",
 };
 

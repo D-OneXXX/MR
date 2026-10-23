@@ -45,7 +45,10 @@ function sortChapters(list: BookInfo[]): BookInfo[] {
     if (ai != null && bi != null && ai !== bi) return ai - bi;
     if (ai != null && bi == null) return -1;
     if (ai == null && bi != null) return 1;
-    return a.title.localeCompare(b.title, "zh");
+    return a.title.localeCompare(b.title, "zh", {
+      numeric: true,
+      sensitivity: "base",
+    });
   });
 }
 

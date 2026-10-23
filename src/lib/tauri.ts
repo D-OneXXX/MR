@@ -128,6 +128,14 @@ export interface MemoryStats {
   cachedThumbs: number;
   webtoonBytes: number;
   webtoonTiles: number;
+  /** 统一磁盘缓存总占用（render + online 原图）。 */
+  diskCacheBytes: number;
+  /** 磁盘缓存上限（由 diskCacheBudgetMb 换算）。 */
+  diskCacheLimitBytes: number;
+  /** 磁盘缓存中渲染结果占用。 */
+  renderCacheBytes: number;
+  /** 磁盘缓存中在线原图占用。 */
+  onlineCacheBytes: number;
 }
 
 export interface HeatDay {
@@ -184,9 +192,18 @@ export interface RemoveResult {
   errors: string[];
 }
 
+/** `clear_temp_cache` 结果：释放的字节数与删除的文件数。 */
+export interface ClearCacheResult {
+  bytesFreed: number;
+  files: number;
+}
+
 export interface Settings {
   theme: string;
+  /** 内存缓存预算（MB）。 */
   cacheBudgetMb: number;
+  /** 统一磁盘缓存预算（MB，render + online 原图）。 */
+  diskCacheBudgetMb: number;
   libraryDir: string;
   /** 实验性功能：条漫模式。默认关闭，关闭时版式只在单页/双页间切换。 */
   experimentalWebtoon: boolean;
@@ -304,6 +321,8 @@ export const api = {
     invoke<PageImage>("get_thumbnail", { bookId, maxSize: maxSize ?? null }),
   // 清空封面缓存（内存+磁盘首页成品），重新进入书库自动重建。
   clearThumbCache: () => invoke<number>("clear_thumbnail_cache"),
+  // 清空临时磁盘缓存（render + online 原图），返回释放体积与文件数。
+  clearTempCache: () => invoke<ClearCacheResult>("clear_temp_cache"),
   getMemoryStats: () => invoke<MemoryStats>("get_memory_stats"),
   getDashboard: () => invoke<Dashboard>("get_dashboard"),
   // 逐日阅读页数：bookId=null 全局；Some(id) 只看该书。days 1..365。

@@ -129,6 +129,93 @@ pub(crate) fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     a.cmp(b)
 }
 
+/// 文件/目录名中的自然序 token：连续数字按数值，其余按大小写不敏感文本。
+/// 分隔符（`_`、`-`、`.`、空白）不参与比较，因此 `page_2 < page_10`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathToken<'a> {
+    Num(&'a str),
+    Text(&'a str),
+}
+
+fn path_is_separator(byte: u8) -> bool {
+    matches!(byte, b'_' | b'-' | b'.' | b' ' | b'\t')
+}
+
+fn path_tokens(s: &str) -> Vec<PathToken<'_>> {
+    let bytes = s.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if path_is_separator(bytes[index]) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        if bytes[index].is_ascii_digit() {
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index += 1;
+            }
+            tokens.push(PathToken::Num(&s[start..index]));
+        } else {
+            while index < bytes.len()
+                && !bytes[index].is_ascii_digit()
+                && !path_is_separator(bytes[index])
+            {
+                index += 1;
+            }
+            tokens.push(PathToken::Text(&s[start..index]));
+        }
+    }
+    tokens
+}
+
+fn path_component_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_tokens = path_tokens(a);
+    let b_tokens = path_tokens(b);
+    for (left, right) in a_tokens.iter().zip(&b_tokens) {
+        let ordering = match (left, right) {
+            (PathToken::Num(a), PathToken::Num(b)) => numeric_cmp(a, b),
+            (PathToken::Text(a), PathToken::Text(b)) => a
+                .to_ascii_lowercase()
+                .cmp(&b.to_ascii_lowercase())
+                .then_with(|| a.cmp(b)),
+            // 数字段优先于文本段，确保 `1.jpg` 排在 `a.jpg` 前。
+            (PathToken::Num(_), PathToken::Text(_)) => std::cmp::Ordering::Less,
+            (PathToken::Text(_), PathToken::Num(_)) => std::cmp::Ordering::Greater,
+        };
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    a_tokens
+        .len()
+        .cmp(&b_tokens.len())
+        .then_with(|| a.cmp(b))
+}
+
+/// 路径自然序：逐级目录比较，最后一级再比较文件 token。
+///
+/// 与 [`natural_cmp`] 分开是刻意的：卷/话标题仍保留“结构不同退回字典序”
+/// 的既有契约，而文件名必须让 `page_2.png` 严格排在 `page10.png` 前，
+/// 并让 `1.jpg / 2.png / 10.jpg` 这类混合扩展名也按页号排列。
+pub(crate) fn natural_cmp_path(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_parts: Vec<&str> = a
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    let b_parts: Vec<&str> = b
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    for (left, right) in a_parts.iter().zip(&b_parts) {
+        let ordering = path_component_cmp(left, right);
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    a_parts.len().cmp(&b_parts.len()).then_with(|| a.cmp(b))
+}
+
 fn is_title_separator(c: char) -> bool {
     c.is_whitespace()
         || matches!(
@@ -315,7 +402,7 @@ fn collect_book_paths(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     };
     let mut kids: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
     kids.sort_by(|a, b| {
-        crate::commands::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy())
+        crate::commands::natural_cmp_path(&a.to_string_lossy(), &b.to_string_lossy())
     });
     for kid in kids {
         let Ok(meta) = std::fs::symlink_metadata(&kid) else {
@@ -589,8 +676,7 @@ pub async fn remove_books(
     // 注意：在途预取/后台渲染无法撤回，旧页可能在此之后又写回 L1/L2；
     // 本次不引入 generation key，接受该残留竞态（重新进入阅读会按新源重建）。
     for id in &ids {
-        state.cache.remove_book(id);
-        state.render.remove_book(id);
+        state.remove_book_caches(id);
         state.webtoon_layouts.lock().remove(id);
     }
     // 句柄池按代际整体失效：避免删除与在途打开竞态时旧句柄重新插回。
@@ -734,15 +820,25 @@ pub async fn get_page(
     let rendered = match blocking(move || {
         // 2) L2 磁盘成品缓存。
         if let Some(bytes) = st.render.get(&book, index, w, h) {
-            return assembled_page(bytes);
+            match assembled_page(bytes) {
+                Ok(page) => return Ok(page),
+                Err(e) => {
+                    // 坏缓存自愈：删除后继续走全管线，而不是让该页永久失败。
+                    st.render.remove_page(&book, index, w, h);
+                    crate::logging::log_error(
+                        "get_page",
+                        &format!("L2 缓存损坏，已丢弃并重渲染第 {} 页：{e}", index + 1),
+                    );
+                }
+            }
         }
         // 3) 全管线（常开句柄，不再每页重开 zip/重读目录）。
         let handle = st.source_handle_for_book(&book)?;
         let raw = handle.read_raw(index as usize)?;
+        let raw_bytes = raw.bytes.len();
         let page = pipeline::render_raw(&raw, max_width, max_height)?;
         st.render.put(&book, index, w, h, &page.bytes);
-        st.render
-            .maybe_trim(crate::render_cache::RENDER_DISK_BUDGET);
+        st.note_cache_write(raw_bytes.saturating_add(page.bytes.len()));
         Ok(page)
     })
     .await
@@ -809,7 +905,9 @@ fn prefetch_neighbors(
                     })
                 });
             if let Ok(p) = page {
+                let written = p.bytes.len();
                 st.cache.put_page(&book, t, w, h, p);
+                st.note_cache_write(written);
             }
             st.prefetching.lock().remove(&key);
         }
@@ -837,12 +935,23 @@ pub async fn get_thumbnail(
     let rendered = match blocking(move || {
         // L2 磁盘复用同一套渲染缓存（键 = 首页 + edge 桶）。
         if let Some(bytes) = st.render.get(&book, 0, edge, edge) {
-            return assembled_page(bytes);
+            match assembled_page(bytes) {
+                Ok(page) => return Ok(page),
+                Err(e) => {
+                    st.render.remove_page(&book, 0, edge, edge);
+                    crate::logging::log_error(
+                        "get_thumbnail",
+                        &format!("封面 L2 缓存损坏，已丢弃并重建：{e}"),
+                    );
+                }
+            }
         }
         let handle = st.source_handle_for_book(&book)?;
         let raw = handle.read_raw(0)?;
+        let raw_bytes = raw.bytes.len();
         let page = pipeline::render_raw(&raw, Some(edge), Some(edge))?;
         st.render.put(&book, 0, edge, edge, &page.bytes);
+        st.note_cache_write(raw_bytes.saturating_add(page.bytes.len()));
         Ok(page)
     })
     .await
@@ -874,7 +983,10 @@ pub async fn clear_thumbnail_cache(state: State<'_, Arc<AppState>>) -> Result<u3
 }
 
 /// `sysinfo` 只刷新本进程内存（不扫全进程表，低开销）。
-fn blocking_memory(cache: (u64, u64, usize, usize, u64, usize)) -> MemoryStats {
+fn blocking_memory(
+    cache: (u64, u64, usize, usize, u64, usize),
+    disk: (u64, u64, u64, u64),
+) -> MemoryStats {
     use std::sync::OnceLock;
     use sysinfo::{get_current_pid, ProcessesToUpdate, System};
 
@@ -899,14 +1011,57 @@ fn blocking_memory(cache: (u64, u64, usize, usize, u64, usize)) -> MemoryStats {
         cached_thumbs: cache.3,
         webtoon_bytes: cache.4,
         webtoon_tiles: cache.5,
+        disk_cache_bytes: disk.0,
+        disk_cache_limit_bytes: disk.1,
+        render_cache_bytes: disk.2,
+        online_cache_bytes: disk.3,
     }
 }
 
 #[tauri::command]
 pub async fn get_memory_stats(state: State<'_, Arc<AppState>>) -> Result<MemoryStats, String> {
-    let snap = state.cache.stats();
-    // sysinfo 刷新很快但仍放 blocking，避免偶发阻塞运行时。
-    blocking(move || Ok(blocking_memory(snap))).await
+    // 磁盘统计与 sysinfo 都放在 blocking 线程，避免慢盘拖住 async runtime。
+    let st = state.inner().clone();
+    blocking(move || {
+        let snap = st.cache.stats();
+        let (used, render, online) = st.disk_cache_totals();
+        let limit = st.disk_cache_limit_bytes();
+        Ok(blocking_memory(snap, (used, limit, render, online)))
+    })
+    .await
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearCacheResult {
+    pub bytes_freed: u64,
+    pub files: u64,
+}
+
+/// 一键清空临时缓存：内存 L1 + 渲染 L2 + 在线原图 L2。
+/// 只删除派生目录，绝不触碰 SQLite 书库/进度/设置。
+#[tauri::command]
+pub async fn clear_temp_cache(
+    state: State<'_, Arc<AppState>>,
+) -> Result<ClearCacheResult, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let before = st.disk_cache_totals().0;
+        let files = st.render.file_count() + st.online_cache.file_count();
+        st.cache.clear_pages();
+        st.cache.clear_thumbs();
+        st.webtoon_layouts.lock().clear();
+        st.render.clear_all();
+        st.online_cache.clear_all();
+        // 清空后重置写盘压力计数，避免下一次阅读立刻触发一次无意义扫描。
+        st.trim_disk_cache();
+        let after = st.disk_cache_totals().0;
+        Ok(ClearCacheResult {
+            bytes_freed: before.saturating_sub(after),
+            files,
+        })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1144,7 +1299,19 @@ pub async fn get_webtoon_tile(
     let rendered = match blocking(move || {
         // 2) L2 磁盘切片。
         if let Some(bytes) = st.render.get_tile(&book, index, tile, w) {
-            return assembled_page(bytes);
+            match assembled_page(bytes) {
+                Ok(page) => return Ok(page),
+                Err(e) => {
+                    st.render.remove_tile(&book, index, tile, w);
+                    crate::logging::log_error(
+                        "get_webtoon_tile",
+                        &format!(
+                            "条漫切片 L2 损坏，已丢弃并重建（第 {} 页/片 {tile}）：{e}",
+                            index + 1
+                        ),
+                    );
+                }
+            }
         }
         // 3) 整页物化（串行；一次解码直接切全部片，无中间编解码往返）。
         // 先读原页再抢切片锁：在线源 read_raw 可能下载 30s+，持全局锁会阻塞
@@ -1163,9 +1330,12 @@ pub async fn get_webtoon_tile(
             )));
         }
         // 全部落盘（后续滚动的切片都是磁盘命中），随后丢栅格。
+        let mut written = raw.bytes.len();
         for (t, p) in pages.iter().enumerate() {
+            written = written.saturating_add(p.bytes.len());
             st.render.put_tile(&book, index, t as u32, w, &p.bytes);
         }
+        st.note_cache_write(written);
         Ok(pages.into_iter().nth(tile as usize).expect("切片在界内"))
     })
     .await
@@ -1196,6 +1366,10 @@ fn settings_persist_pairs(s: &Settings) -> Vec<(&'static str, String)> {
     vec![
         ("theme", s.theme.clone()),
         ("cache_budget_mb", s.cache_budget_mb.to_string()),
+        (
+            "disk_cache_budget_mb",
+            crate::disk_cache::clamp_budget_mb(s.disk_cache_budget_mb).to_string(),
+        ),
         ("library_dir", s.library_dir.clone()),
         (
             "experimental_webtoon",
@@ -1316,8 +1490,7 @@ pub(crate) fn ingest_resolved_batch(
         .map_err(BackendError::Msg)?;
 
     for id in &changed_ids {
-        st.cache.remove_book(id);
-        st.render.remove_book(id);
+        st.remove_book_caches(id);
         st.webtoon_layouts.lock().remove(id);
     }
     if !changed_ids.is_empty() {
@@ -1336,8 +1509,7 @@ pub(crate) fn ingest_resolved_pages(
     let meta = resolved_pages_meta(url, title, page_urls)?;
     let (row, changed) = apply_resolved_meta(st, &meta)?;
     if changed {
-        st.cache.remove_book(&row.id);
-        st.render.remove_book(&row.id);
+        st.remove_book_caches(&row.id);
         st.webtoon_layouts.lock().remove(&row.id);
         st.invalidate_sources();
     }
@@ -1374,8 +1546,7 @@ pub async fn resolve_online_url(
     .await?;
 
     if changed {
-        state.cache.remove_book(&row.id);
-        state.render.remove_book(&row.id);
+        state.remove_book_caches(&row.id);
         state.webtoon_layouts.lock().remove(&row.id);
         state.invalidate_sources();
         // 在途预取/后台渲染无法撤回，旧页可能在此之后又写回 L1/L2；
@@ -1564,8 +1735,7 @@ fn main_page_template(pages: &[crate::online::PageRef]) -> Option<String> {
 }
 
 fn invalidate_book_caches(st: &AppState, book_id: &str) {
-    st.cache.remove_book(book_id);
-    st.render.remove_book(book_id);
+    st.remove_book_caches(book_id);
     st.webtoon_layouts.lock().remove(book_id);
     st.invalidate_sources();
 }
@@ -2415,6 +2585,9 @@ pub async fn set_settings(
     crate::online::validate_proxy(&settings.online_proxy)?;
     crate::online::validate_headers(&settings.online_headers)?;
     settings.online_concurrency = settings.online_concurrency.clamp(1, 8);
+    settings.cache_budget_mb = settings.cache_budget_mb.clamp(16, 2048);
+    settings.disk_cache_budget_mb =
+        crate::disk_cache::clamp_budget_mb(settings.disk_cache_budget_mb);
 
     // 缩略图与页缓存预算即时生效（MB→字节；至少 16MB；同一滑杆管两级）。
     let budget = (settings.cache_budget_mb.max(16) as u64) * 1024 * 1024;
@@ -2434,6 +2607,7 @@ pub async fn set_settings(
         Ok(())
     });
     *state.settings.lock() = settings;
+    state.trim_disk_cache_async();
     if online_conn_changed {
         state.invalidate_sources();
     }
@@ -2461,6 +2635,7 @@ mod tests {
         for k in [
             "theme",
             "cache_budget_mb",
+            "disk_cache_budget_mb",
             "library_dir",
             "experimental_webtoon",
             "experimental_online",
@@ -2875,6 +3050,29 @@ mod tests {
         assert_eq!(title_prefix("漫画 第12话"), "漫画 第");
         assert_eq!(title_prefix("第2卷"), "第");
         assert_eq!(title_prefix("Vol.2"), "Vol");
+    }
+
+    #[test]
+    fn natural_path_orders_mixed_extensions_and_nested_entries() {
+        let mut mixed = vec!["page10.png", "page_2.png", "page_1.png"];
+        mixed.sort_by(|a, b| natural_cmp_path(a, b));
+        assert_eq!(
+            mixed,
+            vec!["page_1.png", "page_2.png", "page10.png"],
+            "混合分隔符/扩展开关不能退回字典序"
+        );
+
+        let mut nested = vec!["chap10/1.png", "chap2/10.png", "chap2/2.png"];
+        nested.sort_by(|a, b| natural_cmp_path(a, b));
+        assert_eq!(
+            nested,
+            vec!["chap2/2.png", "chap2/10.png", "chap10/1.png"],
+            "多级目录必须先按章节目录再按页号自然排序"
+        );
+
+        let mut volumes = vec!["第10话", "第2话", "第02话"];
+        volumes.sort_by(|a, b| natural_cmp_path(a, b));
+        assert_eq!(volumes, vec!["第02话", "第2话", "第10话"]);
     }
 
     #[test]

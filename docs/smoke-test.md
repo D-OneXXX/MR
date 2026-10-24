@@ -155,6 +155,14 @@
 - [ ] 开源上游限制：Tauri 内置韩语 MUI 文件缺少 MultiUser 的 5 条安装范围文案，
       韩语下该页可能回退英文；其余安装向导为韩语，不影响安装与语言选择。
 
+### Linux 系统安装更新（deb/rpm）
+
+- [ ] 以 deb/rpm 安装运行，设置 → 软件更新检查到新版本时，只出现
+      「打开下载页 / 打开发行说明」手动更新卡，没有自动安装按钮；
+- [ ] 强行调用安装路径会被阻止并提示 `linux-manual-install` 六语文案；
+- [ ] AppImage 运行态仍允许下载并替换当前 AppImage；
+- [ ] 无 `.deb/.rpm/.AppImage` 后缀的 Linux 更新 URL 被拒绝，不回落 NSIS。
+
 ### 官方 Updater / GitHub Actions
 
 - [ ] 设置 → 关于与维护同时存在「GitHub 自动更新」与原有自定义更新分区；

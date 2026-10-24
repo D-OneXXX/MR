@@ -16,6 +16,7 @@ const STABLE_ERROR_CODES: ReadonlyArray<{ code: string; key: string }> = [
   { code: "db-schema-failed", key: "dbRecovery.schemaFailed" },
   { code: "db-quick-check-failed", key: "dbRecovery.quickCheckFailed" },
   { code: "db-already-healthy", key: "dbRecovery.unknown" },
+  { code: "linux-manual-install", key: "updates.linux.manualBlocked" },
 ];
 
 /**

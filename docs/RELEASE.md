@@ -107,7 +107,9 @@
      `latest.json` 与安装包；
    - 接力携带上一版 Release 的 `latest-linux-critical.json`。
 
-5. **Linux 高危补丁发布**（仅安全/崩溃级修复，先同步 `package.json` 到补丁版本）：
+5. **Linux 高危补丁发布**（仅安全/崩溃级修复，先同步 `package.json` 到补丁版本）。
+   deb/rpm 系统安装不会在应用内自我替换：更新面板只提供下载页/发行说明，
+   由用户用包管理器安装；AppImage 运行态才允许自动替换。
 
    ```bat
    npm run version:sync -- 0.17.1

@@ -736,7 +736,18 @@ fn resolve_format(explicit: Option<&str>, url: &Url) -> Result<InstallerFormat, 
     } else if path.ends_with(".appimage") {
         Ok(InstallerFormat::AppImage)
     } else {
-        Ok(InstallerFormat::Nsis)
+        // Windows 的历史清单允许无后缀下载地址并回落 NSIS；Linux 绝不能把
+        // 未知制品误当 Windows 安装包，必须要求明确的 deb/rpm/AppImage。
+        #[cfg(target_os = "linux")]
+        {
+            return Err(
+                "Linux 更新包 URL 缺少可识别的 .deb/.rpm/.AppImage 后缀".to_string(),
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(InstallerFormat::Nsis)
+        }
     }
 }
 
@@ -2070,7 +2081,13 @@ mod tests {
             Url::parse("https://example.com/MangaReader_0.15.0_amd64.AppImage").expect("url");
         assert_eq!(resolve_format(None, &exe).expect("nsis"), InstallerFormat::Nsis);
         assert_eq!(resolve_format(None, &msi).expect("msi"), InstallerFormat::Msi);
+        #[cfg(not(target_os = "linux"))]
         assert_eq!(resolve_format(None, &bin).expect("nsis"), InstallerFormat::Nsis);
+        #[cfg(target_os = "linux")]
+        assert!(
+            resolve_format(None, &bin).is_err(),
+            "Linux 无后缀 URL 必须拒绝，不能回落 NSIS"
+        );
         assert_eq!(resolve_format(None, &deb).expect("deb"), InstallerFormat::Deb);
         assert_eq!(resolve_format(None, &rpm).expect("rpm"), InstallerFormat::Rpm);
         assert_eq!(

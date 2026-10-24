@@ -3,16 +3,19 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
+  ExternalLink,
   Loader2,
   PackageOpen,
   Power,
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { SettingsSection } from "@/components/settings/SettingsSection";
+import { toast } from "@/components/Toast";
 import { useI18n } from "@/i18n";
 import { isLinuxPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -39,6 +42,10 @@ type NativePhase =
   | "error";
 
 type NativeFailure = "check" | "install" | "relaunch";
+
+const RELEASE_DOWNLOAD_URL = "https://github.com/D-OneXXX/MR/releases/latest";
+const RELEASE_NOTES_URL =
+  "https://github.com/D-OneXXX/MR/blob/main/docs/RELEASE.md";
 
 interface NativeDownloadState {
   downloaded: number;
@@ -149,6 +156,11 @@ export default function UpdatesPanel() {
   const handleNativeInstall = async () => {
     const held = nativeCheckRef.current;
     if (!held || nativeBusyRef.current) return;
+    // Linux deb/rpm 系统安装不得由应用替换 /usr 下的包文件。
+    if (isLinuxPlatform() && appInfo?.linuxInstall !== "appimage") {
+      toast(t("updates.linux.manualBlocked"));
+      return;
+    }
     nativeBusyRef.current = true;
     setNativeFailure(null);
     setNativeDownload({ downloaded: 0, total: null, percent: null });
@@ -211,6 +223,16 @@ export default function UpdatesPanel() {
   const nativeNeedsRelaunch = !isWindowsPlatform();
 
   const isLinux = isLinuxPlatform();
+  const linuxManualInstall =
+    isLinux && appInfo?.linuxInstall !== "appimage";
+
+  const openExternal = async (url: string) => {
+    try {
+      await openUrl(url);
+    } catch {
+      toast(t("updates.linux.openFailed"));
+    }
+  };
 
   const nativeStatus =
     nativePhase === "checking"
@@ -310,22 +332,60 @@ export default function UpdatesPanel() {
         ) : null}
 
         {nativePhase === "available" ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="pill-primary"
-              size="pill"
-              className="whitespace-nowrap"
-              disabled={nativeBusy}
-              onClick={() => void handleNativeInstall()}
-            >
-              <Download />
-              {t("updates.native.downloadInstall")}
-            </Button>
-            <span className="text-[11px] leading-relaxed text-muted-foreground">
-              {t("updates.native.availableDetail")}
-            </span>
-          </div>
+          linuxManualInstall ? (
+            <div className="rounded-2xl border border-warning/40 bg-warning/10 p-4">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-foreground">
+                    {t("updates.linux.manualTitle")}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {t("updates.linux.manualHint")}
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="pill-primary"
+                  size="pill-sm"
+                  className="whitespace-nowrap"
+                  onClick={() => void openExternal(RELEASE_DOWNLOAD_URL)}
+                >
+                  <Download />
+                  {t("updates.linux.download")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="pill"
+                  size="pill-sm"
+                  className="whitespace-nowrap"
+                  onClick={() => void openExternal(RELEASE_NOTES_URL)}
+                >
+                  <ExternalLink />
+                  {t("updates.linux.notes")}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="pill-primary"
+                size="pill"
+                className="whitespace-nowrap"
+                disabled={nativeBusy}
+                onClick={() => void handleNativeInstall()}
+              >
+                <Download />
+                {t("updates.native.downloadInstall")}
+              </Button>
+              <span className="text-[11px] leading-relaxed text-muted-foreground">
+                {t("updates.native.availableDetail")}
+              </span>
+            </div>
+          )
         ) : null}
 
         {nativePhase === "downloading" ? (

@@ -136,7 +136,8 @@
   `.cbz`/`.zip` 文件关联的锚点；静态守卫 `static:release-surface` 会阻止误改。
 - 补丁与全量包必须下载到**系统临时目录**（`std::env::temp_dir()`）或应用专属 staging 目录，
   完成 SHA-256 + minisign 签名校验后，由标准安装器事务（PowerShell `-EncodedCommand`，UTF-16LE）
-  完成替换；校验失败一律拒绝。
+  完成替换；校验失败一律拒绝。Linux deb/rpm 系统安装禁止应用内替换 `/usr` 文件，
+  只能引导用户下载后用包管理器安装；AppImage 才允许原地替换。
 - 「设置 → 隐私与安全」必须提供 SmartScreen 放行说明与杀软白名单目录建议
   （数据目录 `%APPDATA%\com.local.manga-reader`、缓存目录 `%LOCALAPPDATA%\com.local.manga-reader`、
   系统临时目录）。

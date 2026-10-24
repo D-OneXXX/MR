@@ -52,6 +52,10 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **Linux 系统安装更新（P0.4）**：`appInfo.linuxInstall === "system"` 时更新面板
+  只渲染下载页/发行说明卡，`handleNativeInstall` 直接拒绝；AppImage 才允许
+  native install。`linux-manual-install` 进入六语 localize 表；Linux 无后缀
+  更新 URL 由 `resolve_format` 拒绝（Windows 仍保留 NSIS 兼容）。
 - **启动数据库自检与恢复（P0.3）**：`init_schema` 后运行 `PRAGMA quick_check`；
   打开/结构/完整性失败写入稳定码并由 `DbRecoveryGate` 阻塞主界面，提供
   `.mrbackup` staging 恢复、打开数据目录、重新检查。恢复先校验备份并写入

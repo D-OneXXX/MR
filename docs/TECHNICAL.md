@@ -323,6 +323,11 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 注入，**绝不入库**。
 - 权限：仅 `capabilities/updater.json` 对 `main` 授予 `updater:default`；
   `restart_app` 是自研命令，不需要 `process:*`。
+- **Linux 安装形态**：`platform::install_channel` 返回 `appimage` / `system` /
+  `portable`。只有 AppImage 运行态允许调用 native `install()`；deb/rpm 系统安装
+  强制渲染手动更新卡（打开下载页/发行说明），并阻断 install 命令，绝不替换
+  `/usr` 下的包管理器文件。Linux 更新 URL 若没有 `.deb/.rpm/.AppImage` 后缀直接
+  拒绝，不再回落 NSIS。稳定码 `linux-manual-install` 已进入六语 localize 表。
 - `version:sync` 先校验全部文件再统一写入，失败回滚，不产生半迁移。
 
 ### 8.3 Windows NSIS 安装器与升级身份（0.16.0）

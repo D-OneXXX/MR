@@ -43,6 +43,15 @@ const zhCN = {
   "updates.native.errorCheck": "无法连接 GitHub 更新服务，请检查网络后重试。",
   "updates.native.errorInstall": "下载或安装更新失败，当前版本未受影响。",
   "updates.native.errorRelaunch": "重启应用失败，请手动关闭并重新打开 MangaReader。",
+  "updates.linux.manualTitle": "系统安装需要手动更新",
+  "updates.linux.manualHint":
+    "当前是 deb/rpm 系统安装，应用不能替换系统包文件。请下载新版本后用系统包管理器安装；AppImage 可直接下载运行。",
+  "updates.linux.download": "打开下载页",
+  "updates.linux.notes": "打开发行说明",
+  "updates.linux.manualBlocked":
+    "已阻止自动安装：系统安装必须手动更新。",
+  "updates.linux.openFailed":
+    "无法打开浏览器，请手动访问 GitHub Releases。",
   "updates.native.linuxCriticalChannel":
     "当前为 Linux 长期稳定分支：官方仅推送高危安全与崩溃修复补丁；日常功能扩展可由社区非商用修改提供。",
 } as const;
@@ -89,6 +98,16 @@ const en: Record<keyof typeof zhCN, string> = {
     "Downloading or installing the update failed. Your current version is unaffected.",
   "updates.native.errorRelaunch":
     "Could not restart the app. Close and open MangaReader manually.",
+  "updates.linux.manualTitle":
+    "System installation requires a manual update",
+  "updates.linux.manualHint":
+    "This is a deb/rpm system installation; the app cannot replace system package files. Download the new version and install it with your package manager. AppImage builds can be downloaded and run directly.",
+  "updates.linux.download": "Open download page",
+  "updates.linux.notes": "Open release notes",
+  "updates.linux.manualBlocked":
+    "Automatic install blocked: system installations must be updated manually.",
+  "updates.linux.openFailed":
+    "Could not open the browser. Please visit GitHub Releases manually.",
   "updates.native.linuxCriticalChannel":
     "You are on the Linux long-term stability branch: official updates only deliver critical security and crash fixes. Day-to-day features can come from community non-commercial modifications.",
 };
@@ -132,6 +151,15 @@ const zhTW: Record<keyof typeof zhCN, string> = {
   "updates.native.errorInstall": "下載或安裝更新失敗，目前版本未受影響。",
   "updates.native.errorRelaunch":
     "無法重新啟動應用程式，請手動關閉並重新開啟 MangaReader。",
+  "updates.linux.manualTitle": "系統安裝需要手動更新",
+  "updates.linux.manualHint":
+    "目前是 deb/rpm 系統安裝，應用程式不能替換系統套件檔案。請下載新版本後用系統套件管理員安裝；AppImage 可直接下載執行。",
+  "updates.linux.download": "開啟下載頁",
+  "updates.linux.notes": "開啟發行說明",
+  "updates.linux.manualBlocked":
+    "已阻止自動安裝：系統安裝必須手動更新。",
+  "updates.linux.openFailed":
+    "無法開啟瀏覽器，請手動前往 GitHub Releases。",
   "updates.native.linuxCriticalChannel":
     "目前為 Linux 長期穩定分支：官方僅推送高危安全性與當機修復補丁；日常功能擴充可由社群非商業修改提供。",
 };
@@ -178,6 +206,16 @@ const es: Record<keyof typeof zhCN, string> = {
     "La descarga o instalación de la actualización falló. La versión actual no se ha modificado.",
   "updates.native.errorRelaunch":
     "No se pudo reiniciar la aplicación. Cierra y abre MangaReader manualmente.",
+  "updates.linux.manualTitle":
+    "La instalación del sistema requiere una actualización manual",
+  "updates.linux.manualHint":
+    "Es una instalación del sistema deb/rpm; la app no puede reemplazar los archivos del paquete. Descarga la nueva versión e instálala con el gestor de paquetes. Las versiones AppImage se pueden descargar y ejecutar directamente.",
+  "updates.linux.download": "Abrir página de descarga",
+  "updates.linux.notes": "Abrir notas de la versión",
+  "updates.linux.manualBlocked":
+    "Instalación automática bloqueada: las instalaciones del sistema deben actualizarse manualmente.",
+  "updates.linux.openFailed":
+    "No se pudo abrir el navegador. Visita GitHub Releases manualmente.",
   "updates.native.linuxCriticalChannel":
     "Estás en la rama Linux de estabilidad a largo plazo: las actualizaciones oficiales solo entregan parches críticos de seguridad y de fallos. Las funciones cotidianas pueden provenir de modificaciones comunitarias no comerciales.",
 };
@@ -224,6 +262,16 @@ const ja: Record<keyof typeof zhCN, string> = {
     "アップデートのダウンロードまたはインストールに失敗しました。現在のバージョンは影響を受けません。",
   "updates.native.errorRelaunch":
     "アプリを再起動できませんでした。MangaReader を手動で閉じて開き直してください。",
+  "updates.linux.manualTitle":
+    "システムインストールは手動更新が必要です",
+  "updates.linux.manualHint":
+    "これは deb/rpm のシステムインストールです。アプリはシステムパッケージのファイルを置き換えられません。新しいバージョンをダウンロードし、パッケージマネージャーでインストールしてください。AppImage は直接ダウンロードして実行できます。",
+  "updates.linux.download": "ダウンロードページを開く",
+  "updates.linux.notes": "リリースノートを開く",
+  "updates.linux.manualBlocked":
+    "自動インストールをブロックしました：システムインストールは手動で更新する必要があります。",
+  "updates.linux.openFailed":
+    "ブラウザーを開けませんでした。GitHub Releases に手動でアクセスしてください。",
   "updates.native.linuxCriticalChannel":
     "Linux 長期安定ブランチです。公式は重大なセキュリティ修正とクラッシュ修正のみを配信します。日常機能の拡張はコミュニティによる非商用改変で提供されます。",
 };
@@ -270,6 +318,16 @@ const ko: Record<keyof typeof zhCN, string> = {
     "업데이트 다운로드 또는 설치에 실패했습니다. 현재 버전은 영향을 받지 않습니다.",
   "updates.native.errorRelaunch":
     "앱을 다시 시작하지 못했습니다. MangaReader를 직접 종료한 후 다시 여세요.",
+  "updates.linux.manualTitle":
+    "시스템 설치에는 수동 업데이트가 필요합니다",
+  "updates.linux.manualHint":
+    "deb/rpm 시스템 설치입니다. 앱은 시스템 패키지 파일을 교체할 수 없습니다. 새 버전을 다운로드해 패키지 관리자로 설치하세요. AppImage는 직접 다운로드해 실행할 수 있습니다.",
+  "updates.linux.download": "다운로드 페이지 열기",
+  "updates.linux.notes": "릴리스 노트 열기",
+  "updates.linux.manualBlocked":
+    "자동 설치를 차단했습니다. 시스템 설치는 수동으로 업데이트해야 합니다.",
+  "updates.linux.openFailed":
+    "브라우저를 열 수 없습니다. GitHub Releases를 직접 방문하세요.",
   "updates.native.linuxCriticalChannel":
     "Linux 장기 안정 브랜치입니다. 공식 업데이트는 중대 보안 및 크래시 수정만 전달하며, 일상 기능 확장은 커뮤니티 비상업 수정으로 제공될 수 있습니다.",
 };

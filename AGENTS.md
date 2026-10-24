@@ -210,6 +210,9 @@
 - **SQLite 并发**：所有生产连接必须经 `db::open` / `db::configure` 开启
   `journal_mode=WAL`、`busy_timeout=5000`、`synchronous=NORMAL`、`foreign_keys=ON`；
   禁止绕过该入口直接 `Connection::open`，否则高速滚动进度与规则落盘会互相锁库。
+- **schema 版本**：`PRAGMA user_version` 由 `db::SCHEMA_VERSION` 单向递增，
+  新增迁移必须同步常量与 `docs/TECHNICAL.md`；退出路径必须
+  `PRAGMA wal_checkpoint(TRUNCATE)`，不得让 `library.db-wal` 无界增长。
 - **进度原子性**：`set_progress` 的 `books` 更新与 `reading_log` 累加必须同一事务；
   `reading_log.book_id` 是 `REFERENCES books(id) ON DELETE CASCADE` 的可空外键
   （NULL 承载迁移前全局旧史），唯一性靠表达式索引

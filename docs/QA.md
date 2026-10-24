@@ -59,6 +59,10 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **schema 版本与 WAL 收尾（P2）**：`PRAGMA user_version` 记录
+  `db::SCHEMA_VERSION=1`，只增不减；应用退出时 `wal_checkpoint(TRUNCATE)`
+  合并并截断 WAL。回归 `schema_version_is_recorded_and_wal_checkpoint_truncates`
+  覆盖版本写入、幂等 init、WAL 清零与重开进度不丢。
 - **在线页数护栏（P2）**：同一 URL 的新清单页数少于现有记录时拒绝覆盖，
   保留旧清单与进度，六语提示 `error.onlinePageCountDrop`；用户确认真删页时
   删除后重导。回归 `apply_resolved_meta_clamps_progress_on_hash_change`

@@ -619,8 +619,12 @@ pub fn run() {
         if let tauri::RunEvent::ExitRequested { .. } = event {
             let state = app_handle.state::<Arc<AppState>>();
             state.cancel_handoff();
-            // 退出前做最后一次统一淘汰；只动派生缓存，不碰 SQLite。
+            // 退出前做最后一次统一淘汰；只动派生缓存。
             state.trim_disk_cache();
+            // WAL 合并回主库并截断；失败不影响退出（下次启动继续 checkpoint）。
+            let _ = state
+                .db
+                .with(|conn| db::wal_checkpoint(conn).map_err(|error| error.to_string()));
         }
     });
 }

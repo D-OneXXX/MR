@@ -124,6 +124,9 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `remove_books`（软删/硬删）与 `relocate_book` 同样在单事务内完成。`relocate_book`
   改 `books.id` 前执行 `PRAGMA defer_foreign_keys=ON`，子行迁移完成后再统一校验外键。
 - 页数缩小用 `MIN(current_page, page_count-1)` 钳制。
+- **schema 版本**：`PRAGMA user_version` 由 `db::SCHEMA_VERSION`（当前 1）记录，
+  只增不减，前向库保持更高值；迁移/建表完成后统一写入。退出时
+  `PRAGMA wal_checkpoint(TRUNCATE)` 把 WAL 合并回主库并截断，失败不阻断退出。
 - **在线页数护栏**：同一 URL 重新解析出的清单页数少于现有 `books.page_count`
   时，`upsert_resolved_meta` 直接拒绝覆盖并返回稳定码
   `online-page-count-drop`，旧清单、`current_page` 与 `scroll_pct` 原样保留；

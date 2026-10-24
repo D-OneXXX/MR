@@ -54,6 +54,16 @@ pub fn book_id_for_path(path: &str) -> String {
     hex::encode(h.finalize())
 }
 
+/// 书库 schema 版本（`PRAGMA user_version`）。
+///
+/// 1 = 0.17.0 起：reading_log 可空外键 + 表达式唯一索引 + source_stats。
+/// 只增不减；前向库（更高版本）保持原值，绝不降级。
+pub const SCHEMA_VERSION: i32 = 1;
+
+pub fn schema_version(conn: &Connection) -> Result<i32, BackendError> {
+    Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
+}
+
 pub fn today_str() -> String {
     Local::now().format("%Y-%m-%d").to_string()
 }
@@ -147,6 +157,19 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
          CREATE INDEX IF NOT EXISTS idx_books_list
              ON books(removed, updated_at DESC);",
     )?;
+    if schema_version(conn)? < SCHEMA_VERSION {
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    }
+    Ok(())
+}
+
+/// 退出前把 WAL 合并回主库并截断，避免 `library.db-wal` 长期膨胀。
+/// `busy=1` 表示仍有读者；退出路径忽略错误，下次启动会继续 checkpoint。
+pub fn wal_checkpoint(conn: &Connection) -> Result<(), BackendError> {
+    let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+    if busy != 0 {
+        return Err(BackendError::Msg("WAL checkpoint busy".into()));
+    }
     Ok(())
 }
 
@@ -1062,6 +1085,29 @@ mod tests {
                 .unwrap();
             assert_eq!(fk, 1);
         }
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn schema_version_is_recorded_and_wal_checkpoint_truncates() {
+        let path = unique_temp_db("schema-version");
+        {
+            let conn = open(&path).expect("打开临时库");
+            init_schema(&conn).expect("建表");
+            assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+            upsert_book(&conn, "b1", "p/b1", "第一卷", 10).unwrap();
+            set_progress(&conn, "b1", 3, None).unwrap();
+            wal_checkpoint(&conn).expect("checkpoint");
+            let wal = path.with_extension("db-wal");
+            let len = std::fs::metadata(&wal).map(|meta| meta.len()).unwrap_or(0);
+            assert_eq!(len, 0, "TRUNCATE 后 WAL 必须为空或已删除");
+            // 幂等：重复 init 不降级，也不重复迁移。
+            init_schema(&conn).expect("重复建表");
+            assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        }
+        let conn = open(&path).expect("重开临时库");
+        assert_eq!(get_book(&conn, "b1").unwrap().unwrap().current_page, 3);
+        drop(conn);
         cleanup_db_files(&path);
     }
 

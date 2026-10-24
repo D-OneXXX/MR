@@ -29,7 +29,7 @@ zip = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 # 条漫长图：IDCT 缩放解码（>8000px 高的 JPEG 按显示宽度解码，全分辨率栅格不进内存）
 jpeg-decoder = "0.3"
-lru = "0.12"
+lru = "0.19"
 parking_lot = "0.12"
 base64 = "0.22"
 sha2 = "0.10"

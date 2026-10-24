@@ -187,26 +187,34 @@ function centerAnchor(
   };
 }
 
-/** 先让浏览器解码 dataURL，再进 React 状态，避免插入时白闪。 */
-function predecode(src: string, timeoutMs = DECODE_TIMEOUT_MS): Promise<void> {
+/** 先让浏览器解码 dataURL，再进 React 状态，避免插入时白闪。
+ *  解码失败/超时必须返回 false，让调用方进入失败态并提供重试入口，
+ *  不能把空白图当成成功插入。 */
+function predecode(
+  src: string,
+  timeoutMs = DECODE_TIMEOUT_MS,
+): Promise<boolean> {
   return new Promise((resolve) => {
     const img = new Image();
     let settled = false;
     let timer = 0;
-    const done = () => {
+    const done = (ok: boolean) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
       img.onload = null;
       img.onerror = null;
-      resolve();
+      resolve(ok);
     };
-    timer = window.setTimeout(done, timeoutMs);
+    timer = window.setTimeout(() => done(false), timeoutMs);
     img.onload = () => {
-      if (typeof img.decode === "function") img.decode().then(done, done);
-      else done();
+      if (typeof img.decode === "function") {
+        img.decode().then(() => done(true), () => done(false));
+      } else {
+        done(true);
+      }
     };
-    img.onerror = done;
+    img.onerror = () => done(false);
     img.src = src;
   });
 }
@@ -405,9 +413,14 @@ const WebtoonView = memo(function WebtoonView({
           requestedRef.current.delete(key);
           return false;
         }
-        await predecode(img.dataUrl);
+        const decoded = await predecode(img.dataUrl);
         if (stale()) {
           requestedRef.current.delete(key);
+          return false;
+        }
+        if (!decoded) {
+          requestedRef.current.delete(key);
+          setFailed((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
           return false;
         }
         // 等待期间可能已滚出保留窗口：丢弃结果，避免缓存无界增长。
@@ -1121,6 +1134,11 @@ const WebtoonView = memo(function WebtoonView({
                 src={src}
                 alt={t("reader.page.alt", { page: i + 1 })}
                 draggable={false}
+                onError={() =>
+                  setFailed((prev) =>
+                    prev[key] ? prev : { ...prev, [key]: true },
+                  )
+                }
               />
             ) : isFailed ? (
               <button

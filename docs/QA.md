@@ -52,6 +52,10 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **CSP 收紧（P0.5）**：生产 `app.security.csp` 不再为空；devCsp 仅放行 Vite HMR。
+  真实生产资产启动验证：`http://tauri.localhost/` 返回 CSP 头，IPC 调用成功，
+  `data:image` 缩略图与阅读页图片加载成功，`securitypolicyviolation` 为 0。
+  静态守卫 `static:csp` 无条件检查 CSP；静态套件 **19/19**。
 - **Linux 系统安装更新（P0.4）**：`appInfo.linuxInstall === "system"` 时更新面板
   只渲染下载页/发行说明卡，`handleNativeInstall` 直接拒绝；AppImage 才允许
   native install。`linux-manual-install` 进入六语 localize 表；Linux 无后缀

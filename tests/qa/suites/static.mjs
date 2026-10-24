@@ -501,9 +501,71 @@ export async function runStaticSuite(ctx, report) {
   checkWebtoonTextureGuard(root, report);
   checkProductionBundle(root, report);
   checkNoUnusedCustomProtocol(root, report);
+  checkCsp(root, report);
   checkPostI18nHardcodedText(root, report);
   checkReleaseSurface(root, report);
   checkAntiMockGuards(root, report);
+}
+
+/* ------------------------------------------------------------------ */
+/* §3.1 CSP 无条件守卫                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 生产 CSP 不得为空。审计要求即使没有自定义 URI 协议，也必须验证
+ * default/script/img/connect/style 五个关键指令；null/缺失直接红灯。
+ */
+export function checkCsp(root, report) {
+  let csp = null;
+  try {
+    csp = JSON.parse(
+      fs.readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8"),
+    )?.app?.security?.csp;
+  } catch {
+    csp = null;
+  }
+  const value = typeof csp === "string" ? csp.trim() : "";
+  const problems = [];
+  if (!value) {
+    problems.push("app.security.csp 为空或缺失");
+  } else {
+    const directives = {
+      "default-src": /(?:^|;)\s*default-src\s+[^;]*'self'/,
+      "script-src": /(?:^|;)\s*script-src\s+[^;]*'self'/,
+      "img-src": /(?:^|;)\s*img-src\s+[^;]*'self'[^;]*\bdata:/,
+      "connect-src-ipc": /(?:^|;)\s*connect-src\s+[^;]*\bipc:/,
+      "connect-src-host": /(?:^|;)\s*connect-src\s+[^;]*(?:tauri\.localhost|ipc\.localhost)/,
+      "style-src": /(?:^|;)\s*style-src\s+[^;]*'self'[^;]*'unsafe-inline'/,
+    };
+    for (const [name, regex] of Object.entries(directives)) {
+      if (!regex.test(value)) problems.push(`CSP 缺少 ${name} 关键指令`);
+    }
+  }
+
+  if (problems.length) {
+    fail(report, {
+      id: "static:csp",
+      suite: "static",
+      layer: "static",
+      title: "生产 CSP 缺失或关键指令不完整",
+      severity: "P1",
+      details: problems.join(" | "),
+      location: "src-tauri/tauri.conf.json",
+      expected:
+        "app.security.csp 至少包含 default-src 'self'、script-src 'self'、img-src 'self' data:、connect-src ipc: + tauri/ipc.localhost、style-src 'self' 'unsafe-inline'",
+      actual: value || "null/missing",
+      rootCause: "CSP 被置空，或收紧时漏掉 IPC/data URL/内联样式关键来源",
+      fix: "按 docs/TECHNICAL.md 的 CSP 基线恢复；devCsp 单独放行 Vite，不要放宽生产 csp",
+    });
+  } else {
+    ok(report, {
+      id: "static:csp",
+      suite: "static",
+      layer: "static",
+      title: "生产 CSP 非空且覆盖 IPC/data URL/内联样式",
+      details: value,
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ */

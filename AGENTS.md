@@ -110,6 +110,10 @@
 - 官方 Updater 的 `updater:default` 只授予主窗（`capabilities/updater.json`），
   恢复窗/内嵌浏览器窗不得获得更新能力；重启走自研 `restart_app`，**禁止**声明
   `process:*` 全量权限。
+- `app.security.csp` **禁止为 null/空**。生产 CSP 必须至少覆盖
+  `default-src 'self'`、`script-src 'self'`、`img-src 'self' data:`、
+  `connect-src ipc: ...tauri.localhost/ipc.localhost`、`style-src 'self' 'unsafe-inline'`；
+  Vite 的 `unsafe-eval`/WebSocket 只允许出现在 `devCsp`，不得放宽生产策略。
 - 内嵌浏览器窗只允许 `http/https` 导航，且**禁止跳回应用本地源**（`tauri.localhost`、
   开发态 `localhost:1420`）：远程页一旦自跳到本地 Origin，就可能拿到该窗口的本地能力。
 - 新增窗口时必须在同一提交内补齐 `windows` 数组，否则该窗口按钮“点了没反应”。

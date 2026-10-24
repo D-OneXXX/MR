@@ -163,6 +163,14 @@
 - [ ] AppImage 运行态仍允许下载并替换当前 AppImage；
 - [ ] 无 `.deb/.rpm/.AppImage` 后缀的 Linux 更新 URL 被拒绝，不回落 NSIS。
 
+### CSP / 生产 WebView
+
+- [ ] 生产安装包启动后 DevTools/Page 响应头存在 `content-security-policy`，不是 null；
+- [ ] 书库缩略图、阅读页图片（data URL）正常显示，无 CSP 阻断；
+- [ ] IPC 命令（导入、取页、设置、诊断）正常，无 `connect-src` 阻断；
+- [ ] 在线直读图片仍经 data URL 显示；远程脚本/内联脚本被 `script-src 'self'` 拒绝；
+- [ ] Vite 开发态 HMR 仍可用（只由 devCsp 放行），生产 csp 未放宽。
+
 ### 官方 Updater / GitHub Actions
 
 - [ ] 设置 → 关于与维护同时存在「GitHub 自动更新」与原有自定义更新分区；

@@ -45,6 +45,13 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   不误判。
 - 恢复窗可重载或重建主窗口；重建返回真实结果，不伪造成功。
 - 安全模式文件损坏/不可读时 fail-closed；在线命令在 Rust 层再次校验。
+- **CSP**：`app.security.csp` 不得为空。生产策略锁定
+  `default-src 'self'; script-src 'self'; img-src 'self' data:;
+  connect-src ipc: http://ipc.localhost http://tauri.localhost https://tauri.localhost;
+  style-src 'self' 'unsafe-inline'`；Tauri 构建时会为内联脚本追加 sha256。
+  `devCsp` 单独放行 Vite 的 localhost/WebSocket 与 `unsafe-eval`，生产 csp 不放宽。
+  静态守卫 `static:csp` 无条件检查五项关键指令；生产构建冒烟验证 IPC、
+  data URL 缩略图与阅读页图片均正常（CSP 违规数为 0）。
 
 ## 4. 数据与缓存目录
 

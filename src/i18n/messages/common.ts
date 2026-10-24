@@ -85,6 +85,26 @@ const zhCN = {
   "source.online": "在线",
   "source.url": "在线 URL",
   "source.hiddenAddress": "在线源地址（已脱敏）",
+  "dbRecovery.title": "书库数据库需要修复",
+  "dbRecovery.openFailed": "无法打开本地书库数据库。",
+  "dbRecovery.schemaFailed": "书库数据库结构初始化失败。",
+  "dbRecovery.quickCheckFailed": "书库数据库完整性检查未通过。",
+  "dbRecovery.unknown": "数据库状态异常。",
+  "dbRecovery.hint":
+    "损坏的数据库不会被删除；恢复前会将它隔离为 .corrupt 备份。可选择 .mrbackup 恢复，或打开数据目录手动处理。",
+  "dbRecovery.recover": "从 .mrbackup 恢复数据库",
+  "dbRecovery.openDir": "打开数据目录",
+  "dbRecovery.retry": "重新检查",
+  "dbRecovery.confirmTitle": "用备份恢复书库数据库？",
+  "dbRecovery.confirmMessage":
+    "当前数据库将被隔离保留，并用所选 .mrbackup 重建书库；恢复成功后应用会重新加载。",
+  "dbRecovery.confirmAction": "隔离并恢复",
+  "dbRecovery.recovered": "数据库已恢复，正在重新加载…",
+  "dbRecovery.failed": "恢复失败，原数据库未被覆盖。",
+  "dbRecovery.healthUnavailable":
+    "无法读取数据库健康状态；请打开数据目录查看日志。",
+  "dbRecovery.selectTitle": "选择 .mrbackup 备份",
+  "dbRecovery.filterName": "MangaReader 备份",
   "error.requestFailed": "调用 {cmd} 失败",
   "error.backendGeneric": "操作失败；详情已写入本地日志。",
   "error.archiveDisguisedRar": "该文件实际是 RAR 压缩包（仅改了后缀名），请转换为标准无密码 ZIP/CBZ 后再导入",
@@ -182,6 +202,26 @@ const zhTW: CommonMessages = {
   "source.online": "線上",
   "source.url": "線上 URL",
   "source.hiddenAddress": "線上來源位址（已遮罩）",
+  "dbRecovery.title": "書庫資料庫需要修復",
+  "dbRecovery.openFailed": "無法開啟本機書庫資料庫。",
+  "dbRecovery.schemaFailed": "書庫資料庫結構初始化失敗。",
+  "dbRecovery.quickCheckFailed": "書庫資料庫完整性檢查未通過。",
+  "dbRecovery.unknown": "資料庫狀態異常。",
+  "dbRecovery.hint":
+    "損壞的資料庫不會被刪除；恢復前會將它隔離為 .corrupt 備份。可選擇 .mrbackup 還原，或開啟資料目錄手動處理。",
+  "dbRecovery.recover": "從 .mrbackup 還原資料庫",
+  "dbRecovery.openDir": "開啟資料目錄",
+  "dbRecovery.retry": "重新檢查",
+  "dbRecovery.confirmTitle": "要用備份還原書庫資料庫嗎？",
+  "dbRecovery.confirmMessage":
+    "目前資料庫將被隔離保留，並用所選 .mrbackup 重建書庫；還原成功後應用程式會重新載入。",
+  "dbRecovery.confirmAction": "隔離並還原",
+  "dbRecovery.recovered": "資料庫已還原，正在重新載入…",
+  "dbRecovery.failed": "還原失敗，原資料庫未被覆蓋。",
+  "dbRecovery.healthUnavailable":
+    "無法讀取資料庫健康狀態；請開啟資料目錄查看日誌。",
+  "dbRecovery.selectTitle": "選擇 .mrbackup 備份",
+  "dbRecovery.filterName": "MangaReader 備份",
   "error.requestFailed": "呼叫 {cmd} 失敗",
   "error.backendGeneric": "操作失敗；詳情已寫入本機日誌。",
   "error.archiveDisguisedRar": "該檔案實際是 RAR 壓縮包（僅改了副檔名），請轉換為標準無密碼 ZIP/CBZ 後再匯入",
@@ -277,6 +317,29 @@ const en: CommonMessages = {
   "source.online": "Online",
   "source.url": "Online URL",
   "source.hiddenAddress": "Online source (sanitized)",
+  "dbRecovery.title": "Library database needs repair",
+  "dbRecovery.openFailed": "The local library database could not be opened.",
+  "dbRecovery.schemaFailed":
+    "The library database schema could not be initialized.",
+  "dbRecovery.quickCheckFailed":
+    "The library database failed its integrity check.",
+  "dbRecovery.unknown": "The database is in an unexpected state.",
+  "dbRecovery.hint":
+    "The damaged database will not be deleted. It will be quarantined as a .corrupt backup before recovery. Choose a .mrbackup to restore, or open the data folder to handle it manually.",
+  "dbRecovery.recover": "Restore database from .mrbackup",
+  "dbRecovery.openDir": "Open data folder",
+  "dbRecovery.retry": "Check again",
+  "dbRecovery.confirmTitle": "Restore the library database from this backup?",
+  "dbRecovery.confirmMessage":
+    "The current database will be quarantined and the library rebuilt from the selected .mrbackup. The app will reload after a successful restore.",
+  "dbRecovery.confirmAction": "Quarantine and restore",
+  "dbRecovery.recovered": "Database restored. Reloading…",
+  "dbRecovery.failed":
+    "Restore failed; the original database was not overwritten.",
+  "dbRecovery.healthUnavailable":
+    "Could not read database health. Open the data folder to inspect the log.",
+  "dbRecovery.selectTitle": "Choose a .mrbackup backup",
+  "dbRecovery.filterName": "MangaReader backup",
   "error.requestFailed": "Request failed: {cmd}",
   "error.backendGeneric": "The operation failed. Details were written to the local log.",
   "error.archiveDisguisedRar": "This file is actually a RAR archive with a renamed extension. Please convert it to a standard, unencrypted ZIP/CBZ and import again.",
@@ -372,6 +435,31 @@ const es: CommonMessages = {
   "source.online": "En línea",
   "source.url": "URL en línea",
   "source.hiddenAddress": "Fuente en línea (oculta)",
+  "dbRecovery.title": "La base de datos de la biblioteca necesita reparación",
+  "dbRecovery.openFailed":
+    "No se pudo abrir la base de datos local de la biblioteca.",
+  "dbRecovery.schemaFailed":
+    "No se pudo inicializar el esquema de la base de datos.",
+  "dbRecovery.quickCheckFailed":
+    "La base de datos no superó la comprobación de integridad.",
+  "dbRecovery.unknown": "La base de datos está en un estado inesperado.",
+  "dbRecovery.hint":
+    "La base de datos dañada no se eliminará. Se pondrá en cuarentena como copia .corrupt antes de restaurar. Elige un .mrbackup para restaurar o abre la carpeta de datos para gestionarla manualmente.",
+  "dbRecovery.recover": "Restaurar base de datos desde .mrbackup",
+  "dbRecovery.openDir": "Abrir carpeta de datos",
+  "dbRecovery.retry": "Comprobar de nuevo",
+  "dbRecovery.confirmTitle":
+    "¿Restaurar la base de datos desde esta copia?",
+  "dbRecovery.confirmMessage":
+    "La base de datos actual se pondrá en cuarentena y la biblioteca se reconstruirá desde el .mrbackup elegido. La app se recargará tras restaurar correctamente.",
+  "dbRecovery.confirmAction": "Poner en cuarentena y restaurar",
+  "dbRecovery.recovered": "Base de datos restaurada. Recargando…",
+  "dbRecovery.failed":
+    "La restauración falló; la base de datos original no se sobrescribió.",
+  "dbRecovery.healthUnavailable":
+    "No se pudo leer el estado de la base de datos. Abre la carpeta de datos para revisar el registro.",
+  "dbRecovery.selectTitle": "Elegir una copia .mrbackup",
+  "dbRecovery.filterName": "Copia de MangaReader",
   "error.requestFailed": "Error al llamar a {cmd}",
   "error.backendGeneric": "La operación falló. Los detalles se guardaron en el registro local.",
   "error.archiveDisguisedRar": "Este archivo es en realidad un comprimido RAR con la extensión renombrada. Conviértelo a un ZIP/CBZ estándar sin contraseña e impórtalo de nuevo.",
@@ -467,6 +555,31 @@ const ja: CommonMessages = {
   "source.online": "オンライン",
   "source.url": "オンライン URL",
   "source.hiddenAddress": "オンラインソース（秘匿）",
+  "dbRecovery.title": "書庫データベースの修復が必要です",
+  "dbRecovery.openFailed":
+    "ローカル書庫データベースを開けませんでした。",
+  "dbRecovery.schemaFailed":
+    "書庫データベースの構造を初期化できませんでした。",
+  "dbRecovery.quickCheckFailed":
+    "書庫データベースの整合性チェックに失敗しました。",
+  "dbRecovery.unknown": "データベースの状態が異常です。",
+  "dbRecovery.hint":
+    "破損したデータベースは削除しません。復元前に .corrupt バックアップとして隔離します。.mrbackup を選んで復元するか、データフォルダーを開いて手動で対処してください。",
+  "dbRecovery.recover": ".mrbackup からデータベースを復元",
+  "dbRecovery.openDir": "データフォルダーを開く",
+  "dbRecovery.retry": "再チェック",
+  "dbRecovery.confirmTitle":
+    "このバックアップから書庫データベースを復元しますか？",
+  "dbRecovery.confirmMessage":
+    "現在のデータベースを隔離して保持し、選択した .mrbackup から書庫を再構築します。復元に成功するとアプリを再読み込みします。",
+  "dbRecovery.confirmAction": "隔離して復元",
+  "dbRecovery.recovered": "データベースを復元しました。再読み込み中…",
+  "dbRecovery.failed":
+    "復元に失敗しました。元のデータベースは上書きされていません。",
+  "dbRecovery.healthUnavailable":
+    "データベースの状態を読み取れません。データフォルダーを開いてログを確認してください。",
+  "dbRecovery.selectTitle": ".mrbackup バックアップを選択",
+  "dbRecovery.filterName": "MangaReader バックアップ",
   "error.requestFailed": "{cmd} の呼び出しに失敗しました",
   "error.backendGeneric": "操作に失敗しました。詳細はローカルログに記録しました。",
   "error.archiveDisguisedRar": "このファイルは実は拡張子を変えただけの RAR 圧縮ファイルです。パスワードなしの標準 ZIP/CBZ に変換してから読み込んでください。",
@@ -562,6 +675,31 @@ const ko: CommonMessages = {
   "source.online": "온라인",
   "source.url": "온라인 URL",
   "source.hiddenAddress": "온라인 소스(숨김)",
+  "dbRecovery.title": "라이브러리 데이터베이스를 복구해야 합니다",
+  "dbRecovery.openFailed":
+    "로컬 라이브러리 데이터베이스를 열 수 없습니다.",
+  "dbRecovery.schemaFailed":
+    "라이브러리 데이터베이스 구조를 초기화하지 못했습니다.",
+  "dbRecovery.quickCheckFailed":
+    "라이브러리 데이터베이스 무결성 검사에 실패했습니다.",
+  "dbRecovery.unknown": "데이터베이스 상태가 비정상입니다.",
+  "dbRecovery.hint":
+    "손상된 데이터베이스는 삭제하지 않습니다. 복구 전에 .corrupt 백업으로 격리합니다. .mrbackup을 선택해 복원하거나 데이터 폴더를 열어 직접 처리하세요.",
+  "dbRecovery.recover": ".mrbackup에서 데이터베이스 복원",
+  "dbRecovery.openDir": "데이터 폴더 열기",
+  "dbRecovery.retry": "다시 확인",
+  "dbRecovery.confirmTitle":
+    "이 백업으로 라이브러리 데이터베이스를 복원할까요?",
+  "dbRecovery.confirmMessage":
+    "현재 데이터베이스를 격리해 보관하고 선택한 .mrbackup으로 라이브러리를 다시 만듭니다. 복원에 성공하면 앱이 다시 로드됩니다.",
+  "dbRecovery.confirmAction": "격리 후 복원",
+  "dbRecovery.recovered": "데이터베이스를 복원했습니다. 다시 로드하는 중…",
+  "dbRecovery.failed":
+    "복원에 실패했습니다. 기존 데이터베이스는 덮어쓰지 않았습니다.",
+  "dbRecovery.healthUnavailable":
+    "데이터베이스 상태를 읽을 수 없습니다. 데이터 폴더를 열어 로그를 확인하세요.",
+  "dbRecovery.selectTitle": ".mrbackup 백업 선택",
+  "dbRecovery.filterName": "MangaReader 백업",
   "error.requestFailed": "{cmd} 호출 실패",
   "error.backendGeneric": "작업에 실패했습니다. 자세한 내용은 로컬 로그에 기록했습니다.",
   "error.archiveDisguisedRar": "이 파일은 확장자만 바꾼 RAR 압축 파일입니다. 암호 없는 표준 ZIP/CBZ로 변환한 뒤 다시 가져오세요.",

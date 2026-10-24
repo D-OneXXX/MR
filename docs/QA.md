@@ -8,8 +8,8 @@
 - 版本：`0.17.0`
 - 全量 QA：**223/223（100%）**，P0=0 · P1=0 · P2=0 · P3=0
   （visual / reader / online / cache / privacy / architecture / chaos 全绿）
-- Rust 单测：**297 passed**（新增：Shift_JIS 假名裁决解码、伪装包魔数嗅探、
-  备份高 schema 前向兼容 `restore_accepts_future_schema_and_reports_forward_flag`）
+- Rust 单测：**302 passed**（新增：Shift_JIS 假名裁决解码、伪装包魔数嗅探、
+  备份高 schema 前向兼容、启动 quick_check、DB 隔离恢复、删除锚定与恶意备份过滤）
 - `npx tsc --noEmit`、`npm run build`、版本门禁：通过（0.17.0 五端同步）
 - 社区构建冒烟：无 `TAURI_SIGNING_PRIVATE_KEY` 时 `npm run build:community`
   正确生成 `createUpdaterArtifacts=false` 覆盖层并清理（详见下方验收要点）。
@@ -52,6 +52,12 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **启动数据库自检与恢复（P0.3）**：`init_schema` 后运行 `PRAGMA quick_check`；
+  打开/结构/完整性失败写入稳定码并由 `DbRecoveryGate` 阻塞主界面，提供
+  `.mrbackup` staging 恢复、打开数据目录、重新检查。恢复先校验备份并写入
+  `library.recovery-*.db`，成功后才隔离旧库为 `.corrupt-*` 并原子替换；
+  失败不触碰活库。`startup_recovery_quarantines_corrupt_db_and_restores_backup`
+  与 `db_health_error_code_roundtrips` 覆盖；`set_settings` 不再吞 DB 错误。
 - **chaos 已知间歇项（非本次引入）**：`resilience_close_recovery` 在主窗口
   重建后偶发 >10s 不回包，0.16.0 基线（stash 对照）同样复现；系 WebView2
   窗口销毁/重建与主事件循环的时序竞争，负载越高越易触发。已在

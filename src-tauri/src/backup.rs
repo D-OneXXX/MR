@@ -23,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use tauri_plugin_opener::OpenerExt;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -161,6 +162,15 @@ struct ValidatedBackup {
     skipped_books: Vec<SkippedBook>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbHealth {
+    pub ok: bool,
+    /// db-open-failed / db-schema-failed / db-quick-check-failed；健康时为 None。
+    pub error_code: Option<String>,
+    pub data_dir: String,
+}
+
 /// `manifest.json`（格式固定，schema=1）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,6 +218,124 @@ pub async fn import_backup(
         .map_err(|e| format!("后台任务失败：{e}"))??;
     // 事务提交且阻塞连接已释放后再回读设置，避免在持锁状态下刷新缓存。
     refresh_after_restore(state.inner())?;
+    Ok(result)
+}
+
+/// 启动自检状态（数据库损坏/未初始化时前端阻塞并引导恢复）。
+#[tauri::command]
+pub fn get_db_health(state: State<'_, Arc<AppState>>) -> DbHealth {
+    let error_code = state.db_error_code();
+    DbHealth {
+        ok: error_code.is_none(),
+        error_code,
+        data_dir: crate::data_dir()
+            .map(|dir| dir.display().to_string())
+            .unwrap_or_default(),
+    }
+}
+
+/// 在系统文件管理器中打开数据目录（用户显式点击）。
+#[tauri::command]
+pub fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = crate::data_dir()?;
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|error| format!("打开数据目录失败：{error}"))
+}
+
+/// 启动恢复：把损坏库隔离，用 `.mrbackup` 在 staging 重建后再原子替换。
+///
+/// 只有启动自检失败时允许调用；正常状态请使用设置页的 `import_backup`。
+#[tauri::command]
+pub async fn recover_database_from_backup(
+    state: State<'_, Arc<AppState>>,
+    source_path: String,
+) -> Result<BackupRestoreResult, String> {
+    if state.db_error_code().is_none() {
+        return Err("数据库状态正常，请使用设置中的从备份恢复（db-already-healthy）".to_string());
+    }
+    let db_path = state.db_path();
+    let source = PathBuf::from(source_path);
+    let result = tokio::task::spawn_blocking(move || recover_from_backup_blocking(&db_path, &source))
+        .await
+        .map_err(|error| format!("后台任务失败：{error}"))??;
+
+    let conn = db::open(state.db_path()).map_err(|error| format!("恢复后打开书库失败：{error}"))?;
+    db::init_schema(&conn).map_err(|error| format!("恢复后初始化书库失败：{error}"))?;
+    db::quick_check(&conn).map_err(|error| format!("恢复后完整性检查失败：{error}"))?;
+    state.db.set(conn);
+    state.clear_db_error();
+    if let Err(error) = refresh_after_restore(state.inner()) {
+        crate::logging::log_error("backup", &format!("启动恢复后刷新内存态失败：{error}"));
+    }
+    crate::logging::log_error("backup", "启动恢复完成：损坏库已隔离，备份已替换为活库");
+    Ok(result)
+}
+
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut raw = path.as_os_str().to_os_string();
+    raw.push(suffix);
+    PathBuf::from(raw)
+}
+
+fn rollback_quarantine(moved: &[(PathBuf, PathBuf)]) {
+    for (live, quarantined) in moved.iter().rev() {
+        let _ = fs::rename(quarantined, live);
+    }
+}
+
+fn recover_from_backup_blocking(
+    db_path: &Path,
+    source: &Path,
+) -> Result<BackupRestoreResult, String> {
+    if !source.is_file() {
+        return Err("备份文件不存在或不是文件".into());
+    }
+    let parent = db_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "书库数据库缺少父目录".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("创建数据目录失败：{error}"))?;
+
+    // 先在一份全新 staging 库里完成校验与恢复；失败时活库完全不动。
+    let staging = TempFileGuard::new(parent.join(format!(
+        "library.recovery-{}.db",
+        unique_token()
+    )));
+    {
+        let conn = db::open(staging.path()).map_err(|error| format!("创建恢复临时库失败：{error}"))?;
+        db::init_schema(&conn).map_err(|error| format!("初始化恢复临时库失败：{error}"))?;
+        db::quick_check(&conn).map_err(|error| format!("恢复临时库自检失败：{error}"))?;
+    }
+    let result = restore_backup_blocking(staging.path(), source)?;
+    {
+        let conn = db::open(staging.path()).map_err(|error| format!("打开恢复临时库失败：{error}"))?;
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+            .map_err(|error| format!("收尾恢复临时库失败：{error}"))?;
+    }
+
+    // 隔离旧库与边车文件，再以同目录 rename 原子替换。
+    let stamp = unique_token();
+    let mut quarantined = Vec::new();
+    for suffix in ["", "-wal", "-shm"] {
+        let live = with_suffix(db_path, suffix);
+        if !live.exists() {
+            continue;
+        }
+        let backup_path = with_suffix(&live, &format!(".corrupt-{stamp}"));
+        if let Err(error) = fs::rename(&live, &backup_path) {
+            rollback_quarantine(&quarantined);
+            return Err(format!("隔离旧数据库失败：{error}"));
+        }
+        quarantined.push((live, backup_path));
+    }
+    if let Err(error) = fs::rename(staging.path(), db_path) {
+        rollback_quarantine(&quarantined);
+        return Err(format!("替换数据库失败：{error}"));
+    }
+    // staging 已 checkpoint，残留边车文件不应覆盖新库。
+    let _ = fs::remove_file(with_suffix(staging.path(), "-wal"));
+    let _ = fs::remove_file(with_suffix(staging.path(), "-shm"));
     Ok(result)
 }
 
@@ -1390,6 +1518,40 @@ mod tests {
         assert!(victim.exists(), "敏感目录本身必须原样保留");
         assert!(!crate::commands::is_safe_library_source_path(&victim));
         assert!(crate::commands::is_safe_library_source_path(&safe));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn startup_recovery_quarantines_corrupt_db_and_restores_backup() {
+        let dir = temp_dir("startup-recover");
+        let source_db = seeded_db(&dir);
+        let backup = dir.join("recover.mrbackup");
+        export_backup_blocking(&source_db, &backup, None, "0.17.0").unwrap();
+
+        let live_dir = dir.join("live");
+        fs::create_dir_all(&live_dir).unwrap();
+        let live_db = live_dir.join("library.db");
+        fs::write(&live_db, b"this is not sqlite").unwrap();
+
+        let result = recover_from_backup_blocking(&live_db, &backup).unwrap();
+        assert_eq!(result.books, 2);
+        assert!(result.skipped_books.is_empty());
+
+        let conn = db::open(&live_db).unwrap();
+        assert_eq!(db::list_books(&conn, None).unwrap().len(), 2);
+        assert_eq!(
+            db::get_book(&conn, "b1").unwrap().unwrap().current_page,
+            12
+        );
+        drop(conn);
+
+        let quarantined = fs::read_dir(&live_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .any(|name| name.contains(".corrupt-"));
+        assert!(quarantined, "损坏库必须被隔离保留，不能直接删除");
 
         fs::remove_dir_all(&dir).ok();
     }

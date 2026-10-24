@@ -193,6 +193,9 @@
 - **SQLite 并发**：所有生产连接必须经 `db::open` / `db::configure` 开启
   `journal_mode=WAL`、`busy_timeout=5000`、`synchronous=NORMAL`、`foreign_keys=ON`；
   禁止绕过该入口直接 `Connection::open`，否则高速滚动进度与规则落盘会互相锁库。
+- **数据库启动自检**：`init_schema` 后必须运行 `PRAGMA quick_check`；失败时写入稳定
+  错误码并阻塞前端，提供 `recover_database_from_backup`（staging → 校验 → 隔离旧库 →
+  原子替换）与 `open_data_dir`。**禁止**静默继续启动或吞掉 `set_settings` 的数据库错误。
 - **路径锚点**：数据与缓存必须来自 Tauri `app.path().app_data_dir()` / `app_cache_dir()`
   （`MR_DATA_DIR` / `MR_RENDER_CACHE_DIR` / `MR_ONLINE_CACHE_DIR` 仅用于测试隔离），
   启动时 `create_dir_all`；严禁 CWD 相对路径或 exe 同级目录。

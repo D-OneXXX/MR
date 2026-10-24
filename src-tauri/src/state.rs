@@ -33,6 +33,10 @@ impl DbSlot {
         *self.inner.lock() = Some(conn);
     }
 
+    pub fn clear(&self) {
+        *self.inner.lock() = None;
+    }
+
     pub fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
         let guard = self.inner.lock();
         match guard.as_ref() {
@@ -351,6 +355,8 @@ pub struct AppState {
     /// 磁盘缓存写入压力：累计超过阈值即后台统一 trim。
     cache_pressure: AtomicU64,
     db_path: Mutex<std::path::PathBuf>,
+    /// 启动数据库自检的稳定错误码；None = 健康。
+    db_error: Mutex<Option<String>>,
     handoff_runtime: Mutex<Option<HandoffRuntime>>,
     handoff_received: AtomicU32,
     /// 文件关联/命令行直开的待处理请求（FIFO）。
@@ -379,6 +385,7 @@ impl AppState {
             online_cache: Arc::new(OnlinePageCache::new(default_online_cache_root())),
             cache_pressure: AtomicU64::new(0),
             db_path: Mutex::new(std::path::PathBuf::new()),
+            db_error: Mutex::new(None),
             handoff_runtime: Mutex::new(None),
             handoff_received: AtomicU32::new(0),
             pending_open: Mutex::new(VecDeque::new()),
@@ -674,6 +681,19 @@ impl AppState {
     pub fn db_path(&self) -> std::path::PathBuf {
         self.db_path.lock().clone()
     }
+
+    /// 记录启动自检失败码（db-open-failed / db-schema-failed / db-quick-check-failed）。
+    pub fn set_db_error(&self, code: &str) {
+        *self.db_error.lock() = Some(code.to_string());
+    }
+
+    pub fn clear_db_error(&self) {
+        *self.db_error.lock() = None;
+    }
+
+    pub fn db_error_code(&self) -> Option<String> {
+        self.db_error.lock().clone()
+    }
 }
 
 #[cfg(test)]
@@ -732,6 +752,19 @@ mod tests {
             .write_image(&[255, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
             .expect("编码测试 PNG");
         std::fs::write(path, buf).expect("写入测试 PNG");
+    }
+
+    #[test]
+    fn db_health_error_code_roundtrips() {
+        let state = AppState::new();
+        assert!(state.db_error_code().is_none());
+        state.set_db_error("db-quick-check-failed");
+        assert_eq!(
+            state.db_error_code().as_deref(),
+            Some("db-quick-check-failed")
+        );
+        state.clear_db_error();
+        assert!(state.db_error_code().is_none());
     }
 
     #[test]

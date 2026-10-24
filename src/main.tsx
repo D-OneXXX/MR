@@ -5,6 +5,7 @@ import App from "./App";
 import { I18nProvider } from "./i18n";
 import { ThemeProvider } from "./features/theme/ThemeProvider";
 import { UpdateProvider } from "./features/update/UpdateProvider";
+import DbRecoveryGate from "./features/recovery/DbRecoveryGate";
 import { SafeModeProvider } from "./features/safeMode/SafeModeContext";
 import { installResilienceRuntime } from "./features/resilience/runtime";
 import AppErrorBoundary from "./components/AppErrorBoundary";
@@ -40,15 +41,17 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <I18nProvider>
       <ThemeProvider>
-        <UpdateProvider>
-          <HashRouter>
-            <SafeModeProvider>
-              <AppErrorBoundary>
-                <App />
-              </AppErrorBoundary>
-            </SafeModeProvider>
-          </HashRouter>
-        </UpdateProvider>
+        <DbRecoveryGate>
+          <UpdateProvider>
+            <HashRouter>
+              <SafeModeProvider>
+                <AppErrorBoundary>
+                  <App />
+                </AppErrorBoundary>
+              </SafeModeProvider>
+            </HashRouter>
+          </UpdateProvider>
+        </DbRecoveryGate>
       </ThemeProvider>
     </I18nProvider>
   </React.StrictMode>,

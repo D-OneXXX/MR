@@ -354,16 +354,39 @@ fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let db_path = dir.join("library.db");
-    let conn = db::open(&db_path).map_err(|e| e.to_string())?;
-    db::init_schema(&conn).map_err(|e| e.to_string())?;
+    let state = app.state::<Arc<AppState>>();
+    state.set_db_path(db_path.clone());
+    let conn = match db::open(&db_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            state.set_db_error("db-open-failed");
+            logging::log_error("startup", "书库数据库打开失败（db-open-failed，详情已省略）");
+            return Err(error.to_string());
+        }
+    };
+    if let Err(error) = db::init_schema(&conn) {
+        state.set_db_error("db-schema-failed");
+        logging::log_error(
+            "startup",
+            "书库数据库结构初始化失败（db-schema-failed，详情已省略）",
+        );
+        return Err(error.to_string());
+    }
+    if let Err(error) = db::quick_check(&conn) {
+        state.set_db_error("db-quick-check-failed");
+        logging::log_error(
+            "startup",
+            "书库数据库完整性自检失败（db-quick-check-failed，详情已省略）",
+        );
+        return Err(error.to_string());
+    }
+    state.clear_db_error();
     let current_version = env!("CARGO_PKG_VERSION");
     let previous_version = versioning::read_last_run_version(&conn).unwrap_or_else(|err| {
         logging::log_error("version", &format!("读取 last_run_version 失败：{err}"));
         None
     });
     let migration = versioning::plan(previous_version.as_deref(), current_version);
-    let state = app.state::<Arc<AppState>>();
-    state.set_db_path(db_path);
     let repaired_settings;
     {
         let mut s = state.settings.lock().clone();
@@ -459,8 +482,9 @@ pub fn run() {
             migrate_legacy_into(&data_dir, isolated);
             // 3) AppState 的渲染/在线缓存根依赖已安装的 cache_dir，必须最后创建。
             app.manage(Arc::new(AppState::new()));
-            if let Err(e) = init_app(app) {
-                eprintln!("[backend] 初始化失败: {e}");
+            if init_app(app).is_err() {
+                // 具体错误码已写入 AppState；这里只记录脱敏错误码，不输出路径。
+                logging::log_error("startup", "后端初始化失败（db-init-failed）");
             }
             // 4) 文件关联/命令行直开：首次启动在后台导入，完成后 ping 前端。
             open_with::handle_launch(
@@ -512,6 +536,9 @@ pub fn run() {
             commands::set_settings,
             backup::export_backup,
             backup::import_backup,
+            backup::get_db_health,
+            backup::open_data_dir,
+            backup::recover_database_from_backup,
             commands::resolve_online_url,
             commands::test_online_connection,
             commands::import_resolved_pages,

@@ -37,6 +37,17 @@ pub(crate) fn open(path: impl AsRef<Path>) -> Result<Connection, BackendError> {
     Ok(conn)
 }
 
+/// 启动自检：`quick_check` 必须返回 ok。比完整 integrity_check 快，
+/// 足以在打开/迁移后捕获损坏页、截断库与结构异常。
+pub fn quick_check(conn: &Connection) -> Result<(), BackendError> {
+    let result: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if result.eq_ignore_ascii_case("ok") {
+        Ok(())
+    } else {
+        Err(BackendError::Db(format!("quick_check 未通过：{result}")))
+    }
+}
+
 pub fn book_id_for_path(path: &str) -> String {
     let mut h = Sha256::new();
     h.update(path.as_bytes());
@@ -934,6 +945,12 @@ mod tests {
             assert_eq!(fk, 1);
         }
         cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn quick_check_accepts_a_valid_database() {
+        let conn = mem();
+        assert!(quick_check(&conn).is_ok());
     }
 
     #[test]

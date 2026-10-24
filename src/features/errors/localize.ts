@@ -12,6 +12,10 @@ const STABLE_ERROR_CODES: ReadonlyArray<{ code: string; key: string }> = [
   { code: "archive-disguised-7z", key: "error.archiveDisguised7z" },
   { code: "archive-not-zip", key: "error.archiveNotZip" },
   { code: "archive-encrypted", key: "error.archiveEncrypted" },
+  { code: "db-open-failed", key: "dbRecovery.openFailed" },
+  { code: "db-schema-failed", key: "dbRecovery.schemaFailed" },
+  { code: "db-quick-check-failed", key: "dbRecovery.quickCheckFailed" },
+  { code: "db-already-healthy", key: "dbRecovery.unknown" },
 ];
 
 /**

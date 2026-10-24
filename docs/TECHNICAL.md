@@ -64,6 +64,13 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   清理只删除派生目录，绝不触碰 `library.db`、书库记录或阅读进度。
 - SQLite 所有生产连接统一经 `db::open`：`journal_mode=WAL`、`busy_timeout=5000`、
   `synchronous=NORMAL`、`foreign_keys=ON`，避免条漫滚动进度 / 规则落盘 / 缓存统计并发写入时锁库。
+- 启动时在 `init_schema` 后执行 `PRAGMA quick_check`。打开/结构/完整性失败会写入
+  `AppState` 稳定错误码（`db-open-failed` / `db-schema-failed` / `db-quick-check-failed`），
+  前端 `DbRecoveryGate` 阻塞主界面并提供「从 .mrbackup 恢复数据库」「打开数据目录」
+  「重新检查」，不再静默继续让全部命令报“数据库尚未初始化”。
+- 启动恢复走 staging：先把备份恢复到 `library.recovery-*.db`，`wal_checkpoint(TRUNCATE)`
+  后才隔离旧库（`*.corrupt-*`）并原子替换；失败时活库完全不动。`set_settings` 不再吞掉
+  数据库错误，数据库不可用时必须显式失败。
 
 环境变量：`MR_DATA_DIR`、`MR_RENDER_CACHE_DIR`、`MR_ONLINE_CACHE_DIR`、
 `WEBVIEW2_USER_DATA_FOLDER`（主要用于 QA 隔离）。`MR_DATA_DIR` 隔离模式下缓存根为
@@ -104,7 +111,7 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 | `db.rs` | SQLite schema、WAL + `busy_timeout=5000`、书库/进度/设置/统计/重定位事务 |
 | `commands.rs` | 书库/取页/进度/设置/在线导入/过滤标记恢复/失效路径重定位 |
 | `open_with.rs` | 文件关联与命令行参数过滤、单实例唤醒、待打开请求内存队列 |
-| `backup.rs` | `.mrbackup` 导出/恢复、快照净化、完整性/计数校验、事务导入 |
+| `backup.rs` | `.mrbackup` 导出/恢复、启动自检恢复、快照净化、完整性/计数校验、事务导入 |
 | `source.rs` | 文件夹/zip/在线源；自然排序、zip bomb 上限、CDN 刷新 |
 | `pipeline.rs` / `cache.rs` / `render_cache.rs` / `disk_cache.rs` | 解码缩放、三级内存缓存、渲染 L2、在线原图 L2 与统一 LRU |
 | `online/{mod,http,direct,html,filter,telegram,handoff}.rs` | 在线直读全链路 |
@@ -480,7 +487,8 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 `get_next_book`、`get_series_books`、`list_entries`、`get_page`、`get_thumbnail`、
 `clear_thumbnail_cache`、`clear_temp_cache`、`get_webtoon_layout`、`get_webtoon_tile`、
 `get_memory_stats`、`get_dashboard`、`get_reading_log`、`get_reading_by_book`、`set_progress`、
-`clear_pages`、`relocate_book`、`take_pending_open`、`export_backup`、`import_backup`。
+`clear_pages`、`relocate_book`、`take_pending_open`、`export_backup`、`import_backup`、
+`get_db_health`、`open_data_dir`、`recover_database_from_backup`。
 
 设置与在线：`get_settings`、`set_settings`、`resolve_online_url`、`test_online_connection`、
 `import_resolved_pages`、`resolve_online_batch`、`resolve_telegram_channel`、

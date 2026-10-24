@@ -2972,12 +2972,8 @@ pub async fn set_settings(
     if online_conn_changed {
         state.invalidate_sources();
     }
-    // 无库文件时（如首次启动内存态）仍接受设置，仅跳过持久化。
-    match res {
-        Ok(()) => Ok(()),
-        Err(e) if e == "数据库尚未初始化" => Ok(()),
-        Err(e) => Err(e),
-    }
+    // 数据库不可用必须显式失败；启动恢复门会阻止用户在坏库上改设置。
+    res
 }
 
 #[cfg(test)]

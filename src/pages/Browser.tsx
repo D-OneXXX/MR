@@ -6,6 +6,7 @@ import {
   Check,
   CircleAlert,
   Clock3,
+  Copy,
   CornerDownLeft,
   Download,
   ExternalLink,
@@ -13,6 +14,7 @@ import {
   Globe,
   Loader2,
   RefreshCw,
+  Radio,
   Settings2,
   ShieldCheck,
   Trash2,
@@ -35,6 +37,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import ErrorState from "@/components/ErrorState";
 import PixelPet from "@/components/PixelPet";
 import { toast, toastErr } from "@/components/Toast";
@@ -42,6 +46,13 @@ import { translate, useI18n, type MessageKey, type TranslateVars } from "@/i18n"
 import { useSafeMode } from "@/features/safeMode/SafeModeContext";
 import { recordBreadcrumb } from "@/features/resilience";
 import { localizeBackendError } from "@/features/errors/localize";
+import {
+  refreshBrowserHandoffSession,
+  startBrowserHandoffSession,
+  stopBrowserHandoffSession,
+  useOnlineHandoffState,
+} from "@/features/online/handoffState";
+import { writeOnlineLastTest } from "@/lib/onlineLastTest";
 
 const RECENTS_KEY = "mr-browser-recents";
 const RECENTS_LIMIT = 20;
@@ -131,10 +142,68 @@ function formatSize(bytes: number): string {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
 }
 
+/** 交接回传字段：只读展示 + 一键复制（值可能是空串，复制时提示）。 */
+function CopyField({
+  id,
+  value,
+  label,
+  copyLabel,
+}: {
+  id: string;
+  value: string;
+  label: string;
+  copyLabel: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    if (!value) {
+      toast(translate("online.copyEmpty", { label }));
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+      toast(translate("online.copiedLabel", { label }));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toastErr("clipboard", translate("online.copyManual", { label }));
+    }
+  };
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <Label htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
+      <div className="flex min-w-0 items-center gap-2">
+        <Input
+          id={id}
+          readOnly
+          value={value}
+          placeholder={translate("pair.generatedAfterStart")}
+          aria-label={label}
+          className="h-9 min-w-0 font-mono text-xs"
+        />
+        <Button
+          type="button"
+          variant="pill"
+          size="pill-icon-sm"
+          onClick={() => void onCopy()}
+          aria-label={copyLabel}
+          title={copyLabel}
+          disabled={!value}
+        >
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function BrowserPage() {
   const nav = useNavigate();
   const { t } = useI18n();
   const { active: safeMode } = useSafeMode();
+  const { status: handoff } = useOnlineHandoffState();
 
   const [url, setUrl] = useState("");
   const [recents, setRecents] = useState<string[]>(readRecents);
@@ -146,6 +215,15 @@ export default function BrowserPage() {
   const [telegramBusyId, setTelegramBusyId] = useState<string | null>(null);
   const [telegramLoadingMore, setTelegramLoadingMore] = useState(false);
   const [telegramError, setTelegramError] = useState<string | null>(null);
+  // 辅助验证交接：启动/停止/刷新的忙碌态与会话请求头开关（只驻留内存）。
+  const [handoffBusy, setHandoffBusy] = useState<
+    "start" | "stop" | "refresh" | null
+  >(null);
+  const [allowSessionHeaders, setAllowSessionHeaders] = useState(false);
+
+  useEffect(() => {
+    if (handoff?.active) setAllowSessionHeaders(handoff.allowSessionHeaders);
+  }, [handoff?.active, handoff?.allowSessionHeaders]);
 
   const [downloads, setDownloads] = useState<BrowserDownload[]>([]);
   const [loadingDownloads, setLoadingDownloads] = useState(true);
@@ -208,12 +286,14 @@ export default function BrowserPage() {
       setTelegram(null);
       try {
         const channel = await api.resolveTelegramChannel(target);
+        writeOnlineLastTest({ ok: true, url: target });
         setTelegram(channel);
         setTelegramSource(target);
         remember(target);
         recordBreadcrumb("onlineRead");
         toast(translate("online.telegram.channelDetected"));
       } catch (e) {
+        writeOnlineLastTest({ ok: false, url: target });
         setTelegramError(localizeBackendError(e));
         toastErr("resolve_telegram_channel", e);
       } finally {
@@ -227,11 +307,13 @@ export default function BrowserPage() {
     setNotice(null);
     try {
       const book = await api.resolveOnlineUrl(target);
+      writeOnlineLastTest({ ok: true, url: target });
       recordBreadcrumb("onlineRead");
       toast(translate("browser.toastResolved", { title: book.title }));
       remember(target);
       nav(`/reader/${encodeURIComponent(book.id)}`);
     } catch (e) {
+      writeOnlineLastTest({ ok: false, url: target });
       setNotice(
         typeof e === "string"
           ? {
@@ -364,6 +446,41 @@ export default function BrowserPage() {
       setBusy(null);
     }
   }, [busy, remember, resolveTarget]);
+
+  /* ---------- 辅助验证交接（唯一入口；原书库导入对话框的配对页收敛于此） ---------- */
+  const onStartHandoff = useCallback(async () => {
+    if (handoffBusy !== null) return;
+    setHandoffBusy("start");
+    try {
+      await startBrowserHandoffSession(allowSessionHeaders);
+    } catch (e) {
+      toastErr("start_browser_handoff", e);
+    } finally {
+      setHandoffBusy(null);
+    }
+  }, [allowSessionHeaders, handoffBusy]);
+
+  const onStopHandoff = useCallback(async () => {
+    if (handoffBusy !== null) return;
+    setHandoffBusy("stop");
+    try {
+      await stopBrowserHandoffSession();
+    } catch (e) {
+      toastErr("stop_browser_handoff", e);
+    } finally {
+      setHandoffBusy(null);
+    }
+  }, [handoffBusy]);
+
+  const onRefreshHandoff = useCallback(async () => {
+    if (handoffBusy !== null) return;
+    setHandoffBusy("refresh");
+    try {
+      await refreshBrowserHandoffSession();
+    } finally {
+      setHandoffBusy(null);
+    }
+  }, [handoffBusy]);
 
   const loadDownloads = useCallback(async () => {
     setLoadingDownloads(true);
@@ -654,6 +771,138 @@ export default function BrowserPage() {
             </div>
           </div>
         )}
+      </Card>
+
+      {/* 辅助验证交接：Cloudflare / 登录拦截时的唯一交接引导入口。 */}
+      <Card className="mt-6 gap-3 p-5 sm:p-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-secondary text-secondary-foreground shadow-hard-sm">
+            <Radio
+              className={cn(
+                "size-4",
+                handoff?.active ? "text-primary" : "text-muted-foreground",
+              )}
+              aria-hidden
+            />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-bold tracking-tight">
+                {t("online.tabPair")}
+              </h2>
+              <Badge variant={handoff?.active ? "success" : "muted"}>
+                {handoff?.active
+                  ? t("pair.stateOnline")
+                  : t("pair.stateIdle")}
+              </Badge>
+            </div>
+            <p className="mono mt-0.5 truncate text-[11px] text-muted-foreground">
+              {handoff?.active
+                ? t("pair.statusLine", {
+                    port: handoff.port,
+                    count: handoff.receivedChapters,
+                  })
+                : t("pair.inactiveHint")}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="pill"
+            size="pill-sm"
+            className="whitespace-nowrap"
+            onClick={() => void onRefreshHandoff()}
+            disabled={handoffBusy !== null}
+            aria-label={t("pair.refresh")}
+            title={t("pair.refresh")}
+          >
+            <RefreshCw
+              className={cn(
+                "size-3.5",
+                handoffBusy === "refresh" && "animate-spin",
+              )}
+              aria-hidden
+            />
+            {t("common.refresh")}
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {handoff?.active ? (
+            <Button
+              type="button"
+              variant="pill-danger"
+              size="pill-sm"
+              className="whitespace-nowrap"
+              onClick={() => void onStopHandoff()}
+              disabled={handoffBusy === "stop"}
+            >
+              {handoffBusy === "stop" ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : null}
+              {handoffBusy === "stop" ? t("pair.stopping") : t("pair.stop")}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="pill-primary"
+              size="pill-sm"
+              className="whitespace-nowrap"
+              onClick={() => void onStartHandoff()}
+              disabled={handoffBusy === "start"}
+            >
+              {handoffBusy === "start" ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : null}
+              {handoffBusy === "start" ? t("pair.starting") : t("pair.start")}
+            </Button>
+          )}
+          <span className="text-[11px] text-muted-foreground">
+            {t("pair.autoImportHint")}
+          </span>
+        </div>
+
+        {handoff?.active ? (
+          <div className="grid gap-2 lg:grid-cols-2">
+            <CopyField
+              id="handoff-callback"
+              value={handoff.callbackUrl}
+              label={t("online.callbackLabel")}
+              copyLabel={t("pair.copyCallback")}
+            />
+            <CopyField
+              id="handoff-token"
+              value={handoff.pairingToken}
+              label={t("online.tokenLabel")}
+              copyLabel={t("pair.copyToken")}
+            />
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-background/60 px-4 py-3">
+          <div className="min-w-0">
+            <Label
+              htmlFor="handoff-session-headers"
+              className="text-xs font-semibold"
+            >
+              {t("pair.sessionHeadersLabel")}
+            </Label>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              {t("pair.sessionHeadersHint")}
+            </p>
+            {handoff?.active ? (
+              <p className="mt-1 text-[11px] text-warning">
+                {t("pair.sessionHeadersLocked")}
+              </p>
+            ) : null}
+          </div>
+          <Switch
+            id="handoff-session-headers"
+            checked={allowSessionHeaders}
+            onCheckedChange={setAllowSessionHeaders}
+            disabled={handoff?.active || handoffBusy !== null}
+            aria-label={t("pair.sessionHeadersLabel")}
+          />
+        </div>
       </Card>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">

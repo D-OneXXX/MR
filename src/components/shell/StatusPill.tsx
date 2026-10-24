@@ -7,7 +7,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { useOnlineHandoffState } from "@/components/OnlineImportDialog";
+import { useOnlineHandoffState } from "@/features/online/handoffState";
 import { api, type Settings } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";

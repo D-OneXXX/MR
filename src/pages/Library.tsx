@@ -124,6 +124,8 @@ export default function LibraryPage() {
   // 导入进度（右下角小卡）与全局拖放高亮
   const [importing, setImporting] = useState<ImportProgress | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  // 单飞锁：拖放、按钮、外部刷新可能同时触发导入，重叠扫描会互相抢库锁。
+  const importGuardRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -416,60 +418,71 @@ export default function LibraryPage() {
   /* ---------- 导入（逐路径调用，聚合结果后统一 toast） ---------- */
   const importPaths = useCallback(
     async (paths: string[]) => {
+      if (importGuardRef.current) {
+        toast(translate("import.busy"));
+        return;
+      }
       const clean = paths.map((path) => path.trim()).filter(Boolean);
       if (clean.length === 0) return;
-      let added = 0;
-      let restored = 0;
-      let skipped = 0;
-      let failed = 0;
-      const failMsgs: string[] = [];
-      for (let i = 0; i < clean.length; i += 1) {
-        setImporting({ done: i, total: clean.length, current: clean[i] });
-        try {
-          const result = await api.importBooks([clean[i]]);
-          added += result.added;
-          restored += result.restored;
-          skipped += result.skipped;
-          failed += result.failed;
-          for (const item of result.items) {
-            if (item.status === "failed") {
-              failMsgs.push(
-                translate("import.itemFailed", {
-                  path: item.path,
-                  message: localizeBackendError(item.message),
-                }),
-              );
+      importGuardRef.current = true;
+      try {
+        let added = 0;
+        let restored = 0;
+        let skipped = 0;
+        let failed = 0;
+        const failMsgs: string[] = [];
+        for (let i = 0; i < clean.length; i += 1) {
+          setImporting({ done: i, total: clean.length, current: clean[i] });
+          try {
+            const result = await api.importBooks([clean[i]]);
+            added += result.added;
+            restored += result.restored;
+            skipped += result.skipped;
+            failed += result.failed;
+            for (const item of result.items) {
+              if (item.status === "failed") {
+                failMsgs.push(
+                  translate("import.itemFailed", {
+                    path: item.path,
+                    message: localizeBackendError(item.message),
+                  }),
+                );
+              }
             }
+          } catch (e) {
+            failed += 1;
+            failMsgs.push(
+              typeof e === "string" && e.length > 0
+                ? localizeBackendError(e)
+                : translate("import.failedFallback"),
+            );
           }
-        } catch (e) {
-          failed += 1;
-          failMsgs.push(
-            typeof e === "string" && e.length > 0
-              ? localizeBackendError(e)
-              : translate("import.failedFallback"),
+        }
+        await reload(debounced);
+        const parts = [
+          translate("import.added", { count: formatNumber(added) }),
+        ];
+        if (restored > 0) {
+          parts.push(
+            translate("import.restored", { count: formatNumber(restored) }),
           );
         }
+        if (skipped > 0) {
+          parts.push(
+            translate("import.inLibrary", { count: formatNumber(skipped) }),
+          );
+        }
+        if (failed > 0) {
+          parts.push(
+            translate("import.failed", { count: formatNumber(failed) }),
+          );
+        }
+        toast(translate("import.complete", { summary: parts.join(" · ") }));
+        if (failMsgs.length > 0) toast(failMsgs[0]);
+      } finally {
+        importGuardRef.current = false;
+        setImporting(null);
       }
-      setImporting(null);
-      await reload(debounced);
-      const parts = [translate("import.added", { count: formatNumber(added) })];
-      if (restored > 0) {
-        parts.push(
-          translate("import.restored", { count: formatNumber(restored) }),
-        );
-      }
-      if (skipped > 0) {
-        parts.push(
-          translate("import.inLibrary", { count: formatNumber(skipped) }),
-        );
-      }
-      if (failed > 0) {
-        parts.push(
-          translate("import.failed", { count: formatNumber(failed) }),
-        );
-      }
-      toast(translate("import.complete", { summary: parts.join(" · ") }));
-      if (failMsgs.length > 0) toast(failMsgs[0]);
     },
     [debounced, formatNumber, reload],
   );
@@ -703,6 +716,7 @@ export default function LibraryPage() {
               size="pill"
               onClick={() => void onAddFolder()}
               title={t("library.addFolderTitle")}
+              disabled={importing !== null}
             >
               <FolderPlus />
               {t("library.addFolder")}
@@ -712,6 +726,7 @@ export default function LibraryPage() {
               size="pill"
               onClick={() => void onAddFiles()}
               title={t("library.addBooksTitle")}
+              disabled={importing !== null}
             >
               <Plus />
               {t("library.addBooks")}

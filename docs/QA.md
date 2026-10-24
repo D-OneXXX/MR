@@ -56,6 +56,9 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **导入并发守卫（P1.14）**：书库导入加单飞锁，拖放/按钮/对话框回调
+  重叠触发时只弹六语 `import.busy`，不再并发 `import_books` 抢库锁；
+  导入进行中两个导入按钮禁用，进度卡与逐路径失败聚合保持不变。
 - **错误本地化（P1.13）**：书库 loadError/导入条目、详情 Sheet 章节与阅读记录、
   设置页设置/统计加载、浏览器地址解析/Telegram/下载、隐私自检与清痕、
   安全模式进出、Webtoon 布局与 PageToc 全部改走 `localizeBackendError`，

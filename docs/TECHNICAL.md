@@ -537,6 +537,9 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
     `library.loadMore` 按钮再追加 60 张；搜索/来源筛选/合集模式/安全模式变化时
     重置窗口。`BookCard` 用 `IntersectionObserver`（320px 提前量）才请求
     `get_thumbnail`，离屏卡片不占 IPC 与解码。
+  - 导入单飞：书库用 `importGuardRef` 阻止拖放/按钮/对话框回调重叠触发导入，
+    进行中再次触发只提示六语 `import.busy`；顶部两个导入按钮同时禁用。
+    每个路径仍逐个 `import_books` 以维持进度卡与失败聚合。
   - 前端不再调用的后端命令（保留注册、契约不变）：`test_online_connection`、
     `import_resolved_pages`、`resolve_online_batch`、`clear_thumbnail_cache`。
 - 书库失效态：`BookInfo.missing` 为 true 时书卡显示「文件位置已变更」胶囊，

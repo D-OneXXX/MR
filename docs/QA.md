@@ -6,8 +6,10 @@
 ## 最近一次运行（0.17.0 双通道解耦 + 双端加固）
 
 - 版本：`0.17.0`
-- 全量 QA：**223/223（100%）**，P0=0 · P1=0 · P2=0 · P3=0
-  （visual / reader / online / cache / privacy / architecture / chaos 全绿）
+- 全量 QA：**224/224（100%）**，P0=0 · P1=0 · P2=0 · P3=0
+  （visual / reader / online / cache / privacy / architecture / chaos 全绿；
+  前两次全量运行出现已知 chaos/CDP 偶发超时，第三次全新隔离运行通过；
+  Windows 发布工作流因此增加一次完整套件重试，仍失败则阻断发布）
 - Rust 单测：**302 passed**（新增：Shift_JIS 假名裁决解码、伪装包魔数嗅探、
   备份高 schema 前向兼容、启动 quick_check、DB 隔离恢复、删除锚定与恶意备份过滤）
 - `npx tsc --noEmit`、`npm run build`、版本门禁：通过（0.17.0 五端同步）

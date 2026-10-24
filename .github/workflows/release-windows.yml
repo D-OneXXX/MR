@@ -63,8 +63,17 @@ jobs:
         run: cargo build --manifest-path src-tauri/Cargo.toml
 
       - name: Full QA regression (Windows/WebView2)
-        run: node tests/qa/run-qa.mjs
-        timeout-minutes: 30
+        shell: pwsh
+        timeout-minutes: 45
+        run: |
+          # 已知 chaos/CDP 偶发超时（全量套件资源竞争），仅对完整套件重试一次；
+          # 不跳过任何 suite，第二次仍失败则照常阻断发布。
+          node tests/qa/run-qa.mjs
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Full QA failed; retrying once with a fresh isolated run."
+            node tests/qa/run-qa.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v1

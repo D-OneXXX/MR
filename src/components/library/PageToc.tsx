@@ -8,6 +8,7 @@ import {
 import { api, type PageEntry } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { translate, useI18n } from "@/i18n";
+import { localizeBackendError } from "@/features/errors/localize";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import ErrorState from "@/components/ErrorState";
@@ -63,7 +64,9 @@ export default function PageToc({
         if (!alive) return;
         setEntries([]);
         setError(
-          typeof e === "string" ? e : translate("toc.errorFallback"),
+          typeof e === "string"
+            ? localizeBackendError(e)
+            : translate("toc.errorFallback"),
         );
       },
     );

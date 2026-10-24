@@ -318,7 +318,7 @@ export default function BrowserPage() {
         typeof e === "string"
           ? {
               key: "browser.resolveFailedDetail",
-              vars: { error: e },
+              vars: { error: localizeBackendError(e) },
               fallback: true,
             }
           : { key: "browser.resolveFailed", fallback: true },
@@ -385,7 +385,7 @@ export default function BrowserPage() {
         };
       });
     } catch (e) {
-      setTelegramError(typeof e === "string" ? e : String(e));
+      setTelegramError(localizeBackendError(e));
       toastErr("resolve_telegram_channel", e);
     } finally {
       setTelegramLoadingMore(false);
@@ -409,7 +409,7 @@ export default function BrowserPage() {
         typeof e === "string"
           ? {
               key: "browser.embeddedFailedDetail",
-              vars: { error: e },
+              vars: { error: localizeBackendError(e) },
               fallback: false,
             }
           : { key: "browser.embeddedFailed", fallback: false },
@@ -436,7 +436,7 @@ export default function BrowserPage() {
         typeof e === "string"
           ? {
               key: "browser.externalFailedDetail",
-              vars: { error: e },
+              vars: { error: localizeBackendError(e) },
               fallback: false,
             }
           : { key: "browser.externalFailed", fallback: false },
@@ -488,7 +488,7 @@ export default function BrowserPage() {
     try {
       setDownloads(await api.listBrowserDownloads());
     } catch (e) {
-      setDownloadsError(typeof e === "string" ? e : "");
+      setDownloadsError(localizeBackendError(e));
       toastErr("list_browser_downloads", e);
     } finally {
       setLoadingDownloads(false);

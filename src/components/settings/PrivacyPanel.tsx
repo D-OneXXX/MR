@@ -24,6 +24,7 @@ import {
 import ConfirmDialog from "@/components/ConfirmDialog";
 import SafeModePill from "@/components/shell/SafeModePill";
 import { toast } from "@/components/Toast";
+import { localizeBackendError } from "@/features/errors/localize";
 import { useI18n, type MessageKey } from "@/i18n";
 import { ONLINE_LAST_TEST_EVENT } from "@/lib/onlineLastTest";
 import { platformKind } from "@/lib/platform";
@@ -263,7 +264,11 @@ export default function PrivacyPanel() {
       setAudit(next);
     } catch (e) {
       if (seq !== seqRef.current) return;
-      setError(typeof e === "string" ? e : t("privacy.audit.storage.fail"));
+      setError(
+        typeof e === "string"
+          ? localizeBackendError(e)
+          : t("privacy.audit.storage.fail"),
+      );
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
@@ -337,7 +342,10 @@ export default function PrivacyPanel() {
     } catch (e) {
       toast(
         t("privacy.toast.clearFailed", {
-          detail: typeof e === "string" ? e : t("common.unknown"),
+          detail:
+            typeof e === "string"
+              ? localizeBackendError(e)
+              : t("common.unknown"),
         }),
       );
     } finally {
@@ -358,7 +366,12 @@ export default function PrivacyPanel() {
       toast(t("safeMode.badgeActive"));
     } catch (e) {
       toast(
-        t("safeMode.exitFailed", { detail: String(e) }),
+        t("safeMode.exitFailed", {
+          detail:
+            typeof e === "string"
+              ? localizeBackendError(e)
+              : t("common.unknown"),
+        }),
       );
     } finally {
       setEnteringSafeMode(false);

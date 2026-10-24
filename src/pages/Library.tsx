@@ -34,7 +34,8 @@ import ContextMenu from "@/components/ContextMenu";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import ErrorState from "@/components/ErrorState";
 import PixelPet from "@/components/PixelPet";
-import { toast } from "@/components/Toast";
+import { toast, toastErr } from "@/components/Toast";
+import { localizeBackendError } from "@/features/errors/localize";
 import LibraryFilters, {
   type SourceFilter,
 } from "@/components/library/LibraryFilters";
@@ -81,13 +82,9 @@ function readSourceFilter(): SourceFilter {
   return "all";
 }
 
-/** 后端字符串错误原样展示，其余统一走本地化文案。 */
+/** 后端中文详情只在中文界面直出；其余语言走稳定码/泛化本地化。 */
 function notifyError(cmd: string, error: unknown): void {
-  toast(
-    typeof error === "string" && error.length > 0
-      ? error
-      : translate("error.requestFailed", { cmd }),
-  );
+  toastErr(cmd, error);
 }
 
 /**
@@ -162,7 +159,7 @@ export default function LibraryPage() {
       setBooks(list);
       setAllBooks(all ?? list);
     } catch (e) {
-      setLoadError(typeof e === "string" ? e : "");
+      setLoadError(localizeBackendError(e));
       notifyError("list_books", e);
     } finally {
       setLoading(false);
@@ -439,7 +436,7 @@ export default function LibraryPage() {
               failMsgs.push(
                 translate("import.itemFailed", {
                   path: item.path,
-                  message: item.message,
+                  message: localizeBackendError(item.message),
                 }),
               );
             }
@@ -448,7 +445,7 @@ export default function LibraryPage() {
           failed += 1;
           failMsgs.push(
             typeof e === "string" && e.length > 0
-              ? e
+              ? localizeBackendError(e)
               : translate("import.failedFallback"),
           );
         }
@@ -472,7 +469,7 @@ export default function LibraryPage() {
         );
       }
       toast(translate("import.complete", { summary: parts.join(" · ") }));
-      if (failMsgs.length > 0) notifyError("import_books", failMsgs[0]);
+      if (failMsgs.length > 0) toast(failMsgs[0]);
     },
     [debounced, formatNumber, reload],
   );

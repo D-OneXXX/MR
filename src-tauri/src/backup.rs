@@ -215,7 +215,15 @@ pub async fn import_backup(
     let source = PathBuf::from(source_path);
     let result = tokio::task::spawn_blocking(move || restore_backup_blocking(&db_path, &source))
         .await
-        .map_err(|e| format!("后台任务失败：{e}"))??;
+        .map_err(|e| format!("后台任务失败：{e}"))?
+        .map_err(|e| {
+            // 未归类错误统一补恢复失败码；已带具体备份码的原样保留。
+            if e.contains("（backup-") {
+                e
+            } else {
+                format!("{e}（backup-restore-failed）")
+            }
+        })?;
     // 事务提交且阻塞连接已释放后再回读设置，避免在持锁状态下刷新缓存。
     refresh_after_restore(state.inner())?;
     Ok(result)
@@ -289,7 +297,7 @@ fn recover_from_backup_blocking(
     source: &Path,
 ) -> Result<BackupRestoreResult, String> {
     if !source.is_file() {
-        return Err("备份文件不存在或不是文件".into());
+        return Err("备份文件不存在或不是文件（backup-file-missing）".into());
     }
     let parent = db_path
         .parent()
@@ -401,7 +409,7 @@ fn export_backup_blocking(
         .map_err(|e| format!("读取书库快照大小失败：{e}"))?
         .len();
     if db_bytes > MAX_DB_BYTES {
-        return Err("书库数据库超过 1 GiB 备份上限".into());
+        return Err("书库数据库超过 1 GiB 备份上限（backup-too-large）".into());
     }
 
     let created_at = db::now_str();
@@ -528,7 +536,7 @@ fn sanitize_snapshot(conn: &Connection) -> Result<(), String> {
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .map_err(|e| format!("备份快照完整性校验失败：{e}"))?;
     if !integrity.eq_ignore_ascii_case("ok") {
-        return Err("备份快照完整性校验失败".into());
+        return Err("备份快照完整性校验失败（backup-integrity-failed）".into());
     }
     Ok(())
 }
@@ -579,7 +587,7 @@ fn write_backup_zip(
 
 fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestoreResult, String> {
     if !source.is_file() {
-        return Err("备份文件不存在或不是文件".into());
+        return Err("备份文件不存在或不是文件（backup-file-missing）".into());
     }
     if !db_path.is_file() {
         return Err("书库数据库不存在".into());
@@ -632,14 +640,17 @@ fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestor
     let manifest: BackupManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|e| format!("备份清单损坏：{e}"))?;
     if manifest.format != BACKUP_FORMAT {
-        return Err("不是 MangaReader 备份文件".into());
+        return Err("不是 MangaReader 备份文件（backup-invalid-format）".into());
     }
     // 前向兼容：Windows 主线版本演进快于 Linux 分支，高版本导出的备份
     // （schema > 当前）允许恢复——manifest 未知字段已被 serde 忽略，
     // library.db 中未知表/列在 copy_sql 显式列复制中被丢弃，只提取核心
     // 书库路径、章节进度、阅读统计与过滤规则。仅拒绝 0（从未存在过）。
     if manifest.schema == 0 || manifest.schema < BACKUP_SCHEMA {
-        return Err(format!("不支持的备份格式版本：{}", manifest.schema));
+        return Err(format!(
+            "不支持的备份格式版本：{}（backup-unsupported-schema）",
+            manifest.schema
+        ));
     }
     let forward_schema = (manifest.schema > BACKUP_SCHEMA).then_some(manifest.schema);
 
@@ -773,7 +784,7 @@ fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<Valida
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .map_err(|e| format!("备份数据库完整性校验失败：{e}"))?;
     if !integrity.eq_ignore_ascii_case("ok") {
-        return Err("备份数据库完整性校验失败".into());
+        return Err("备份数据库完整性校验失败（backup-integrity-failed）".into());
     }
     for table in REQUIRED_TABLES {
         if !table_exists(&conn, table)? {
@@ -788,7 +799,7 @@ fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<Valida
 
     let counts = count_core_rows(&conn)?;
     if counts != manifest.counts {
-        return Err("备份清单计数与数据库不一致".into());
+        return Err("备份清单计数与数据库不一致（backup-integrity-failed）".into());
     }
 
     // 本地书路径逐行校验：必须存在、是目录/.zip/.cbz，且不能命中宽目录。
@@ -1360,6 +1371,10 @@ mod tests {
         );
         let err = restore_backup_blocking(&db_path, &zero_backup).unwrap_err();
         assert!(err.contains("不支持的备份格式版本"), "got: {err}");
+        assert!(
+            err.contains("（backup-unsupported-schema）"),
+            "非中文界面依赖稳定码本地化：{err}"
+        );
 
         // 同版本恢复不带前向标记。
         let result = restore_backup_blocking(&db_path, &source_backup).unwrap();

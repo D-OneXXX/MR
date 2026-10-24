@@ -113,6 +113,17 @@ const zhCN = {
   "error.archiveDisguised7z": "该文件实际是 7z 压缩包（仅改了后缀名），请转换为标准无密码 ZIP/CBZ 后再导入",
   "error.archiveNotZip": "该文件不是有效的 ZIP/CBZ 压缩包，请转为标准无密码 ZIP/CBZ",
   "error.archiveEncrypted": "压缩包已加密或包含加密条目，请转为标准无密码 ZIP/CBZ 后再导入",
+  "error.backupFileMissing": "备份文件不存在或不可读",
+  "error.backupInvalidFormat": "这不是有效的 MangaReader 备份文件",
+  "error.backupUnsupportedSchema": "备份格式版本不受支持，请升级应用后重试",
+  "error.backupIntegrity": "备份完整性校验失败，当前书库未被修改",
+  "error.backupTooLarge": "备份文件超过 1 GiB 上限",
+  "error.backupRestoreFailed": "恢复备份失败，当前书库未被修改",
+  "error.onlineUrlInvalid": "链接无效：仅支持不含账号密码的 http/https 地址",
+  "error.onlineBlockedAddress": "该链接指向本机、私网或链路本地地址，已拒绝",
+  "error.onlineTooManyPages": "页面数量超过上限，请拆分后重试",
+  "error.onlineFetchFailed": "在线请求失败，请检查网络或稍后重试",
+  "error.updateUnsupportedFormat": "更新包格式不受支持，请从发行页手动下载",
 } as const;
 
 type CommonMessages = { [K in keyof typeof zhCN]: string };
@@ -232,6 +243,17 @@ const zhTW: CommonMessages = {
   "error.archiveDisguised7z": "該檔案實際是 7z 壓縮包（僅改了副檔名），請轉換為標準無密碼 ZIP/CBZ 後再匯入",
   "error.archiveNotZip": "該檔案不是有效的 ZIP/CBZ 壓縮包，請轉為標準無密碼 ZIP/CBZ",
   "error.archiveEncrypted": "壓縮包已加密或包含加密條目，請轉為標準無密碼 ZIP/CBZ 後再匯入",
+  "error.backupFileMissing": "備份檔案不存在或無法讀取",
+  "error.backupInvalidFormat": "這不是有效的 MangaReader 備份檔案",
+  "error.backupUnsupportedSchema": "備份格式版本不受支援，請先更新應用程式再試",
+  "error.backupIntegrity": "備份完整性校驗失敗，目前書庫未被修改",
+  "error.backupTooLarge": "備份檔案超過 1 GiB 上限",
+  "error.backupRestoreFailed": "還原備份失敗，目前書庫未被修改",
+  "error.onlineUrlInvalid": "連結無效：僅支援不含帳號密碼的 http/https 位址",
+  "error.onlineBlockedAddress": "此連結指向本機、私網或連結本地位址，已拒絕",
+  "error.onlineTooManyPages": "頁面數量超過上限，請拆分後再試",
+  "error.onlineFetchFailed": "線上請求失敗，請檢查網路或稍後再試",
+  "error.updateUnsupportedFormat": "更新包格式不受支援，請從發行頁手動下載",
 };
 
 const en: CommonMessages = {
@@ -352,6 +374,17 @@ const en: CommonMessages = {
   "error.archiveDisguised7z": "This file is actually a 7z archive with a renamed extension. Please convert it to a standard, unencrypted ZIP/CBZ and import again.",
   "error.archiveNotZip": "This file is not a valid ZIP/CBZ archive. Please convert it to a standard, unencrypted ZIP/CBZ.",
   "error.archiveEncrypted": "This archive is encrypted or contains encrypted entries. Please convert it to a standard, unencrypted ZIP/CBZ and import again.",
+  "error.backupFileMissing": "The backup file is missing or unreadable.",
+  "error.backupInvalidFormat": "This is not a valid MangaReader backup.",
+  "error.backupUnsupportedSchema": "This backup format version is not supported. Update the app and try again.",
+  "error.backupIntegrity": "Backup integrity check failed. Your current library was not modified.",
+  "error.backupTooLarge": "The backup exceeds the 1 GiB limit.",
+  "error.backupRestoreFailed": "Restoring the backup failed. Your current library was not modified.",
+  "error.onlineUrlInvalid": "Invalid link: only http/https addresses without credentials are supported.",
+  "error.onlineBlockedAddress": "This link points to a local, private, or link-local address and was rejected.",
+  "error.onlineTooManyPages": "Too many pages. Split the source and try again.",
+  "error.onlineFetchFailed": "The online request failed. Check your network or try again later.",
+  "error.updateUnsupportedFormat": "This update package format is not supported. Download it manually from the release page.",
 };
 
 const es: CommonMessages = {
@@ -474,6 +507,17 @@ const es: CommonMessages = {
   "error.archiveDisguised7z": "Este archivo es en realidad un comprimido 7z con la extensión renombrada. Conviértelo a un ZIP/CBZ estándar sin contraseña e impórtalo de nuevo.",
   "error.archiveNotZip": "Este archivo no es un ZIP/CBZ válido. Conviértelo a un ZIP/CBZ estándar sin contraseña.",
   "error.archiveEncrypted": "Este comprimido está cifrado o contiene entradas cifradas. Conviértelo a un ZIP/CBZ estándar sin contraseña e impórtalo de nuevo.",
+  "error.backupFileMissing": "El archivo de copia no existe o no se puede leer.",
+  "error.backupInvalidFormat": "Este no es un archivo de copia válido de MangaReader.",
+  "error.backupUnsupportedSchema": "La versión del formato de copia no es compatible. Actualiza la aplicación e inténtalo de nuevo.",
+  "error.backupIntegrity": "Falló la verificación de integridad. Tu biblioteca actual no se modificó.",
+  "error.backupTooLarge": "La copia supera el límite de 1 GiB.",
+  "error.backupRestoreFailed": "No se pudo restaurar la copia. Tu biblioteca actual no se modificó.",
+  "error.onlineUrlInvalid": "Enlace no válido: solo se admiten direcciones http/https sin credenciales.",
+  "error.onlineBlockedAddress": "Este enlace apunta a una dirección local, privada o link-local y fue rechazado.",
+  "error.onlineTooManyPages": "Hay demasiadas páginas. Divide el origen e inténtalo de nuevo.",
+  "error.onlineFetchFailed": "La solicitud en línea falló. Revisa la red o inténtalo más tarde.",
+  "error.updateUnsupportedFormat": "Este formato de actualización no es compatible. Descárgalo manualmente desde la página de versiones.",
 };
 
 const ja: CommonMessages = {
@@ -596,6 +640,17 @@ const ja: CommonMessages = {
   "error.archiveDisguised7z": "このファイルは実は拡張子を変えただけの 7z 圧縮ファイルです。パスワードなしの標準 ZIP/CBZ に変換してから読み込んでください。",
   "error.archiveNotZip": "このファイルは有効な ZIP/CBZ 圧縮ファイルではありません。パスワードなしの標準 ZIP/CBZ に変換してください。",
   "error.archiveEncrypted": "この圧縮ファイルは暗号化されているか、暗号化されたエントリを含みます。パスワードなしの標準 ZIP/CBZ に変換してから読み込んでください。",
+  "error.backupFileMissing": "バックアップファイルが存在しないか、読み取れません。",
+  "error.backupInvalidFormat": "有効な MangaReader バックアップではありません。",
+  "error.backupUnsupportedSchema": "このバックアップ形式のバージョンは未対応です。アプリを更新してから再試行してください。",
+  "error.backupIntegrity": "バックアップの整合性チェックに失敗しました。現在の書庫は変更されていません。",
+  "error.backupTooLarge": "バックアップが 1 GiB の上限を超えています。",
+  "error.backupRestoreFailed": "バックアップの復元に失敗しました。現在の書庫は変更されていません。",
+  "error.onlineUrlInvalid": "リンクが無効です。認証情報を含まない http/https アドレスのみ対応しています。",
+  "error.onlineBlockedAddress": "このリンクはローカル・プライベート・リンクローカルアドレスを指すため拒否されました。",
+  "error.onlineTooManyPages": "ページ数が上限を超えています。分割してから再試行してください。",
+  "error.onlineFetchFailed": "オンラインリクエストに失敗しました。ネットワークを確認するか、後でもう一度お試しください。",
+  "error.updateUnsupportedFormat": "この更新パッケージ形式は未対応です。リリースページから手動でダウンロードしてください。",
 };
 
 const ko: CommonMessages = {
@@ -718,6 +773,17 @@ const ko: CommonMessages = {
   "error.archiveDisguised7z": "이 파일은 확장자만 바꾼 7z 압축 파일입니다. 암호 없는 표준 ZIP/CBZ로 변환한 뒤 다시 가져오세요.",
   "error.archiveNotZip": "이 파일은 유효한 ZIP/CBZ 압축 파일이 아닙니다. 암호 없는 표준 ZIP/CBZ로 변환하세요.",
   "error.archiveEncrypted": "이 압축 파일은 암호화되어 있거나 암호화된 항목을 포함합니다. 암호 없는 표준 ZIP/CBZ로 변환한 뒤 다시 가져오세요.",
+  "error.backupFileMissing": "백업 파일이 없거나 읽을 수 없습니다.",
+  "error.backupInvalidFormat": "유효한 MangaReader 백업 파일이 아닙니다.",
+  "error.backupUnsupportedSchema": "지원하지 않는 백업 형식 버전입니다. 앱을 업데이트한 뒤 다시 시도하세요.",
+  "error.backupIntegrity": "백업 무결성 검사에 실패했습니다. 현재 서재는 변경되지 않았습니다.",
+  "error.backupTooLarge": "백업 파일이 1 GiB 한도를 초과했습니다.",
+  "error.backupRestoreFailed": "백업 복원에 실패했습니다. 현재 서재는 변경되지 않았습니다.",
+  "error.onlineUrlInvalid": "잘못된 링크입니다. 계정 정보가 없는 http/https 주소만 지원합니다.",
+  "error.onlineBlockedAddress": "이 링크는 로컬, 사설 또는 링크 로컬 주소를 가리켜 거부되었습니다.",
+  "error.onlineTooManyPages": "페이지 수가 한도를 초과했습니다. 나눈 뒤 다시 시도하세요.",
+  "error.onlineFetchFailed": "온라인 요청에 실패했습니다. 네트워크를 확인하거나 나중에 다시 시도하세요.",
+  "error.updateUnsupportedFormat": "지원하지 않는 업데이트 패키지 형식입니다. 릴리스 페이지에서 직접 내려받으세요.",
 };
 
 export const commonMessages = {

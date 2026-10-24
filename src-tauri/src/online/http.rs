@@ -272,7 +272,9 @@ impl UreqTransport {
         let host = target
             .host_str()
             .filter(|host| !host.is_empty())
-            .ok_or_else(|| OnlineError::Network("URL 缺少主机名".into()))?;
+            .ok_or_else(|| {
+                OnlineError::Network("URL 缺少主机名（online-url-invalid）".into())
+            })?;
         validate_host_literal(host, self.allow_loopback).map_err(OnlineError::Network)?;
         if host.parse::<IpAddr>().is_ok()
             || host.eq_ignore_ascii_case("localhost")
@@ -283,18 +285,23 @@ impl UreqTransport {
         let port = target.port_or_known_default().unwrap_or(443);
         let addrs = (host, port)
             .to_socket_addrs()
-            .map_err(|_| OnlineError::Network("域名解析失败".into()))?;
+            .map_err(|_| {
+                OnlineError::Network("域名解析失败（online-fetch-failed）".into())
+            })?;
         let mut saw = false;
         for addr in addrs {
             saw = true;
             if is_blocked_ip(addr.ip(), self.allow_loopback) {
                 return Err(OnlineError::Network(
-                    "目标域名解析到本机/私网/链路本地地址，已拒绝".into(),
+                    "目标域名解析到本机/私网/链路本地地址，已拒绝（online-blocked-address）"
+                        .into(),
                 ));
             }
         }
         if !saw {
-            return Err(OnlineError::Network("域名没有可用地址".into()));
+            return Err(OnlineError::Network(
+                "域名没有可用地址（online-fetch-failed）".into(),
+            ));
         }
         Ok(())
     }

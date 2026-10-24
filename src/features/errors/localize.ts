@@ -17,6 +17,17 @@ const STABLE_ERROR_CODES: ReadonlyArray<{ code: string; key: string }> = [
   { code: "db-quick-check-failed", key: "dbRecovery.quickCheckFailed" },
   { code: "db-already-healthy", key: "dbRecovery.unknown" },
   { code: "linux-manual-install", key: "updates.linux.manualBlocked" },
+  { code: "backup-file-missing", key: "error.backupFileMissing" },
+  { code: "backup-invalid-format", key: "error.backupInvalidFormat" },
+  { code: "backup-unsupported-schema", key: "error.backupUnsupportedSchema" },
+  { code: "backup-integrity-failed", key: "error.backupIntegrity" },
+  { code: "backup-too-large", key: "error.backupTooLarge" },
+  { code: "backup-restore-failed", key: "error.backupRestoreFailed" },
+  { code: "online-url-invalid", key: "error.onlineUrlInvalid" },
+  { code: "online-blocked-address", key: "error.onlineBlockedAddress" },
+  { code: "online-too-many-pages", key: "error.onlineTooManyPages" },
+  { code: "online-fetch-failed", key: "error.onlineFetchFailed" },
+  { code: "update-unsupported-format", key: "error.updateUnsupportedFormat" },
 ];
 
 /**

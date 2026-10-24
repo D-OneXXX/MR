@@ -18,6 +18,7 @@ import {
 import ErrorState from "../ErrorState";
 import PixelPet from "../PixelPet";
 import { useI18n } from "@/i18n";
+import { localizeBackendError } from "@/features/errors/localize";
 import { useGlobalShortcuts } from "@/features/shortcuts/useGlobalShortcuts";
 
 export interface WebtoonHandle {
@@ -304,7 +305,7 @@ const WebtoonView = memo(function WebtoonView({
         if (!alive) return;
         setErr(
           typeof e === "string" && e
-            ? e
+            ? localizeBackendError(e)
             : t("reader.webtoon.unknownError"),
         );
       });

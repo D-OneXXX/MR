@@ -56,6 +56,13 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **错误本地化（P1.13）**：书库 loadError/导入条目、详情 Sheet 章节与阅读记录、
+  设置页设置/统计加载、浏览器地址解析/Telegram/下载、隐私自检与清痕、
+  安全模式进出、Webtoon 布局与 PageToc 全部改走 `localizeBackendError`，
+  非中文界面不再出现裸中文。备份、在线、更新新增稳定码
+  （backup-* / online-* / update-unsupported-format）并补六语映射；
+  导入失败先逐条本地化再聚合。Rust 单测断言 schema=0 错误携带
+  `backup-unsupported-schema`，在线 URL/页数上限断言稳定码。
 - **书库性能（P1.12）**：`books(removed, updated_at DESC)` 索引落地；`list_books` /
   `scan_library` 的文件 stat 与 `meta_json` 解析移出 `DbSlot` 锁；压缩包按
   `source_stats` mtime/size 指纹增量跳过解包（目录仍全量），扫描失败清指纹；

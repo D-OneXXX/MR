@@ -53,6 +53,9 @@
   （`src/i18n/messages/*.ts`，每个文件内含六语块，类型由其它语言块约束）。
 - 胶囊容器必须有 `whitespace-nowrap` 或弹性宽度保护，防止西语/英语长词溢出。
 - 后端错误在非中文界面必须经 `src/features/errors/localize.ts` 本地化，不得直出中文。
+  Toast、`ErrorState` 与所有内联 `setError`/`setNotice` 一律走
+  `localizeBackendError`；新增后端错误类别必须在文案尾部附稳定码
+  `（kebab-case）` 并同步六语映射，未知中文错误只能落到泛化本地化文案。
 
 ### 1.3 日志脱敏与可观测性不变量
 

@@ -210,6 +210,21 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   加密标志（`entry.encrypted()`）即报 `archive-encrypted`，杜绝读页时爆出
   难懂的底层解密错误或前端无限转圈。
 
+### 6.3b 前端错误本地化（P1.13）
+
+- 所有用户可见错误（Toast、ErrorState、内联 `setError`/`setNotice`）都必须经
+  `src/features/errors/localize.ts::localizeBackendError`：中文界面直出后端原文，
+  其它语言按稳定码映射六语，未知中文错误统一为 `error.backendGeneric`，
+  绝不把中文原样混进西语/日语/韩语界面。本次收口书库、详情 Sheet、设置页、
+  浏览器页、隐私自检、安全模式胶囊、Webtoon 布局与目录（PageToc）等裸错误点。
+- 后端稳定码继续扩表：备份（`backup-file-missing` / `backup-invalid-format` /
+  `backup-unsupported-schema` / `backup-integrity-failed` / `backup-too-large` /
+  `backup-restore-failed`）、在线（`online-url-invalid` /
+  `online-blocked-address` / `online-too-many-pages` / `online-fetch-failed`）、
+  更新（`update-unsupported-format`），全部进入六语字典。
+- 导入失败聚合时先逐条本地化 `item.message`，再拼 `import.itemFailed`，
+  避免把整句（含可能为 CJK 的本地路径）二次判为中文而退化成泛化提示。
+
 ### 6.4 文件关联、单实例与命令行直开
 
 - `bundle.fileAssociations` 注册 `.cbz` / `.zip`；Windows 安装器负责写入关联。

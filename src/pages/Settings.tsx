@@ -82,6 +82,7 @@ import ErrorState from "@/components/ErrorState";
 import { APP_VERSION, BUILD_COMMIT } from "@/lib/version";
 import PixelPet from "@/components/PixelPet";
 import { toast, toastErr } from "@/components/Toast";
+import { localizeBackendError } from "@/features/errors/localize";
 
 const DEFAULT_FORM: Settings = {
   theme: "system",
@@ -341,7 +342,9 @@ export default function SettingsPage() {
     } catch (e) {
       if (seq !== loadSeqRef.current) return;
       setLoadError(
-        typeof e === "string" ? e : translate("settings.errors.loadSettings"),
+        typeof e === "string"
+          ? localizeBackendError(e)
+          : translate("settings.errors.loadSettings"),
       );
       toastErr("get_settings", e);
     } finally {
@@ -390,7 +393,9 @@ export default function SettingsPage() {
     } catch (e) {
       if (seq !== dashSeqRef.current) return;
       setDashError(
-        typeof e === "string" ? e : translate("settings.errors.loadStats"),
+        typeof e === "string"
+          ? localizeBackendError(e)
+          : translate("settings.errors.loadStats"),
       );
     } finally {
       if (seq === dashSeqRef.current) setDashLoading(false);

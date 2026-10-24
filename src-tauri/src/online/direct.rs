@@ -143,7 +143,7 @@ impl DirectImageProvider {
         let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None, Some(url.as_str()))?;
         if !(200..300).contains(&resp.status) {
             return Err(BackendError::Network(format!(
-                "清单 HTTP {}：{}",
+                "清单 HTTP {}：{}（online-fetch-failed）",
                 resp.status,
                 redact_url_for_log(&resp.final_url)
             )));

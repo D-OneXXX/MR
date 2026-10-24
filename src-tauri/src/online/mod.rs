@@ -88,7 +88,7 @@ pub enum OnlineError {
     Proxy(String),
     #[error("请求头无效：{0}")]
     HeaderInvalid(String),
-    #[error("响应过大（上限 {0} 字节）")]
+    #[error("响应过大（上限 {0} 字节）（online-fetch-failed）")]
     TooLarge(usize),
 }
 
@@ -146,13 +146,13 @@ pub(crate) fn validate_host_literal(
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_blocked_ip(ip, allow_loopback) {
-            return Err("目标地址位于本机/私网/链路本地，已拒绝".to_string());
+            return Err("目标地址位于本机/私网/链路本地，已拒绝（online-blocked-address）".to_string());
         }
         return Ok(());
     }
     if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
         if !allow_loopback {
-            return Err("目标地址指向 localhost，已拒绝".to_string());
+            return Err("目标地址指向 localhost，已拒绝（online-blocked-address）".to_string());
         }
     }
     Ok(())
@@ -162,14 +162,21 @@ pub(crate) fn validate_host_literal(
 pub fn normalize_url(raw: &str) -> Result<url::Url, BackendError> {
     let raw = raw.trim();
     if raw.len() > 2048 {
-        return Err(BackendError::Msg("URL 过长（上限 2048 字节）".into()));
+        return Err(BackendError::Msg(
+            "URL 过长（上限 2048 字节）（online-url-invalid）".into(),
+        ));
     }
-    let mut u = url::Url::parse(raw).map_err(|e| BackendError::Msg(format!("URL 无效：{e}")))?;
+    let mut u = url::Url::parse(raw)
+        .map_err(|e| BackendError::Msg(format!("URL 无效：{e}（online-url-invalid）")))?;
     if !matches!(u.scheme(), "http" | "https") {
-        return Err(BackendError::Msg("仅支持 http/https URL".into()));
+        return Err(BackendError::Msg(
+            "仅支持 http/https URL（online-url-invalid）".into(),
+        ));
     }
     if !u.username().is_empty() || u.password().is_some() {
-        return Err(BackendError::Msg("URL 不能包含用户名或密码".into()));
+        return Err(BackendError::Msg(
+            "URL 不能包含用户名或密码（online-url-invalid）".into(),
+        ));
     }
     validate_host_literal(
         u.host_str().unwrap_or_default(),
@@ -198,10 +205,14 @@ pub fn normalize_page_urls(page_urls: &[String]) -> Result<Vec<PageRef>, Backend
         }
     }
     if pages.is_empty() {
-        return Err(BackendError::Msg("页面列表不能为空".into()));
+        return Err(BackendError::Msg(
+            "页面列表不能为空（online-url-invalid）".into(),
+        ));
     }
     if pages.len() > MAX_PAGES {
-        return Err(BackendError::Msg(format!("页面数量超过上限 {MAX_PAGES}")));
+        return Err(BackendError::Msg(format!(
+            "页面数量超过上限 {MAX_PAGES}（online-too-many-pages）"
+        )));
     }
     Ok(pages)
 }
@@ -269,7 +280,7 @@ pub fn resolve_with(
     let resp = http.get(url.as_str(), MANIFEST_MAX_BYTES, None, Some(url.as_str()))?;
     if !(200..300).contains(&resp.status) {
         return Err(BackendError::Network(format!(
-            "内容 HTTP {}：{}",
+            "内容 HTTP {}：{}（online-fetch-failed）",
             resp.status,
             redact_url_for_log(&resp.final_url)
         )));
@@ -523,20 +534,20 @@ mod tests {
         );
         assert_eq!(
             normalize_page_urls(&[]).unwrap_err().to_string(),
-            "页面列表不能为空"
+            "页面列表不能为空（online-url-invalid）"
         );
         assert_eq!(
             normalize_page_urls(&["file:///x".into()])
                 .unwrap_err()
                 .to_string(),
-            "第 1 页 URL 非法：仅支持 http/https URL"
+            "第 1 页 URL 非法：仅支持 http/https URL（online-url-invalid）"
         );
         let too_many: Vec<String> = (0..=MAX_PAGES)
             .map(|i| format!("http://x/{i}.jpg"))
             .collect();
         assert_eq!(
             normalize_page_urls(&too_many).unwrap_err().to_string(),
-            format!("页面数量超过上限 {MAX_PAGES}")
+            format!("页面数量超过上限 {MAX_PAGES}（online-too-many-pages）")
         );
     }
 

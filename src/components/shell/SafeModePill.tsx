@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { toast } from "@/components/Toast";
+import { localizeBackendError } from "@/features/errors/localize";
 import { cn } from "@/lib/utils";
 import { useSafeMode } from "@/features/safeMode/SafeModeContext";
 import { recordBreadcrumb } from "@/features/resilience";
@@ -28,9 +29,12 @@ export default function SafeModePill({
     } catch (error) {
       setBusy(false);
       toast(
-        typeof error === "string"
-          ? error
-          : t("safeMode.exitFailed", { detail: String(error) }),
+        t("safeMode.exitFailed", {
+          detail:
+            typeof error === "string"
+              ? localizeBackendError(error)
+              : t("common.unknown"),
+        }),
       );
     }
   };

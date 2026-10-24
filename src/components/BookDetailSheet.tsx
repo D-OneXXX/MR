@@ -17,6 +17,7 @@ import { api, type BookInfo, type HeatDay } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { sourceDisplay } from "@/lib/sourceDisplay";
 import { translate, useI18n } from "@/i18n";
+import { localizeBackendError } from "@/features/errors/localize";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -430,7 +431,9 @@ function SeriesSection({
         if (!alive) return;
         setFetched([]);
         setError(
-          typeof e === "string" ? e : translate("book.seriesErrorFallback"),
+          typeof e === "string"
+            ? localizeBackendError(e)
+            : translate("book.seriesErrorFallback"),
         );
         setLoading(false);
       },
@@ -565,7 +568,9 @@ function ActivitySection({
         if (!alive) return;
         setLog([]);
         setError(
-          typeof e === "string" ? e : translate("book.activityErrorFallback"),
+          typeof e === "string"
+            ? localizeBackendError(e)
+            : translate("book.activityErrorFallback"),
         );
         setLoading(false);
       },

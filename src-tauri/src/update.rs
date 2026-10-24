@@ -723,7 +723,9 @@ fn resolve_format(explicit: Option<&str>, url: &Url) -> Result<InstallerFormat, 
             "deb" => Ok(InstallerFormat::Deb),
             "rpm" => Ok(InstallerFormat::Rpm),
             "appimage" | "app-image" => Ok(InstallerFormat::AppImage),
-            _ => Err("不支持的安装包格式".to_string()),
+            _ => Err(
+                "不支持的安装包格式（update-unsupported-format）".to_string(),
+            ),
         };
     }
     let path = url.path().to_ascii_lowercase();
@@ -1526,7 +1528,11 @@ fn installer_script(path: &Path, format: &str, relaunch_exe: &Path) -> Result<St
         "nsis" => format!(
             "$p = Start-Process -FilePath {installer} -ArgumentList '/S' -Wait -PassThru"
         ),
-        _ => return Err("不支持的安装包格式".to_string()),
+        _ => {
+            return Err(
+                "不支持的安装包格式（update-unsupported-format）".to_string(),
+            )
+        }
     };
     // 先等应用释放文件句柄，再等待安装器结束，最后拉起新版本。
     Ok(format!(

@@ -96,7 +96,7 @@
   `(date, COALESCE(book_id,''))` 重建；`set_progress` 的页码更新与当日页数累加
   同事务提交，硬删/软删/重定位同样事务化，重定位改 id 前
   `PRAGMA defer_foreign_keys=ON`。单测覆盖迁移回填与孤儿清理、全局 NULL 唯一约束、
-  外键拒绝未知书、进度写入失败整体回滚、重定位同日合并。
+  外键拒绝未知书、进度写入失败整体回滚、重定位同日页数求和。
 - **缓存写入可观测（P1.10）**：render/online 缓存写失败统一计入 `cache_health`；
   首次失败 emit `cache-write-failed` 并六语 toast，诊断包 `cacheWriteFailures` 可见。
   更新安装前查询 `get_temp_free_bytes`，<256MB 明确提示，不直出 OS 错误。

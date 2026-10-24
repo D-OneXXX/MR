@@ -403,7 +403,7 @@ pub fn upsert_online_book(
 ///
 /// - 保留 `scroll_pct` / `updated_at` / `source_type` / `meta_json`，清 `removed`；
 /// - `current_page` 按新页数钳制（`MIN(current_page, page_count-1)`）；
-/// - 阅读历史随书迁移：同日冲突取 `MAX(existing, migrated)`，绝不丢既有记录；
+/// - 阅读历史随书迁移：同日冲突取 `SUM(existing, migrated)`，两段阅读都保留；
 /// - 过滤事件尽力迁移（唯一索引冲突忽略），不阻断主流程。
 pub fn relocate_book(
     conn: &Connection,
@@ -427,12 +427,13 @@ pub fn relocate_book(
         return Err(BackendError::Msg("书籍不存在".into()));
     }
     if old_id != new_id {
-        // 先合并进新 id（同日取 MAX），再删旧行；顺序不能反，否则丢历史。
+        // 先合并进新 id（同日求和），再删旧行；顺序不能反，否则丢历史。
+        // 两个 id 代表同一本实体书的两次登记，页数应相加而不是取最大值。
         tx.execute(
             "INSERT INTO reading_log(date, book_id, pages)
              SELECT date, ?2, pages FROM reading_log WHERE book_id=?1
              ON CONFLICT DO UPDATE
-                SET pages=MAX(reading_log.pages, excluded.pages)",
+                SET pages=reading_log.pages + excluded.pages",
             params![old_id, new_id],
         )?;
         tx.execute("DELETE FROM reading_log WHERE book_id=?1", params![old_id])?;
@@ -1463,8 +1464,8 @@ mod tests {
         assert_eq!(row.current_page, 4, "页数缩小时 current_page 必须被钳制");
         assert_eq!(
             reading_log_days(&conn, Some("new"), 7).unwrap(),
-            vec![(today_str(), 15)],
-            "同日冲突应合并为 MAX(existing, migrated)"
+            vec![(today_str(), 18)],
+            "同日冲突应合并为 SUM(existing, migrated)"
         );
         assert!(reading_log_days(&conn, Some("old"), 7).unwrap().is_empty());
     }

@@ -108,6 +108,8 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `sha256(oldPath)` 改为 `sha256(newPath)`，同步迁移 `reading_log.book_id` 与
   `online_filter_events`，保留 `current_page` / `scroll_pct` / `updated_at` /
   `source_type` / `meta_json`，并按新页数钳制页码。移动/改名文件后重导入不会产生重复书。
+  同日 `reading_log` 冲突按 `SUM` 合并：旧 id 与新 id 是同一实体书的两次登记，
+  两段阅读页数都必须保留（此前取 MAX 会丢掉较少的一段）。
 - 在线 `meta_json` 是 `StoredMeta`：`pages[]`、`filtered[]`、`filter_profile`、系列/下一话链路。
 - `PageRef` 可带 `anchor { channel, messageId, photoIndex, refreshBase }`。
 - `reading_log` 旧库迁移在单事务内完成；崩溃遗留的 `reading_log_legacy`

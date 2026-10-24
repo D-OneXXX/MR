@@ -27,6 +27,7 @@ fn select_env_proxy_raw(pairs: &[(String, String)]) -> Option<String> {
     None
 }
 
+#[cfg(any(windows, test))]
 fn select_proxy_server(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -79,6 +80,7 @@ fn normalize_proxy_value(raw: &str) -> Option<String> {
     })
 }
 
+#[cfg(any(windows, test))]
 fn proxy_from_system_settings(
     proxy_enable: Option<u32>,
     proxy_server: Option<&str>,
@@ -120,7 +122,7 @@ fn detect_system_proxy_blocking() -> Result<Option<String>, String> {
     #[cfg(target_os = "linux")]
     {
         // 环境变量未配置时：GNOME gsettings → KDE kioslaverc。
-        return Ok(proxy_from_desktop_settings());
+        Ok(proxy_from_desktop_settings())
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {

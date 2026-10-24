@@ -747,9 +747,9 @@ fn resolve_format(explicit: Option<&str>, url: &Url) -> Result<InstallerFormat, 
         // 未知制品误当 Windows 安装包，必须要求明确的 deb/rpm/AppImage。
         #[cfg(target_os = "linux")]
         {
-            return Err(
+            Err(
                 "Linux 更新包 URL 缺少可识别的 .deb/.rpm/.AppImage 后缀".to_string(),
-            );
+            )
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -1965,11 +1965,17 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_manifest_accepts_unsigned_loopback_and_reports_http_errors() {
+        // Linux 更新器只接受 deb/rpm/AppImage，测试制品必须随平台切换，
+        // 否则会在清单校验阶段提前失败，测不到回环 HTTP 分支。
+        #[cfg(target_os = "linux")]
+        let artifact_url = "http://127.0.0.1:9/MangaReader.AppImage";
+        #[cfg(not(target_os = "linux"))]
+        let artifact_url = "http://127.0.0.1:9/MangaReader.exe";
         let body = serde_json::json!({
             "version": "0.18.0",
             "notes": "mock server",
             "full": {
-                "url": "http://127.0.0.1:9/MangaReader.exe",
+                "url": artifact_url,
                 "size": 1024,
                 "sha256": sha('a'),
             }
@@ -2276,7 +2282,13 @@ mod tests {
         let rpm = Url::parse("https://example.com/MangaReader-0.15.0-x86_64.rpm").expect("url");
         let appimage =
             Url::parse("https://example.com/MangaReader_0.15.0_amd64.AppImage").expect("url");
+        #[cfg(not(target_os = "linux"))]
         assert_eq!(resolve_format(None, &exe).expect("nsis"), InstallerFormat::Nsis);
+        #[cfg(target_os = "linux")]
+        assert!(
+            resolve_format(None, &exe).is_err(),
+            "Linux 不得把 .exe 当作可安装的 NSIS 制品"
+        );
         assert_eq!(resolve_format(None, &msi).expect("msi"), InstallerFormat::Msi);
         #[cfg(not(target_os = "linux"))]
         assert_eq!(resolve_format(None, &bin).expect("nsis"), InstallerFormat::Nsis);

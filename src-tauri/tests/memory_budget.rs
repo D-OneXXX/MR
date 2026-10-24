@@ -115,6 +115,18 @@ fn two_hundred_pages_memory_growth_within_budget() {
 
     // 关闭书籍：页缓存清空后，进程内存应回落到基线 ±10MB（P0 内存验收第二段）。
     cache.clear_pages();
+    // glibc 默认保留已释放的 arena，RSS 不会像 Windows 分配器那样立即下降；
+    // 显式 trim 一次，测到的才是真正的页面释放，而不是分配器缓存。
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+        // SAFETY: malloc_trim(0) 是 glibc 的公开 API，只释放空闲堆页。
+        unsafe {
+            malloc_trim(0);
+        }
+    }
     std::thread::sleep(std::time::Duration::from_millis(300)); // 留给分配器归还页
     let closed = process_mb();
     let closed_delta = closed - before;

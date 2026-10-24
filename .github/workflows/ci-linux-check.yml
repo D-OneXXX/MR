@@ -50,6 +50,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Version gate
+        run: |
+          npm run version:check
+          npm run test:version
+
       - name: Typecheck and build frontend
         run: |
           npx tsc --noEmit

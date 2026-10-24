@@ -32,6 +32,9 @@ const ROOT = path.resolve(QA_ROOT, "..", "..");
 const ARTIFACT_ROOT = path.join(QA_ROOT, "artifacts", "current");
 const FIXTURE_ROOT = path.join(QA_ROOT, "fixtures", "library");
 const DATA_DIR = path.join(ARTIFACT_ROOT, "data");
+// 混沌套件单独重启一份干净应用：前面的压测/缓存/恢复回归会累积
+// WebView 进程状态，混沌再在同一个实例上冻结主线程容易偶发 CDP 超时。
+const CHAOS_DATA_DIR = path.join(ARTIFACT_ROOT, "data-chaos");
 const REPORTS_DIR = path.join(QA_ROOT, "reports");
 const KB_PATH = path.join(QA_ROOT, "qa-knowledge-base.json");
 const CDP_PORT = Number(process.env.QA_CDP_PORT || "9334");
@@ -196,13 +199,33 @@ async function main() {
           "架构宪法回归（路由兜底 / 存储清洗 / 快捷键隔离 / 超高条漫逻辑页 / 设置 5 分区与深链 / 后置 i18n）",
         run: runArchitectureSuite,
       },
-      // 混沌套件必须放在最后：它会故意冻结主线程并重建窗口，
-      // 放在中间会让后续套件继承到一个半冻结的应用状态。
-      { id: "chaos", title: "混沌、安全模式与恢复", run: runChaosSuite },
     ].filter((suite) => !ONLY || suite.id === ONLY);
     for (const suite of suites) {
       console.log(`[qa] running ${suite.id} — ${suite.title}`);
       await runOne(report, ctx, suite);
+    }
+
+    // 混沌套件最后在**全新应用实例 + 独立数据目录**上运行：它会冻结
+    // 主线程并重建窗口，既不能污染后续套件，也不应继承前面压测留下的
+    // 半僵死 WebView 状态（否则偶发 CDP Runtime.evaluate 超时）。
+    if (!ONLY || ONLY === "chaos") {
+      await ctx.close().catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      ctx = await startQaApp({
+        root: ROOT,
+        artifactDir: ARTIFACT_ROOT,
+        dataDir: CHAOS_DATA_DIR,
+        fixtures,
+        cdpPort: CDP_PORT,
+        telegramTestOrigin: onlineFixture.origin,
+      });
+      ctx.onlineFixture = onlineFixture;
+      console.log("[qa] running chaos — 混沌、安全模式与恢复（独立实例）");
+      await runOne(report, ctx, {
+        id: "chaos",
+        title: "混沌、安全模式与恢复",
+        run: runChaosSuite,
+      });
     }
   } catch (error) {
     fail(report, {
@@ -225,7 +248,7 @@ async function main() {
       await onlineFixture.close().catch(() => {});
     }
     if (!KEEP_DATA) {
-      for (const target of [DATA_DIR, FIXTURE_ROOT]) {
+      for (const target of [DATA_DIR, CHAOS_DATA_DIR, FIXTURE_ROOT]) {
         try {
           fs.rmSync(target, {
             recursive: true,

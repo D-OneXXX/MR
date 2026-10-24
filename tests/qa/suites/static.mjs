@@ -14,6 +14,45 @@ function walk(dir, out = []) {
 }
 
 /**
+ * 只提取 `steps:` 下的步骤文本（含 `run: |` 块），不把注释/on/job 级字段
+ * 当成步骤内容。用于发布门禁的“步骤真实存在”断言。
+ */
+function yamlStepTexts(source) {
+  const lines = source.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^\s*steps:\s*$/.test(line));
+  if (start < 0) return null;
+  let stepIndent = null;
+  const steps = [];
+  let current = null;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    const item = line.match(/^(\s*)-\s+(.*)$/);
+    if (item) {
+      const indent = item[1].length;
+      if (stepIndent === null) stepIndent = indent;
+      if (indent === stepIndent) {
+        if (current) steps.push(current.join("\n"));
+        current = [item[2]];
+        continue;
+      }
+    }
+    if (!current) continue;
+    const nonEmpty = line.match(/^(\s*)\S/);
+    if (
+      nonEmpty &&
+      nonEmpty[1].length < stepIndent &&
+      !line.trim().startsWith("#")
+    ) {
+      steps.push(current.join("\n"));
+      break;
+    }
+    current.push(line);
+  }
+  if (current) steps.push(current.join("\n"));
+  return steps;
+}
+
+/**
  * Remove Rust line/block comments while keeping string literals and newlines.
  * Comments may legitimately document "无 sidecar"; only executable code should
  * trip the sidecar guard.
@@ -714,6 +753,11 @@ export function checkReleaseSurface(root, report) {
   }
 
   const windowsWorkflow = read(".github/workflows/release-windows.yml");
+  const windowsSteps = yamlStepTexts(windowsWorkflow);
+  const windowsStepText = windowsSteps ? windowsSteps.join("\n") : "";
+  if (!windowsSteps || windowsSteps.length === 0) {
+    errors.push("release-windows.yml 未解析到 steps");
+  }
   for (const marker of [
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
@@ -721,11 +765,17 @@ export function checkReleaseSurface(root, report) {
     "tauri-apps/tauri-action@v1",
     "releaseDraft: false",
     "MR_BUILD_ORIGIN: official",
-    "windows-latest",
+    "npx tsc --noEmit",
+    "cargo test --lib",
+    "npm run build",
+    "tests/qa/run-qa.mjs",
   ]) {
-    if (!windowsWorkflow.includes(marker)) {
-      errors.push(`release-windows.yml 缺少 ${marker}`);
+    if (!windowsStepText.includes(marker)) {
+      errors.push(`release-windows.yml 的 steps 缺少 ${marker}`);
     }
+  }
+  if (!windowsWorkflow.includes("windows-latest")) {
+    errors.push("release-windows.yml 缺少 windows-latest runner");
   }
   // Windows 常规通道绝不被 -linux 标签触发。
   if (!windowsWorkflow.includes("contains(github.ref_name, '-linux')")) {
@@ -735,15 +785,31 @@ export function checkReleaseSurface(root, report) {
   }
 
   const linuxWorkflow = read(".github/workflows/release-linux-critical.yml");
+  const linuxSteps = yamlStepTexts(linuxWorkflow);
+  const linuxStepText = linuxSteps ? linuxSteps.join("\n") : "";
+  if (!linuxSteps || linuxSteps.length === 0) {
+    errors.push("release-linux-critical.yml 未解析到 steps");
+  }
   for (const marker of [
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-    "ubuntu-22.04",
-    "workflow_dispatch",
-    "v*-linux-sec*",
     "latest-linux-critical.json",
     "MR_BUILD_ORIGIN: official",
     "make-linux-critical-manifest.mjs",
+    "npx tsc --noEmit",
+    "cargo test --lib",
+    "npm run build",
+    "tests/qa/run-qa.mjs",
+    "--suite=static",
+  ]) {
+    if (!linuxStepText.includes(marker)) {
+      errors.push(`release-linux-critical.yml 的 steps 缺少 ${marker}`);
+    }
+  }
+  for (const marker of [
+    "ubuntu-22.04",
+    "workflow_dispatch",
+    "v*-linux-sec*",
   ]) {
     if (!linuxWorkflow.includes(marker)) {
       errors.push(`release-linux-critical.yml 缺少 ${marker}`);
@@ -762,6 +828,47 @@ export function checkReleaseSurface(root, report) {
       )
     ) {
       errors.push("tauri.linux.conf.json 的 updater 端点必须指向 latest-linux-critical.json");
+    }
+  }
+
+  // 常规 CI 必须覆盖 main 与 PR，且门禁步骤真实存在于 steps 内。
+  for (const [file, markers] of [
+    [
+      ".github/workflows/ci-linux-check.yml",
+      [
+        "cargo clippy",
+        "-D warnings",
+        "--test e2e_stage1",
+        "--test memory_budget",
+        "cargo audit",
+        "npm audit",
+      ],
+    ],
+    [
+      ".github/workflows/ci-windows-check.yml",
+      [
+        "npx tsc --noEmit",
+        "cargo test --lib",
+        "--test e2e_stage1",
+        "--test memory_budget",
+        "tests/qa/run-qa.mjs",
+        "npm audit",
+      ],
+    ],
+  ]) {
+    const source = read(file);
+    const steps = yamlStepTexts(source);
+    const body = steps ? steps.join("\n") : "";
+    if (!/branches:\s*\[[^\]]*main[^\]]*\]/.test(source)) {
+      errors.push(`${file} 的 push/PR 分支未覆盖 main`);
+    }
+    if (!steps || steps.length === 0) {
+      errors.push(`${file} 未解析到 steps`);
+    }
+    for (const marker of markers) {
+      if (!body.includes(marker)) {
+        errors.push(`${file} 的 steps 缺少 ${marker}`);
+      }
     }
   }
 
@@ -1672,6 +1779,27 @@ const ANTI_MOCK_AREAS = [
     definition: /fn\s+render_webtoon_tiles\s*\(/,
     symbol: "render_webtoon_tiles",
     testSymbols: ["render_webtoon_tiles"],
+  },
+  {
+    name: "进度事务",
+    file: path.join("src-tauri", "src", "db.rs"),
+    definition: /fn\s+set_progress\s*\(/,
+    symbol: "set_progress",
+    testSymbols: ["set_progress"],
+  },
+  {
+    name: "重定位历史",
+    file: path.join("src-tauri", "src", "db.rs"),
+    definition: /fn\s+relocate_book\s*\(/,
+    symbol: "relocate_book",
+    testSymbols: ["relocate_book"],
+  },
+  {
+    name: "NO_PROXY",
+    file: path.join("src-tauri", "src", "online", "http.rs"),
+    definition: /fn\s+no_proxy_matches\s*\(/,
+    symbol: "no_proxy_matches",
+    testSymbols: ["no_proxy_matches"],
   },
 ];
 

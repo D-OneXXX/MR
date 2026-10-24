@@ -186,7 +186,7 @@
 
 ## 8. 自动回归
 
-- [ ] `cd src-tauri && cargo test --lib` 全绿（Windows 318 项；Linux 另加 2 个 unix 用例）。
+- [ ] `cd src-tauri && cargo test --lib` 全绿（Windows 321 项；Linux 另加 2 个 unix 用例）。
 - [ ] `npx tsc --noEmit` 零错误。
 - [ ] `npm run test:version` 全绿。
 - [ ] `npm run version:check` 为 0.17.0。

@@ -10,8 +10,8 @@
   （visual / reader / online / cache / privacy / architecture / chaos 全绿；
   前两次全量运行出现已知 chaos/CDP 偶发超时，第三次全新隔离运行通过；
   Windows 发布工作流因此增加一次完整套件重试，仍失败则阻断发布）
-- Rust 单测：**314 passed**（Windows 宿主；Linux CI 另跑 2 个
-  `cfg(unix)` 用例 → 316：私有权限收紧、非 UTF-8 路径拒绝。新增：
+- Rust 单测：**321 passed**（Windows 宿主；Linux CI 另跑 2 个
+  `cfg(unix)` 用例 → 323：私有权限收紧、非 UTF-8 路径拒绝。新增：
   Shift_JIS 假名裁决解码、伪装包魔数嗅探、备份高 schema 前向兼容、
   启动 quick_check、DB 隔离恢复、删除锚定与恶意备份过滤、
   reading_log 外键迁移回填/孤儿清理/表达式唯一索引、进度写入失败回滚、
@@ -67,11 +67,11 @@
   `reading_log(date,book_id)` 主键、全局 `book_id=''`）并打包恢复，
   断言书/进度保留且全局 10 页 + 书 5 页合计 15 页不丢。
 - **P2/P3 静态清零**：构建基线监听 `.git/index`/refs/前后端源码；Webtoon
-  预解码失败/超时进入失败态且 `<img>` onError 可重试；暴躁点击签名加入
+  预解码显式失败进入失败态（8s 超时仍插入等待解码），`<img>` onError 可重试；暴躁点击签名加入
   testid/id/aria-label/title/text 与 DOM 路径兜底；发布工作流改为按 YAML
   steps 解析断言，CI 覆盖版本门禁、clippy、e2e/memory_budget 与审计；
   `fetch_manifest` 增加回环 mock server 单测（200 解析 + 503 拒绝）。
-  静态审计 backlog 归零；Rust 单测 318（Windows），Linux +2。
+  静态审计 backlog 归零；Rust 单测 321（Windows），Linux +2。
 - **UI/i18n 长尾（P2）**：书库计数单数键（1 book / 1 libro）、章节排序
   改用当前 locale、设置 MB 走 `Intl.NumberFormat`；Toast 上限 3 条并在
   批量操作条打开时上移；`index.html` 标题改中性 `MangaReader`（运行时
@@ -104,7 +104,7 @@
   同目录复制 + `fsync` + 原子改名（跨挂载点不再 EXDEV）；非 UTF-8
   书路径显式 `non-utf8-path` 拒绝，命令行非 UTF-8 参数只记日志。
   Linux 专属 `cfg` 代码仍需 `ci-linux-check.yml` 在 ubuntu-22.04 实际编译；
-  Windows 宿主已跑通 314 个单测与全量 QA。
+  Windows 宿主已跑通 321 个单测与全量 QA。
 - **应用级导入与并发守卫（P1.14/P2）**：`DropImportProvider` 挂路由之外，
   任意页面拖入压缩包都能入库；全局单飞锁阻止拖放/按钮/对话框重叠扫描，
   导入中两个按钮禁用。进度卡与失败聚合只有一份，多条失败追加

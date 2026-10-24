@@ -75,7 +75,9 @@ const KEEP_SCREENS = 5;
 /** 进度提交节流（沿用旧行为）。 */
 const PROGRESS_COMMIT_MS = 400;
 /** 预解码超时：超时也提交（宁可闪一下也不让页面卡死在空白）。 */
-const DECODE_TIMEOUT_MS = 2000;
+// 巨图 dataURL 在低配机/负载高时解码可能超过 2s；超时不是错误，
+// 仍允许插入让浏览器继续解码，只有显式 onerror 才进入失败态。
+const DECODE_TIMEOUT_MS = 8000;
 /** 后台预切：本地近前 3 页最优先，向前最多扫 10 页；在线源收紧。 */
 const PREFETCH_NEAR = 3;
 const PREFETCH_SWEEP = 10;
@@ -206,7 +208,7 @@ function predecode(
       img.onerror = null;
       resolve(ok);
     };
-    timer = window.setTimeout(() => done(false), timeoutMs);
+    timer = window.setTimeout(() => done(true), timeoutMs);
     img.onload = () => {
       if (typeof img.decode === "function") {
         img.decode().then(() => done(true), () => done(false));

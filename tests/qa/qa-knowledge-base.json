@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-24T18:34:29.697Z",
+  "updatedAt": "2026-10-25T03:10:00.000Z",
   "regressions": [
     {
       "id": "REG-WT-ANCHOR",
@@ -357,6 +357,14 @@
       "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
       "addedAt": "2026-10-23T19:42:55.283Z",
       "source": "qa-run"
+    },
+    {
+      "id": "REG-arch:ultra-tall-webtoon",
+      "testId": "arch:ultra-tall-webtoon",
+      "area": "architecture",
+      "trigger": "{\n  \"problems\": [\n    \"条漫只加载了 1 张切片，巨图未被切成多片渲染\"\n  ],\n  \"evidence\": {\n    \"bookId\": \"9f73f8d0b6b5d2b6581b1535fc2b78be09c437d4b0cbe08676ad57f94bf64ad8\",\n    \"title\": \"QA Ultra Tall Webtoon\",\n    \"layout\": [\n      {\n        \"index\": 0,\n        \"width\": 800,\n        \"height\": 21000\n      }\n    ],\n    \"layoutFirst\": {\n      \"index\": 0,\n      \"width\": 800,\n      \"height\": 21000\n    },\n    \"single\": {\n      \"width\": 312,\n      \"height\": 8192,\n      \"origWidth\": 800,\n      \"origHeight\": 21000\n    },\n    \"tiles\": [\n      {\n        \"tile\": 0,\n        \"ok\": true,\n        \"height\": 1909,\n        \"width\": 800,\n        \"error\": null\n      },\n      {\n        \"tile\": 1,\n        \"ok\": true,\n        \"height\": 1909,\n        \"width\": 800,\n        \"error\": null\n      }\n    ],\n    \"outOfRange\": \"rejected\",\n    \"ui\": {\n      \"maxTilesInDom\": 2,\n      \"distinctTileImages\": 1,\n      \"brokenImages\": 0\n    }\n  }\n}",
+      "addedAt": "2026-10-24T18:42:00.273Z",
+      "source": "qa-run"
     }
   ],
   "defects": [
@@ -621,6 +629,22 @@
       "fix": "按 general/network/storage/privacy/about 五分区重排；storage 保留 settings-tab-cache；胶囊 trigger 保持 whitespace-nowrap",
       "firstSeen": "2026-10-23T19-44-01-203Z",
       "lastSeen": "2026-10-23T19-44-01-203Z"
+    },
+    {
+      "id": "arch:ultra-tall-webtoon",
+      "testId": "arch:ultra-tall-webtoon",
+      "title": "超高条漫未按「先切后缩」渲染或单页高度未钳制",
+      "severity": "P1",
+      "status": "fixed",
+      "location": "src-tauri/src/pipeline.rs / src/components/Reader/Webtoon.tsx",
+      "trigger": "{\n  \"problems\": [\n    \"条漫只加载了 1 张切片，巨图未被切成多片渲染\"\n  ],\n  \"evidence\": {\n    \"bookId\": \"9f73f8d0b6b5d2b6581b1535fc2b78be09c437d4b0cbe08676ad57f94bf64ad8\",\n    \"title\": \"QA Ultra Tall Webtoon\",\n    \"layout\": [\n      {\n        \"index\": 0,\n        \"width\": 800,\n        \"height\": 21000\n      }\n    ],\n    \"layoutFirst\": {\n      \"index\": 0,\n      \"width\": 800,\n      \"height\": 21000\n    },\n    \"single\": {\n      \"width\": 312,\n      \"height\": 8192,\n      \"origWidth\": 800,\n      \"origHeight\": 21000\n    },\n    \"tiles\": [\n      {\n        \"tile\": 0,\n        \"ok\": true,\n        \"height\": 1909,\n        \"width\": 800,\n        \"error\": null\n      },\n      {\n        \"tile\": 1,\n        \"ok\": true,\n        \"height\": 1909,\n        \"width\": 800,\n        \"error\": null\n      }\n    ],\n    \"outOfRange\": \"rejected\",\n    \"ui\": {\n      \"maxTilesInDom\": 2,\n      \"distinctTileImages\": 1,\n      \"brokenImages\": 0\n    }\n  }\n}",
+      "expected": "源高 21000 切成多片（每片 ≤2048）、前端切片 naturalWidth>0、单页渲染高度 ≤8192",
+      "actual": "条漫只加载了 1 张切片，巨图未被切成多片渲染",
+      "rootCause": "切片未生效（仍整图直送 <img>）或单页路径缺少 MAX_SAFE_TEXTURE_H 钳制",
+      "fix": "预解码显式 onerror 才失败；8s 超时仍插入等待浏览器解码，避免负载下误标失败。architecture 27/27、全量 224/224 复跑通过",
+      "firstSeen": "2026-10-24T18-39-20-556Z",
+      "lastSeen": "2026-10-25T03:10:00.000Z",
+      "fixedAt": "2026-10-25T03:10:00.000Z"
     }
   ],
   "backlog": [

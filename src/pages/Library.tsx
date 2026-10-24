@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
@@ -45,6 +45,8 @@ import RelocateDialog from "@/components/library/RelocateDialog";
 
 const GROUP_KEY = "mr-library-group-series";
 const FILTER_KEY = "mr-library-source-filter";
+/** 书库渐进窗口：首屏 60 张，滚动/点击再追加，避免几千卡片同时挂载。 */
+const PAGE_SIZE = 60;
 
 interface ImportProgress {
   done: number;
@@ -107,6 +109,8 @@ export default function LibraryPage() {
   const [debounced, setDebounced] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
   // 详情 Sheet：保留书籍快照，列表刷新时用最新数据覆盖展示。
   const [selectedBook, setSelectedBook] = useState<BookInfo | null>(null);
@@ -229,6 +233,36 @@ export default function LibraryPage() {
       };
     });
   }, [visibleBooks, groupSeries, accessibleAllBooks]);
+
+  // 搜索 / 来源筛选 / 合集模式变化后回到首屏窗口。
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [debounced, sourceFilter, groupSeries, safeMode]);
+
+  const hasMore = displayBooks.length > visibleLimit;
+  const shownBooks = useMemo(
+    () => displayBooks.slice(0, visibleLimit),
+    [displayBooks, visibleLimit],
+  );
+
+  // 底部哨兵接近视口时自动追加一页；按钮仍保留为键盘/读屏的显式入口。
+  useEffect(() => {
+    if (!hasMore) return;
+    const node = loadMoreRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleLimit((limit) =>
+            Math.min(limit + PAGE_SIZE, displayBooks.length),
+          );
+        }
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, displayBooks.length, visibleLimit]);
 
   const checkedBooks = useMemo(
     () => visibleBooks.filter((book) => checkedIds.has(book.id)),
@@ -749,7 +783,7 @@ export default function LibraryPage() {
         ) : (
           <>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-              {displayBooks.map(({ book, seriesCount }) => (
+              {shownBooks.map(({ book, seriesCount }) => (
                 <BookCard
                   key={book.id}
                   book={book}
@@ -771,6 +805,25 @@ export default function LibraryPage() {
                 />
               ))}
             </div>
+            {hasMore && (
+              <div className="mt-6 flex justify-center">
+                <Button
+                  variant="pill"
+                  size="pill"
+                  onClick={() =>
+                    setVisibleLimit((limit) =>
+                      Math.min(limit + PAGE_SIZE, displayBooks.length),
+                    )
+                  }
+                >
+                  <Plus />
+                  {t("library.loadMore", {
+                    count: formatNumber(displayBooks.length - visibleLimit),
+                  })}
+                </Button>
+              </div>
+            )}
+            <div ref={loadMoreRef} className="h-px w-full" aria-hidden />
             {!selectMode && (
               <p className="mt-4 text-xs text-muted-foreground">
                 {t("library.cardHint")}

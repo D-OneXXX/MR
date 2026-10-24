@@ -46,13 +46,36 @@ export default function BookCard({
   const { t, formatNumber } = useI18n();
   const [cover, setCover] = useState<string | null>(null);
   const [coverLoading, setCoverLoading] = useState(true);
+  const [inView, setInView] = useState(false);
   const clickTimer = useRef<number>(0);
+  const cardRef = useRef<HTMLDivElement>(null);
   const isSeries = !!book.seriesId && (seriesCount ?? 1) > 1;
   const missing = book.missing;
 
   useEffect(() => () => window.clearTimeout(clickTimer.current), []);
 
+  // 封面缩略图只在卡片接近视口时才请求，避免大书库一次性打满 IPC + 解码。
   useEffect(() => {
+    const node = cardRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") {
+      setInView(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "320px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!inView) return;
     let alive = true;
     setCover(null);
     setCoverLoading(true);
@@ -71,7 +94,7 @@ export default function BookCard({
     return () => {
       alive = false;
     };
-  }, [book.id]);
+  }, [book.id, inView]);
 
   const pct =
     book.pageCount > 0
@@ -153,6 +176,7 @@ export default function BookCard({
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         "group relative flex cursor-pointer select-none flex-col rounded-2xl border border-border bg-card p-2 shadow-card transition-all duration-200 ease-out hover:-translate-y-1 hover:shadow-hard",
         checked && "ring-2 ring-primary ring-offset-2 ring-offset-background",

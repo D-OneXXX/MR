@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, UNIX_EPOCH};
 
 use crate::db::{self};
 use crate::pipeline;
@@ -36,17 +36,20 @@ pub(crate) fn err(e: impl ToString) -> String {
     e.to_string()
 }
 
-fn webtoon_ready(r: &db::BookRow) -> bool {
+/// 在线清单可能缺少 width/height（典型：Telegram 相册只给 CDN URL）。
+/// 条漫布局会在用户显式进入条漫时按页探测并回写尺寸，因此这里只要求
+/// 有页面；绝不因为缺尺寸就把整本书的条漫能力永久关死。
+fn webtoon_ready(r: &db::BookRow, stored: Option<&crate::online::StoredMeta>) -> bool {
     if r.source_type == "local" {
         return true;
     }
-    match serde_json::from_str::<crate::online::StoredMeta>(&r.meta_json) {
-        // 在线清单可能缺少 width/height（典型：Telegram 相册只给 CDN URL）。
-        // 条漫布局会在用户显式进入条漫时按页探测并回写尺寸，因此这里只要求
-        // 有页面；绝不因为缺尺寸就把整本书的条漫能力永久关死。
-        Ok(meta) => !meta.pages.is_empty(),
-        Err(e) => {
-            crate::logging::log_error("online_meta", &format!("书籍 {} 元数据损坏：{e}", r.id));
+    match stored {
+        Some(meta) => !meta.pages.is_empty(),
+        None => {
+            crate::logging::log_error(
+                "online_meta",
+                &format!("书籍 {} 元数据损坏", r.id),
+            );
             false
         }
     }
@@ -67,8 +70,9 @@ fn local_source_missing(r: &db::BookRow) -> bool {
 }
 
 fn to_book_info(r: db::BookRow) -> BookInfo {
-    let webtoon_ready = webtoon_ready(&r);
+    // meta_json 每次列表都会解析：只解析一次，供条漫能力与系列字段共用。
     let stored = serde_json::from_str::<crate::online::StoredMeta>(&r.meta_json).ok();
+    let webtoon_ready = webtoon_ready(&r, stored.as_ref());
     let missing = local_source_missing(&r);
     BookInfo {
         id: r.id,
@@ -370,19 +374,59 @@ fn title_for(path: &Path) -> String {
     }
 }
 
+/// 压缩包（单文件）的增量扫描指纹；目录不参与，避免漏掉嵌套变更。
+fn archive_stamp(path: &Path) -> Option<db::SourceStamp> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let modified = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some(db::SourceStamp {
+        mtime: modified.as_secs().min(i64::MAX as u64) as i64,
+        size: meta.len().min(i64::MAX as u64) as i64,
+    })
+}
+
 /// 扫描一本书：打开源 → 取页数 → upsert。
+///
+/// 已入库的压缩包若 mtime/字节数都未变，直接复用页数，不再解包；
+/// 目录始终全量扫描（嵌套文件变化不会可靠地反映在目录 mtime 上）。
 fn scan_single_book(conn: &rusqlite::Connection, path: &Path) -> Result<BookInfo, BackendError> {
     let path_str = path.to_string_lossy().to_string();
-    let src = source::open_source(path)?;
-    let count = src.page_count()? as u32;
-    if count == 0 {
-        return Err(BackendError::Msg("书中没有可读图片，跳过".into()));
-    }
     let id = db::book_id_for_path(&path_str);
-    let title = title_for(path);
-    db::upsert_book(conn, &id, &path_str, &title, count)?;
-    let row = db::get_book(conn, &id)?.ok_or_else(|| BackendError::Msg("入库后回读失败".into()))?;
-    Ok(to_book_info(row))
+    let stamp = archive_stamp(path);
+    if let (Some(stamp), Ok(Some(row))) = (stamp, db::get_book(conn, &id)) {
+        if row.source_type == "local"
+            && row.page_count > 0
+            && db::source_stamp(conn, &id)? == Some(stamp)
+        {
+            let title = title_for(path);
+            // 仍然 upsert：重复导入会刷新 updated_at 并恢复软删，只是跳过解包。
+            db::upsert_book(conn, &id, &path_str, &title, row.page_count)?;
+            return Ok(to_book_info(row));
+        }
+    }
+    let result = (|| {
+        let src = source::open_source(path)?;
+        let count = src.page_count()? as u32;
+        if count == 0 {
+            return Err(BackendError::Msg("书中没有可读图片，跳过".into()));
+        }
+        let title = title_for(path);
+        db::upsert_book(conn, &id, &path_str, &title, count)?;
+        if let Some(stamp) = stamp {
+            db::set_source_stamp(conn, &id, stamp)?;
+        } else {
+            db::clear_source_stamp(conn, &id)?;
+        }
+        db::get_book(conn, &id)?
+            .ok_or_else(|| BackendError::Msg("入库后回读失败".into()))
+    })();
+    if result.is_err() {
+        // 失败后不得保留旧指纹，否则文件回滚到旧 mtime/大小时会被误判为未变。
+        let _ = db::clear_source_stamp(conn, &id);
+    }
+    result.map(to_book_info)
 }
 
 /// 下载文件复用现有单本扫描/入库逻辑；非 zip/cbz 返回 None。
@@ -484,12 +528,11 @@ pub async fn scan_library(
 ) -> Result<ScanResult, String> {
     let db_path = state.db_path();
     let (books, errors) = blocking(move || blocking_scan(db_path, &path)).await?;
-    // 刷新后全量回读。
-    let list = state.db.with(|conn| {
-        db::list_books(conn, None)
-            .map(|rows| rows.into_iter().map(to_book_info).collect::<Vec<_>>())
-            .map_err(err)
-    })?;
+    // 刷新后全量回读；文件 stat / meta_json 解析放在 DB 锁外，避免阻塞阅读进度写入。
+    let rows = state
+        .db
+        .with(|conn| db::list_books(conn, None).map_err(err))?;
+    let list: Vec<BookInfo> = rows.into_iter().map(to_book_info).collect();
     Ok(ScanResult {
         added: books.len(),
         books: list,
@@ -710,11 +753,12 @@ pub async fn list_books(
     state: State<'_, Arc<AppState>>,
     query: Option<String>,
 ) -> Result<Vec<BookInfo>, String> {
-    state.db.with(|conn| {
-        db::list_books(conn, query.as_deref())
-            .map(|rows| rows.into_iter().map(to_book_info).collect())
-            .map_err(err)
-    })
+    // 只把 SQL 放在 DbSlot 锁内：逐本 symlink_metadata 与 meta_json 解析在锁外，
+    // 大书库列表不会拖住阅读器的高频 set_progress。
+    let rows = state
+        .db
+        .with(|conn| db::list_books(conn, query.as_deref()).map_err(err))?;
+    Ok(rows.into_iter().map(to_book_info).collect())
 }
 
 /// 单书查询（阅读器打开直达上次页，避免全量 `list_books`）。
@@ -3137,6 +3181,48 @@ mod tests {
             .unwrap();
         z.write_all(b"not-a-real-png").unwrap(); // 导入只数条目名，不解码
         z.finish().unwrap();
+    }
+
+    #[test]
+    fn unchanged_archive_skips_rescan_and_changed_file_reopens() {
+        use std::io::Write as _;
+
+        let dir = test_temp_dir("stamp");
+        let path = dir.join("incremental.cbz");
+        build_zip(&path);
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_schema(&conn).unwrap();
+
+        let first = scan_single_book(&conn, &path).unwrap();
+        assert_eq!(first.page_count, 1);
+
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        let original_modified = meta.modified().unwrap();
+        let len = meta.len() as usize;
+        // 同长度垃圾字节 + 恢复原 mtime：指纹不变，扫描必须跳过解包。
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&path)
+                .unwrap();
+            file.write_all(&vec![b'x'; len]).unwrap();
+            file.set_modified(original_modified).unwrap();
+        }
+        let second = scan_single_book(&conn, &path).expect("指纹未变时不得重新解包");
+        assert_eq!(second.page_count, 1);
+        assert_eq!(second.id, first.id);
+
+        // mtime 变化后必须重新打开；此时文件已是垃圾，应失败并清掉指纹。
+        {
+            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_modified(original_modified + std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        assert!(scan_single_book(&conn, &path).is_err());
+        assert_eq!(db::source_stamp(&conn, &first.id).unwrap(), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 2026-10-06 事故回归：拖入"装了多本书的文件夹"必须像旧 scan_library

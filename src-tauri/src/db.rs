@@ -78,6 +78,12 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
             source_type TEXT NOT NULL DEFAULT 'local',
             meta_json TEXT NOT NULL DEFAULT '{}'
         );
+        CREATE TABLE IF NOT EXISTS source_stats(
+            book_id TEXT PRIMARY KEY
+                REFERENCES books(id) ON DELETE CASCADE ON UPDATE CASCADE,
+            mtime INTEGER NOT NULL DEFAULT 0,
+            size INTEGER NOT NULL DEFAULT 0
+        );
         CREATE TABLE IF NOT EXISTS reading_log(
             date TEXT NOT NULL,
             book_id TEXT REFERENCES books(id) ON DELETE CASCADE,
@@ -133,10 +139,13 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
     migrate_reading_log(conn)?;
     migrate_book_columns(conn)?;
     migrate_reading_log_foreign_key(conn)?;
-    // 索引必须在旧表形态迁移完成后再建（旧 reading_log 可能还没有 book_id）。
+    // 索引必须在旧表形态迁移完成后再建（旧 reading_log 可能还没有 book_id，
+    // 旧 books 可能还没有 removed）。
     conn.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_log_book_date
-             ON reading_log(date, COALESCE(book_id, ''));",
+             ON reading_log(date, COALESCE(book_id, ''));
+         CREATE INDEX IF NOT EXISTS idx_books_list
+             ON books(removed, updated_at DESC);",
     )?;
     Ok(())
 }
@@ -447,6 +456,45 @@ pub fn get_book(conn: &Connection, id: &str) -> Result<Option<BookRow>, BackendE
     } else {
         Ok(None)
     }
+}
+
+/// 压缩包源文件的增量扫描指纹（修改时间秒 + 字节数）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceStamp {
+    pub mtime: i64,
+    pub size: i64,
+}
+
+pub fn source_stamp(conn: &Connection, book_id: &str) -> Result<Option<SourceStamp>, BackendError> {
+    let mut stmt = conn.prepare("SELECT mtime, size FROM source_stats WHERE book_id=?1")?;
+    let mut rows = stmt.query(params![book_id])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(SourceStamp {
+            mtime: row.get(0)?,
+            size: row.get(1)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn set_source_stamp(
+    conn: &Connection,
+    book_id: &str,
+    stamp: SourceStamp,
+) -> Result<(), BackendError> {
+    conn.execute(
+        "INSERT INTO source_stats(book_id, mtime, size) VALUES (?1, ?2, ?3)
+         ON CONFLICT(book_id) DO UPDATE SET
+            mtime=excluded.mtime, size=excluded.size",
+        params![book_id, stamp.mtime, stamp.size],
+    )?;
+    Ok(())
+}
+
+pub fn clear_source_stamp(conn: &Connection, book_id: &str) -> Result<(), BackendError> {
+    conn.execute("DELETE FROM source_stats WHERE book_id=?1", params![book_id])?;
+    Ok(())
 }
 
 /// 该书是否处于软删（移除）状态；不存在返回 false。

@@ -92,6 +92,7 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 | 表 | 主键 | 内容 |
 |---|---|---|
 | `books` | `id` | path、title、page_count、current_page、scroll_pct、source_type、meta_json |
+| `source_stats` | `book_id` | 压缩包增量扫描指纹（mtime/size），派生数据不进入备份 |
 | `reading_log` | `(date, COALESCE(book_id,''))` | 逐日阅读页数；`book_id` 可空外键 |
 | `settings` | `k` | 主题、缓存、目录、在线源等设置 |
 | `app_meta` | `k` | last_run_version 等内部标记 |
@@ -121,6 +122,16 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `remove_books`（软删/硬删）与 `relocate_book` 同样在单事务内完成。`relocate_book`
   改 `books.id` 前执行 `PRAGMA defer_foreign_keys=ON`，子行迁移完成后再统一校验外键。
 - 页数缩小用 `MIN(current_page, page_count-1)` 钳制。
+- **书库列表性能**：`books(removed, updated_at DESC)` 索引 `idx_books_list` 支撑
+  默认倒序列表；`list_books` / `scan_library` 只把 SQL 放在 `DbSlot` 锁内，
+  逐本 `symlink_metadata`、`meta_json` 解析与 `missing` 判定全部移到锁外，
+  避免大书库刷新拖住阅读器高频 `set_progress`。`meta_json` 每本只解析一次，
+  同时供条漫能力与系列字段复用。
+- **增量扫描指纹**：`source_stats(book_id REFERENCES books(id) ON DELETE CASCADE
+  ON UPDATE CASCADE, mtime, size)` 只记录压缩包单文件；重复导入时
+  mtime 与字节数都未变则直接复用 `page_count`，不再解包。目录始终全量扫描
+  （嵌套变更不会可靠反映到目录 mtime）；扫描失败会清掉旧指纹，文件回滚到旧
+  mtime/size 时不会被误判为未变。备份/恢复不携带该派生表。
 
 ## 6. 后端模块
 
@@ -507,6 +518,10 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
     顶栏状态胶囊的「上次连通性」改由浏览器地址栏解析结果（成功/失败）写入。
   - 书库导入入口唯一对：`[+ 导入文件夹]` `[+ 导入压缩包]`（顶栏）+ 整窗拖拽；
     空状态不再重复渲染第二组导入按钮。
+  - 书库渐进窗口：首屏最多 60 张卡，底部哨兵进入视口（600px 提前量）或点击
+    `library.loadMore` 按钮再追加 60 张；搜索/来源筛选/合集模式/安全模式变化时
+    重置窗口。`BookCard` 用 `IntersectionObserver`（320px 提前量）才请求
+    `get_thumbnail`，离屏卡片不占 IPC 与解码。
   - 前端不再调用的后端命令（保留注册、契约不变）：`test_online_connection`、
     `import_resolved_pages`、`resolve_online_batch`、`clear_thumbnail_cache`。
 - 书库失效态：`BookInfo.missing` 为 true 时书卡显示「文件位置已变更」胶囊，

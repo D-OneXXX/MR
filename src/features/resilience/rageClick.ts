@@ -22,6 +22,21 @@ let cooldownUntil = 0;
 let settleTimer: number | undefined;
 let progressObserver: MutationObserver | null = null;
 
+/** 无 id/label/testid 时用有限的 DOM 路径区分同标签按钮。 */
+function domPath(node: Element): string {
+  const parts: string[] = [];
+  let current: Element | null = node;
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    const parent: Element | null = current.parentElement;
+    const index = parent
+      ? Array.from(parent.children).indexOf(current)
+      : 0;
+    parts.unshift(`${current.tagName.toLowerCase()}:${index}`);
+    current = parent;
+  }
+  return parts.join(">");
+}
+
 function interactiveSignature(target: Element): string {
   const node =
     target.closest(
@@ -30,7 +45,19 @@ function interactiveSignature(target: Element): string {
   const tag = node.tagName.toLowerCase();
   const role = node.getAttribute("role") ?? "";
   const testId = node.getAttribute("data-testid") ?? "";
-  return `${tag}|${role}|${testId}`;
+  const id = node.id;
+  const label = (
+    node.getAttribute("aria-label") ??
+    node.getAttribute("title") ??
+    node.textContent ??
+    ""
+  )
+    .trim()
+    .slice(0, 40);
+  // 同一标签/角色的不同按钮不能只靠 tag 聚合：优先用稳定身份，
+  // 都没有时用 4 层 DOM 路径兜底。
+  const identity = testId || id || label;
+  return `${tag}|${role}|${testId}|${id}|${label}|${identity ? "" : domPath(node)}`;
 }
 
 function isIgnored(target: Element): boolean {
@@ -169,8 +196,7 @@ export function installRageClickDetector(): void {
       const anchor = clicks[0];
       const near =
         Math.hypot(point.x - anchor.x, point.y - anchor.y) <= MAX_DISTANCE;
-      const sameElement =
-        point.signature !== "|" && point.signature === anchor.signature;
+      const sameElement = point.signature === anchor.signature;
       if ((!near && !sameElement) || point.route !== anchor.route) {
         reset();
       }

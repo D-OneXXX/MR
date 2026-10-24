@@ -151,7 +151,9 @@ export class CdpPage {
     });
   }
 
-  async eval(expression, { timeout = 10_000 } = {}) {
+  // 主窗重建/安全模式切换后 WebView 可能短时间不响应；15s 只放宽
+  // 单次求值的等待，不改变任何断言内容。
+  async eval(expression, { timeout = 15_000 } = {}) {
     const result = await this.send(
       "Runtime.evaluate",
       {

@@ -259,6 +259,9 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 恢复：zip 条目数/大小/名称校验，缺 `manifest` 或路径穿越直接拒绝；`library.db`
   解压到系统临时目录，只读 `integrity_check`、必需表和列、manifest 计数全部通过后，
   才用 `ATTACH` + 单事务清空/复制核心表；失败 `ROLLBACK`，活库不动。
+- **原子导出**：`.mrbackup` 先写到目标同目录唯一隐藏临时文件，zip 完成后
+  `flush + sync_all`，再直接 `rename` 覆盖旧备份并 fsync 父目录；不再先删旧文件，
+  崩溃时最多留下临时文件，上一份可用备份始终存在。
 - **路径注入防线**：本地 `books.path` 必须绝对、存在，且为目录或 `.zip/.cbz`；
   命中系统根、系统目录、用户主目录/文档/桌面/下载等宽目录，或应用数据/缓存目录时，
   该行被跳过，写入 `skippedBooks` 报告（不回滚整包、不删除磁盘内容）。在线书 URL

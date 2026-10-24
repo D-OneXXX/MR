@@ -430,10 +430,15 @@ fn export_backup_blocking(
         snapshot.path(),
         preferences.as_deref(),
     )?;
-    if dest.exists() {
-        fs::remove_file(dest).map_err(|e| format!("替换旧备份失败：{e}"))?;
-    }
+    // 直接原子替换旧备份：先删旧文件会在两步之间留下“没有备份”的窗口，
+    // 崩溃时用户会失去上一份可用快照。同目录 rename 覆盖是原子操作。
     fs::rename(temp.path(), dest).map_err(|e| format!("写入备份文件失败：{e}"))?;
+    // 目录项落盘（Unix 有效；Windows 打开目录失败时忽略）。
+    if let Some(parent) = dest.parent() {
+        if let Ok(dir) = File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
 
     let bytes = fs::metadata(dest)
         .map_err(|e| format!("读取备份文件大小失败：{e}"))?
@@ -1462,6 +1467,34 @@ mod tests {
             export_backup_blocking(&db_path, &dir.join("huge.mrbackup"), Some(&huge), "0.15.0")
                 .unwrap_err();
         assert!(err.contains("64 KiB"), "{err}");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_replaces_existing_backup_without_leaving_temp_files() {
+        let dir = temp_dir("atomic-export");
+        let db_path = seeded_db(&dir);
+        let backup = dir.join("snapshot.mrbackup");
+
+        export_backup_blocking(&db_path, &backup, None, "0.15.0").unwrap();
+        let first = fs::read(&backup).unwrap();
+        export_backup_blocking(&db_path, &backup, None, "0.15.1").unwrap();
+        assert!(backup.is_file(), "原子覆盖后备份仍必须存在");
+        assert!(!fs::read(&backup).unwrap().is_empty());
+        assert_ne!(first, fs::read(&backup).unwrap(), "第二次导出应替换内容");
+
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".mr-backup-")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "不得残留临时备份：{leftovers:?}");
 
         fs::remove_dir_all(&dir).ok();
     }

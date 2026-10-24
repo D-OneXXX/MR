@@ -59,6 +59,9 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **备份原子覆盖（P2）**：导出到已存在的 `.mrbackup` 时不再先删旧文件，
+  而是同目录临时文件 `sync_all` 后直接 rename 覆盖并 fsync 父目录；
+  回归 `export_replaces_existing_backup_without_leaving_temp_files` 覆盖替换与无残留。
 - **schema 版本与 WAL 收尾（P2）**：`PRAGMA user_version` 记录
   `db::SCHEMA_VERSION=1`，只增不减；应用退出时 `wal_checkpoint(TRUNCATE)`
   合并并截断 WAL。回归 `schema_version_is_recorded_and_wal_checkpoint_truncates`

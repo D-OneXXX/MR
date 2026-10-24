@@ -245,6 +245,13 @@ const zhCN = {
   "settings.about.buildOriginOfficial": "Official Release",
   "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
   "settings.about.nonCommercial": "非商业授权 (Non-Commercial Only)",
+  "settings.backup.skippedTitle": "以下本地书未恢复",
+  "settings.backup.skippedHint":
+    "源路径不存在、不是可读漫画，或命中系统/用户敏感目录。记录未写入书库，磁盘内容未被删除。",
+  "settings.backup.skippedReasonMissing": "路径不存在或不可用",
+  "settings.backup.skippedReasonNotBook": "不是可读的漫画目录/压缩包",
+  "settings.backup.skippedReasonUnsafe": "命中系统或用户敏感目录",
+  "settings.backup.skippedCount": "有 {count} 本本地书未恢复",
   "settings.backup.forwardSchema": "备份来自更高版本（{version}）：已按兼容模式恢复核心书库与进度，高版本新增配置项被忽略",
 } as const;
 
@@ -496,6 +503,13 @@ const zhTW: SettingsMessages = {
   "settings.about.buildOriginOfficial": "Official Release",
   "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
   "settings.about.nonCommercial": "非商業授權 (Non-Commercial Only)",
+  "settings.backup.skippedTitle": "以下本機書籍未還原",
+  "settings.backup.skippedHint":
+    "來源路徑不存在、不是可讀漫畫，或命中系統/使用者敏感目錄。紀錄未寫入書庫，磁碟內容未被刪除。",
+  "settings.backup.skippedReasonMissing": "路徑不存在或無法使用",
+  "settings.backup.skippedReasonNotBook": "不是可讀的漫畫資料夾/壓縮檔",
+  "settings.backup.skippedReasonUnsafe": "命中系統或使用者敏感目錄",
+  "settings.backup.skippedCount": "有 {count} 本本機書籍未還原",
   "settings.backup.forwardSchema": "備份來自更高版本（{version}）：已按相容模式還原核心書庫與進度，高版本新增設定項已忽略",
 };
 
@@ -748,6 +762,15 @@ const en: SettingsMessages = {
   "settings.about.buildOriginOfficial": "Official Release",
   "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
   "settings.about.nonCommercial": "Non-Commercial Only",
+  "settings.backup.skippedTitle": "Some local books were not restored",
+  "settings.backup.skippedHint":
+    "The source path is missing, not a readable manga, or points at a sensitive system/user folder. Nothing was added to the library and nothing on disk was deleted.",
+  "settings.backup.skippedReasonMissing": "Path missing or unavailable",
+  "settings.backup.skippedReasonNotBook":
+    "Not a readable manga folder/archive",
+  "settings.backup.skippedReasonUnsafe":
+    "Points at a sensitive system/user folder",
+  "settings.backup.skippedCount": "{count} local books were not restored",
   "settings.backup.forwardSchema": "Backup was exported by a newer version ({version}). Core library and progress were restored in compatibility mode; settings added in newer versions were ignored.",
 };
 
@@ -1010,6 +1033,16 @@ const es: SettingsMessages = {
   "settings.about.buildOriginOfficial": "Official Release",
   "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
   "settings.about.nonCommercial": "Solo no comercial (Non-Commercial Only)",
+  "settings.backup.skippedTitle": "Algunos libros locales no se restauraron",
+  "settings.backup.skippedHint":
+    "La ruta de origen no existe, no es un manga legible o apunta a una carpeta sensible del sistema/usuario. No se añadió nada a la biblioteca ni se borró nada del disco.",
+  "settings.backup.skippedReasonMissing": "Ruta inexistente o no disponible",
+  "settings.backup.skippedReasonNotBook":
+    "No es una carpeta/archivo de manga legible",
+  "settings.backup.skippedReasonUnsafe":
+    "Apunta a una carpeta sensible del sistema/usuario",
+  "settings.backup.skippedCount":
+    "No se restauraron {count} libros locales",
   "settings.backup.forwardSchema": "La copia procede de una versión más reciente ({version}). La biblioteca y el progreso esenciales se restauraron en modo de compatibilidad; se ignoraron las opciones añadidas en versiones más recientes.",
 };
 
@@ -1273,6 +1306,16 @@ const ja: SettingsMessages = {
   "settings.about.buildOriginOfficial": "Official Release",
   "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
   "settings.about.nonCommercial": "非商用ライセンス (Non-Commercial Only)",
+  "settings.backup.skippedTitle": "一部のローカル書籍を復元できませんでした",
+  "settings.backup.skippedHint":
+    "元のパスが存在しない、読める漫画ではない、またはシステム/ユーザーの重要なフォルダーを指しています。書庫には追加せず、ディスク上の内容も削除していません。",
+  "settings.backup.skippedReasonMissing": "パスが存在しないか使用できません",
+  "settings.backup.skippedReasonNotBook":
+    "読み取り可能な漫画フォルダー/アーカイブではありません",
+  "settings.backup.skippedReasonUnsafe":
+    "システム/ユーザーの重要なフォルダーを指しています",
+  "settings.backup.skippedCount":
+    "{count} 冊のローカル書籍を復元できませんでした",
   "settings.backup.forwardSchema": "新しいバージョン（{version}）で書き出されたバックアップです。互換モードで中核のライブラリと進捗を復元し、新バージョンで追加された設定は無視しました。",
 };
 
@@ -1531,6 +1574,16 @@ const ko: SettingsMessages = {
   "settings.about.buildOriginOfficial": "Official Release",
   "settings.about.buildOriginCommunity": "Community Modified Build (Non-Commercial)",
   "settings.about.nonCommercial": "비상업 라이선스 (Non-Commercial Only)",
+  "settings.backup.skippedTitle": "일부 로컬 책을 복원하지 못했습니다",
+  "settings.backup.skippedHint":
+    "원본 경로가 없거나 읽을 수 있는 만화가 아니거나 시스템/사용자 중요 폴더를 가리킵니다. 라이브러리에 추가하지 않았고 디스크 내용도 삭제하지 않았습니다.",
+  "settings.backup.skippedReasonMissing": "경로가 없거나 사용할 수 없음",
+  "settings.backup.skippedReasonNotBook":
+    "읽을 수 있는 만화 폴더/압축 파일이 아님",
+  "settings.backup.skippedReasonUnsafe":
+    "시스템/사용자 중요 폴더를 가리킴",
+  "settings.backup.skippedCount":
+    "로컬 책 {count}권을 복원하지 못했습니다",
   "settings.backup.forwardSchema": "더 최신 버전({version})에서 내보낸 백업입니다. 호환 모드로 핵심 라이브러리와 진행 상황을 복원했으며, 최신 버전에서 추가된 설정은 무시했습니다.",
 };
 

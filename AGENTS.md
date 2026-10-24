@@ -205,9 +205,14 @@
 - **失效路径无损重定位**：只有本地源 `NotFound` 才标记 `missing`；重定位在单事务内
   迁移 `id=sha256(newPath)`、`reading_log` 与过滤事件，保留 `current_page` /
   `scroll_pct` / 阅读统计；绝不因文件移动而删记录或重置进度。
-- **本地备份/恢复**：`.mrbackup` 只含净化后的 SQLite 快照（书库/进度/统计/设置/
-  过滤规则）与白名单前端偏好；**绝不包含**图片缓存、`online_headers`、Cookie、
-  `online_filter_events` 或内部版本标记。恢复前必须完整性/计数校验，失败不得改活库。
+- **本地备份/恢复**：`.mrbackup` 只含净化后的 SQLite 快照（书库/进度/统计/设置
+  白名单/过滤规则）与白名单前端偏好；**绝不包含**图片缓存、`online_headers`、
+  `online_proxy`、`experimental_online`、Cookie、`online_filter_events` 或内部版本标记。
+  恢复前必须完整性/计数校验；本地 `books.path` 必须是存在且安全的目录/压缩包，
+  无效行跳过并报告，失败不得改活库。
+- **删除源文件锚定**：`remove_books(delete_source_files=true)` 只允许删除压缩包或
+  宽目录下的实际书目录；系统根、系统目录、用户主目录/文档/桌面/下载等目录本身、
+  应用数据/缓存目录一律拒绝，绝不因伪造备份路径误删用户数据。
 
 ---
 

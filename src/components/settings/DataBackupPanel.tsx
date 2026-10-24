@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, Download, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, Archive, Download, Loader2, Upload } from "lucide-react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { useI18n, type Locale } from "@/i18n";
+import { useI18n, type Locale, type MessageKey } from "@/i18n";
 import { useTheme } from "@/features/theme/ThemeProvider";
 import { useWorkspace } from "@/features/workspace/WorkspaceContext";
 import {
@@ -12,7 +12,10 @@ import { toast, toastErr } from "@/components/Toast";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/settings/SettingsSection";
-import { backupApi } from "@/features/backup/api";
+import {
+  backupApi,
+  type SkippedBackupBook,
+} from "@/features/backup/api";
 import {
   applyBackupPreferences,
   captureBackupPreferences,
@@ -26,6 +29,13 @@ interface DataBackupPanelProps {
 type BusyState = "export" | "restore" | null;
 
 const BACKUP_EXTENSIONS = ["mrbackup", "zip"];
+
+const SKIP_REASON_KEYS: Record<string, MessageKey> = {
+  "path-relative": "settings.backup.skippedReasonMissing",
+  "path-missing": "settings.backup.skippedReasonMissing",
+  "path-not-book": "settings.backup.skippedReasonNotBook",
+  "path-unsafe": "settings.backup.skippedReasonUnsafe",
+};
 
 /** 本地日期文件名：MangaReader-backup-YYYY-MM-DD.mrbackup。 */
 function backupFileName(): string {
@@ -70,6 +80,7 @@ export default function DataBackupPanel({ onRestored }: DataBackupPanelProps) {
   const { tabs, closeTab } = useWorkspace();
   const [busy, setBusy] = useState<BusyState>(null);
   const [confirmPath, setConfirmPath] = useState<string | null>(null);
+  const [lastSkipped, setLastSkipped] = useState<SkippedBackupBook[]>([]);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -141,8 +152,11 @@ export default function DataBackupPanel({ onRestored }: DataBackupPanelProps) {
   const runRestore = async (path: string) => {
     if (busy) return;
     setBusy("restore");
+    setLastSkipped([]);
     try {
       const result = await backupApi.importBackup(path);
+      const skipped = result.skippedBooks ?? [];
+      setLastSkipped(skipped);
 
       // 1) 偏好：白名单写回 + sanitize，随后即时应用主题/语言。
       const applied = applyBackupPreferences(result.preferencesJson);
@@ -172,6 +186,13 @@ export default function DataBackupPanel({ onRestored }: DataBackupPanelProps) {
       );
       if (result.preferencesJson) {
         toast(t("settings.backup.applied"));
+      }
+      if (skipped.length > 0) {
+        toast(
+          t("settings.backup.skippedCount", {
+            count: formatNumber(skipped.length),
+          }),
+        );
       }
       // 前向兼容恢复（Windows 主线高版本导出的备份）：只提取了核心
       // 书库/进度/统计/规则，高版本新增的未知字段与表已按兼容模式丢弃。
@@ -236,6 +257,40 @@ export default function DataBackupPanel({ onRestored }: DataBackupPanelProps) {
           {t("settings.backup.note")}
         </p>
       </SettingsSection>
+
+      {lastSkipped.length > 0 ? (
+        <div className="rounded-2xl border border-warning/40 bg-warning/10 p-4 shadow-hard-sm">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-foreground">
+                {t("settings.backup.skippedTitle")}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {t("settings.backup.skippedHint")}
+              </p>
+            </div>
+          </div>
+          <ul className="mt-3 max-h-52 space-y-1.5 overflow-y-auto pr-1">
+            {lastSkipped.map((book) => (
+              <li
+                key={book.id}
+                className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border bg-card/80 px-3 py-2"
+              >
+                <span className="min-w-0 flex-1 truncate text-xs font-semibold" title={book.title}>
+                  {book.title}
+                </span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {t(
+                    SKIP_REASON_KEYS[book.reason] ??
+                      "settings.backup.skippedReasonMissing",
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {confirmPath ? (
         <ConfirmDialog

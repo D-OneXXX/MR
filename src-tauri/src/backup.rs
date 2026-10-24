@@ -45,6 +45,19 @@ const EXCLUDED_ASSETS: &[&str] = &[
     "online_headers",
     "online_filter_events",
     "app_meta",
+    "unapproved_settings",
+];
+
+/// 允许随备份迁移的 SQLite settings 白名单。
+///
+/// 网络代理、在线实验开关、并发与请求头属于“当前设备环境/凭据”，
+/// 不随备份迁移，避免恶意备份把未审计的网络配置注入新设备。
+const BACKUP_SETTING_KEYS: &[&str] = &[
+    "theme",
+    "cache_budget_mb",
+    "disk_cache_budget_mb",
+    "library_dir",
+    "experimental_webtoon",
 ];
 
 /// 恢复时必须存在且会被复制的表。
@@ -115,6 +128,15 @@ pub struct BackupExportResult {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedBook {
+    pub id: String,
+    pub title: String,
+    /// 稳定原因码：path-relative / path-missing / path-not-book / path-unsafe。
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRestoreResult {
@@ -125,10 +147,18 @@ pub struct BackupRestoreResult {
     pub preferences_json: Option<String>,
     pub created_at: Option<String>,
     pub app_version: Option<String>,
+    /// 因路径不存在/不是书源/命中敏感目录而跳过的本地书（不阻断整包恢复）。
+    #[serde(default)]
+    pub skipped_books: Vec<SkippedBook>,
     /// 前向兼容标记：备份 manifest 的 schema 高于当前程序时记录其值，
     /// 前端据此提示「已按兼容模式提取核心数据」。同版本恢复时为 None。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forward_schema: Option<u32>,
+}
+
+struct ValidatedBackup {
+    allowed_books: Vec<String>,
+    skipped_books: Vec<SkippedBook>,
 }
 
 /// `manifest.json`（格式固定，schema=1）。
@@ -333,10 +363,21 @@ fn normalize_preferences(raw: Option<&str>) -> Result<Option<String>, String> {
     Ok(Some(pretty))
 }
 
+fn quoted_setting_keys() -> String {
+    BACKUP_SETTING_KEYS
+        .iter()
+        .map(|key| format!("'{key}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn sanitize_snapshot(conn: &Connection) -> Result<(), String> {
     if table_exists(conn, "settings")? {
-        conn.execute("DELETE FROM settings WHERE k='online_headers'", [])
-            .map_err(|e| format!("净化备份设置失败：{e}"))?;
+        conn.execute(
+            &format!("DELETE FROM settings WHERE k NOT IN ({})", quoted_setting_keys()),
+            [],
+        )
+        .map_err(|e| format!("净化备份设置失败：{e}"))?;
     }
     if table_exists(conn, "online_filter_events")? {
         conn.execute("DELETE FROM online_filter_events", [])
@@ -497,32 +538,41 @@ fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestor
     drop(archive);
 
     // 校验全部通过之前绝不触碰活库。
-    let counts = validate_restored_db(extracted.path(), &manifest)?;
-    apply_restore(db_path, extracted.path())?;
+    let validated = validate_restored_db(extracted.path(), &manifest)?;
+    apply_restore(db_path, extracted.path(), &validated.allowed_books)?;
+    let restored_counts = count_live_core_rows(db_path)?;
 
     let created_at = (!manifest.created_at.trim().is_empty()).then_some(manifest.created_at);
     let app_version = (!manifest.app_version.trim().is_empty()).then_some(manifest.app_version);
     crate::logging::log_error(
         "backup",
         &format!(
-            "本地备份已恢复：books={} readingDays={} rules={} profiles={} preferences={}",
-            counts.books,
-            counts.reading_days,
-            counts.rules,
-            counts.profiles,
+            "本地备份已恢复：books={} readingDays={} rules={} profiles={} skippedBooks={} preferences={}",
+            restored_counts.books,
+            restored_counts.reading_days,
+            restored_counts.rules,
+            restored_counts.profiles,
+            validated.skipped_books.len(),
             preferences_json.is_some()
         ),
     );
     Ok(BackupRestoreResult {
-        books: counts.books,
-        reading_days: counts.reading_days,
-        rules: counts.rules,
-        profiles: counts.profiles,
+        books: restored_counts.books,
+        reading_days: restored_counts.reading_days,
+        rules: restored_counts.rules,
+        profiles: restored_counts.profiles,
         preferences_json,
         created_at,
         app_version,
+        skipped_books: validated.skipped_books,
         forward_schema,
     })
+}
+
+fn count_live_core_rows(db_path: &Path) -> Result<BackupCounts, String> {
+    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("打开恢复后的书库失败：{e}"))?;
+    count_core_rows(&conn)
 }
 
 fn read_entry_limited(
@@ -588,7 +638,7 @@ fn extract_db_entry(
     Ok(())
 }
 
-fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<BackupCounts, String> {
+fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<ValidatedBackup, String> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("打开备份数据库失败：{e}"))?;
     let integrity: String = conn
@@ -612,10 +662,62 @@ fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<Backup
     if counts != manifest.counts {
         return Err("备份清单计数与数据库不一致".into());
     }
-    Ok(counts)
+
+    // 本地书路径逐行校验：必须存在、是目录/.zip/.cbz，且不能命中宽目录。
+    // 在线书（URL 路径）不参与本地文件校验；无效本地书跳过而不是整包失败。
+    let mut allowed_books = Vec::new();
+    let mut skipped_books = Vec::new();
+    let mut stmt = conn
+        .prepare("SELECT id, title, path, source_type FROM books ORDER BY id")
+        .map_err(|e| format!("读取备份书籍失败：{e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| format!("读取备份书籍失败：{e}"))?;
+    for row in rows {
+        let (id, title, path, source_type) = row.map_err(|e| format!("读取备份书籍失败：{e}"))?;
+        if source_type != "local" {
+            allowed_books.push(id);
+            continue;
+        }
+        let path_buf = PathBuf::from(&path);
+        let reason = if !path_buf.is_absolute() {
+            Some("path-relative")
+        } else if !path_buf.exists() {
+            Some("path-missing")
+        } else if path_buf.is_file() && !crate::source::is_archive_path(&path_buf) {
+            Some("path-not-book")
+        } else if !crate::commands::is_safe_library_source_path(&path_buf) {
+            Some("path-unsafe")
+        } else {
+            None
+        };
+        match reason {
+            Some(reason) => skipped_books.push(SkippedBook {
+                id,
+                title,
+                reason: reason.to_string(),
+            }),
+            None => allowed_books.push(id),
+        }
+    }
+    Ok(ValidatedBackup {
+        allowed_books,
+        skipped_books,
+    })
 }
 
-fn apply_restore(db_path: &Path, backup_db: &Path) -> Result<(), String> {
+fn apply_restore(
+    db_path: &Path,
+    backup_db: &Path,
+    allowed_books: &[String],
+) -> Result<(), String> {
     let backup = backup_db
         .to_str()
         .ok_or_else(|| "备份临时路径不是 UTF-8".to_string())?;
@@ -623,7 +725,7 @@ fn apply_restore(db_path: &Path, backup_db: &Path) -> Result<(), String> {
     let conn = db::open(db_path).map_err(|e| format!("打开书库失败：{e}"))?;
     conn.execute("ATTACH DATABASE ?1 AS backup_db", params![backup])
         .map_err(|e| format!("挂载备份数据库失败：{e}"))?;
-    let applied = copy_from_backup(&conn);
+    let applied = copy_from_backup(&conn, allowed_books);
     let detached = conn
         .execute("DETACH DATABASE backup_db", [])
         .map_err(|e| format!("卸载备份数据库失败：{e}"));
@@ -634,10 +736,10 @@ fn apply_restore(db_path: &Path, backup_db: &Path) -> Result<(), String> {
     }
 }
 
-fn copy_from_backup(conn: &Connection) -> Result<(), String> {
+fn copy_from_backup(conn: &Connection, allowed_books: &[String]) -> Result<(), String> {
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("开始恢复事务失败：{e}"))?;
-    match copy_all_tables(conn) {
+    match copy_all_tables(conn, allowed_books) {
         Ok(()) => match conn.execute_batch("COMMIT") {
             Ok(()) => Ok(()),
             Err(error) => {
@@ -652,20 +754,47 @@ fn copy_from_backup(conn: &Connection) -> Result<(), String> {
     }
 }
 
-fn copy_all_tables(conn: &Connection) -> Result<(), String> {
-    let mut sql = String::from(
+fn copy_all_tables(conn: &Connection, allowed_books: &[String]) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS restore_allowed_books(id TEXT PRIMARY KEY);
+         DELETE FROM restore_allowed_books;",
+    )
+    .map_err(|e| format!("准备恢复白名单失败：{e}"))?;
+    {
+        let mut stmt = conn
+            .prepare("INSERT OR IGNORE INTO restore_allowed_books(id) VALUES (?1)")
+            .map_err(|e| format!("准备恢复白名单失败：{e}"))?;
+        for id in allowed_books {
+            stmt.execute(params![id])
+                .map_err(|e| format!("写入恢复白名单失败：{e}"))?;
+        }
+    }
+
+    let keys = quoted_setting_keys();
+    let mut sql = format!(
         "DELETE FROM online_filter_events;
          DELETE FROM online_filter_rules;
          DELETE FROM online_filter_profiles;
          DELETE FROM reading_log;
          DELETE FROM books;
-         DELETE FROM settings WHERE k <> 'online_headers';
+         DELETE FROM settings WHERE k IN ({keys});
          INSERT INTO settings(k, v)
-            SELECT k, v FROM backup_db.settings WHERE k <> 'online_headers';",
+            SELECT k, v FROM backup_db.settings WHERE k IN ({keys});"
     );
-    sql.push_str(&copy_sql("books", BOOK_COLUMNS));
-    sql.push_str(&copy_sql("reading_log", READING_LOG_COLUMNS));
-    sql.push_str(&copy_sql("online_filter_profiles", PROFILE_COLUMNS));
+    sql.push_str(&copy_sql_where(
+        "books",
+        BOOK_COLUMNS,
+        "id IN (SELECT id FROM restore_allowed_books)",
+    ));
+    sql.push_str(&copy_sql_where(
+        "reading_log",
+        READING_LOG_COLUMNS,
+        "book_id='' OR book_id IN (SELECT id FROM restore_allowed_books)",
+    ));
+    sql.push_str(&copy_sql(
+        "online_filter_profiles",
+        PROFILE_COLUMNS,
+    ));
     sql.push_str(&copy_sql("online_filter_rules", RULE_COLUMNS));
     conn.execute_batch(&sql)
         .map_err(|e| format!("写入恢复数据失败：{e}"))?;
@@ -676,6 +805,13 @@ fn copy_all_tables(conn: &Connection) -> Result<(), String> {
 fn copy_sql(table: &str, columns: &[&str]) -> String {
     let cols = columns.join(", ");
     format!("INSERT INTO {table}({cols}) SELECT {cols} FROM backup_db.{table};\n")
+}
+
+fn copy_sql_where(table: &str, columns: &[&str], filter: &str) -> String {
+    let cols = columns.join(", ");
+    format!(
+        "INSERT INTO {table}({cols}) SELECT {cols} FROM backup_db.{table} WHERE {filter};\n"
+    )
 }
 
 // ---------- 通用小工具 ----------
@@ -814,11 +950,18 @@ mod tests {
         }
     }
 
-    fn seed(conn: &Connection) {
-        db::upsert_book(conn, "b1", "p/b1", "第一卷", 30).unwrap();
-        db::upsert_book(conn, "b2", "p/b2", "第二卷", 10).unwrap();
+    fn seed(conn: &Connection, dir: &Path) {
+        let b1 = dir.join("books/b1");
+        let b2 = dir.join("books/b2");
+        fs::create_dir_all(&b1).unwrap();
+        fs::create_dir_all(&b2).unwrap();
+        db::upsert_book(conn, "b1", &b1.to_string_lossy(), "第一卷", 30).unwrap();
+        db::upsert_book(conn, "b2", &b2.to_string_lossy(), "第二卷", 10).unwrap();
         db::set_progress(conn, "b1", 12, Some(0.5)).unwrap();
         db::set_setting(conn, "theme", "dark").unwrap();
+        db::set_setting(conn, "cache_budget_mb", "256").unwrap();
+        db::set_setting(conn, "online_proxy", "socks5://backup-proxy:1080").unwrap();
+        db::set_setting(conn, "experimental_online", "true").unwrap();
         db::set_setting(conn, "online_headers", "Cookie: secret=1").unwrap();
         db::set_meta(conn, "last_run_version", "0.15.0").unwrap();
         db::upsert_filter_profile(conn, &profile("example.com")).unwrap();
@@ -841,7 +984,7 @@ mod tests {
         let path = dir.join("library.db");
         let conn = db::open(&path).unwrap();
         db::init_schema(&conn).unwrap();
-        seed(&conn);
+        seed(&conn, dir);
         path
     }
 
@@ -939,6 +1082,9 @@ mod tests {
         {
             let conn = db::open(&db_path).unwrap();
             db::set_setting(&conn, "theme", "light").unwrap();
+            db::set_setting(&conn, "cache_budget_mb", "64").unwrap();
+            db::set_setting(&conn, "online_proxy", "socks5://live-proxy:1080").unwrap();
+            db::set_setting(&conn, "experimental_online", "false").unwrap();
             db::set_setting(&conn, "online_headers", "Cookie: live=9").unwrap();
             conn.execute("DELETE FROM books", []).unwrap();
             conn.execute("DELETE FROM reading_log", []).unwrap();
@@ -969,6 +1115,11 @@ mod tests {
         assert_eq!(result.reading_days, 1);
         assert_eq!(result.rules, 1);
         assert_eq!(result.profiles, 1);
+        assert!(
+            result.skipped_books.is_empty(),
+            "合法本地书不得被跳过：{:?}",
+            result.skipped_books
+        );
         assert_eq!(
             result.created_at.as_deref(),
             Some(export.created_at.as_str())
@@ -986,10 +1137,22 @@ mod tests {
             db::get_setting(&conn, "theme").unwrap().as_deref(),
             Some("dark")
         );
-        // 凭据以当前活库为准，绝不被备份覆盖。
+        assert_eq!(
+            db::get_setting(&conn, "cache_budget_mb").unwrap().as_deref(),
+            Some("256")
+        );
+        // 凭据与网络环境以当前活库为准，绝不被备份覆盖。
         assert_eq!(
             db::get_setting(&conn, "online_headers").unwrap().as_deref(),
             Some("Cookie: live=9")
+        );
+        assert_eq!(
+            db::get_setting(&conn, "online_proxy").unwrap().as_deref(),
+            Some("socks5://live-proxy:1080")
+        );
+        assert_eq!(
+            db::get_setting(&conn, "experimental_online").unwrap().as_deref(),
+            Some("false")
         );
         let rules = db::list_filter_rules(&conn).unwrap();
         assert_eq!(rules.len(), 1);
@@ -1093,10 +1256,18 @@ mod tests {
         assert_eq!(
             count(
                 &conn,
-                "SELECT COUNT(*) FROM settings WHERE k='online_headers'"
+                "SELECT COUNT(*) FROM settings WHERE k IN ('online_headers','online_proxy','experimental_online','online_concurrency')"
             ),
             0,
-            "凭据绝不进入备份"
+            "凭据与未审计网络设置绝不进入备份"
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM settings WHERE k IN ('theme','cache_budget_mb')"
+            ),
+            2,
+            "白名单偏好必须保留"
         );
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM online_filter_events"), 0);
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM app_meta"), 0);
@@ -1169,6 +1340,56 @@ mod tests {
 
         let err = export_backup_blocking(&db_path, &db_path, None, "0.15.0").unwrap_err();
         assert!(err.contains("书库数据库"), "{err}");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn malicious_book_path_is_skipped_and_never_deletable() {
+        let dir = temp_dir("evil-path");
+        let live_dir = dir.join("live");
+        fs::create_dir_all(&live_dir).unwrap();
+        let db_path = seeded_db(&live_dir);
+
+        // 使用真实的用户文档目录（存在时）或主目录作为恶意目标；
+        // 测试只读校验，绝不创建、修改或删除这些目录。
+        let victim = dirs::document_dir()
+            .filter(|path| path.exists())
+            .or_else(dirs::home_dir)
+            .expect("测试环境必须存在用户主目录");
+        let safe = dir.join("books/safe");
+        fs::create_dir_all(&safe).unwrap();
+
+        let backup_db = dir.join("evil.db");
+        {
+            let conn = db::open(&backup_db).unwrap();
+            db::init_schema(&conn).unwrap();
+            db::upsert_book(&conn, "evil", &victim.to_string_lossy(), "UserDir", 1).unwrap();
+            db::upsert_book(&conn, "safe", &safe.to_string_lossy(), "Safe", 1).unwrap();
+        }
+        let archive = dir.join("evil.mrbackup");
+        let manifest = manifest_json(&BackupCounts {
+            books: 2,
+            reading_days: 0,
+            rules: 0,
+            profiles: 0,
+        });
+        write_test_zip(&archive, Some(manifest.as_bytes()), Some(&backup_db), None);
+
+        let result = restore_backup_blocking(&db_path, &archive).unwrap();
+        assert_eq!(result.books, 1, "只应恢复安全路径");
+        assert_eq!(result.skipped_books.len(), 1);
+        assert_eq!(result.skipped_books[0].id, "evil");
+        assert_eq!(result.skipped_books[0].reason, "path-unsafe");
+
+        let conn = db::open(&db_path).unwrap();
+        assert!(db::get_book(&conn, "evil").unwrap().is_none());
+        assert!(db::get_book(&conn, "safe").unwrap().is_some());
+        drop(conn);
+
+        assert!(victim.exists(), "敏感目录本身必须原样保留");
+        assert!(!crate::commands::is_safe_library_source_path(&victim));
+        assert!(crate::commands::is_safe_library_source_path(&safe));
 
         fs::remove_dir_all(&dir).ok();
     }

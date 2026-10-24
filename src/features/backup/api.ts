@@ -12,6 +12,13 @@ export interface BackupExportResult {
   createdAt: string;
 }
 
+export interface SkippedBackupBook {
+  id: string;
+  title: string;
+  /** path-relative / path-missing / path-not-book / path-unsafe */
+  reason: string;
+}
+
 /** 导入备份的返回值；`preferencesJson` 为前端打包的轻量偏好快照。 */
 export interface BackupImportResult {
   books: number;
@@ -21,6 +28,8 @@ export interface BackupImportResult {
   preferencesJson: string | null;
   createdAt: string | null;
   appVersion: string | null;
+  /** 路径不存在/不是书源/命中敏感目录而被跳过的本地书。 */
+  skippedBooks?: SkippedBackupBook[] | null;
   /** 备份 manifest schema 高于当前程序时的前向兼容标记（同版本为空）。 */
   forwardSchema?: number | null;
 }

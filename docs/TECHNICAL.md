@@ -183,16 +183,28 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 
 ### 6.5 本地备份与恢复（`.mrbackup`）
 
-- 导出：`VACUUM INTO` 生成一致性快照 → 净化（删除 `settings.online_headers`、
-  `online_filter_events`、`app_meta`）→ `VACUUM` 抹除空闲页 → `PRAGMA integrity_check`
-  → 切 `journal_mode=DELETE` → 写入 zip（`manifest.json` + `library.db` +
-  可选 `preferences.json`）。目标文件先写同目录临时文件，再原子替换。
+- 导出：`VACUUM INTO` 生成一致性快照 → 净化（仅保留 settings 白名单
+  `theme` / `cache_budget_mb` / `disk_cache_budget_mb` / `library_dir` /
+  `experimental_webtoon`；删除 `online_headers`、`online_proxy`、
+  `experimental_online`、`online_filter_events`、`app_meta`）→ `VACUUM` 抹除空闲页
+  → `PRAGMA integrity_check` → 切 `journal_mode=DELETE` → 写入 zip
+  （`manifest.json` + `library.db` + 可选 `preferences.json`）。目标文件先写同目录
+  临时文件，再原子替换。
 - 恢复：zip 条目数/大小/名称校验，缺 `manifest` 或路径穿越直接拒绝；`library.db`
   解压到系统临时目录，只读 `integrity_check`、必需表和列、manifest 计数全部通过后，
   才用 `ATTACH` + 单事务清空/复制核心表；失败 `ROLLBACK`，活库不动。
-- 恢复范围：`books`、`reading_log`、`settings`（保留当前 `online_headers`）、
+- **路径注入防线**：本地 `books.path` 必须绝对、存在，且为目录或 `.zip/.cbz`；
+  命中系统根、系统目录、用户主目录/文档/桌面/下载等宽目录，或应用数据/缓存目录时，
+  该行被跳过，写入 `skippedBooks` 报告（不回滚整包、不删除磁盘内容）。在线书 URL
+  不做本地路径校验。
+- 恢复范围：`books`、`reading_log`、`settings`（**只替换白名单键**，保留当前
+  `online_headers` / `online_proxy` / `experimental_online` 等设备环境）、
   `online_filter_profiles`、`online_filter_rules`；**不含**缓存、Cookie、过滤事件、
-  `app_meta`。恢复后刷新内存设置、缓存预算、内存/磁盘派生缓存与源句柄。
+  `app_meta`。`reading_log` 只复制白名单书与全局旧史，避免孤儿记录。恢复后刷新内存设置、
+  缓存预算、内存/磁盘派生缓存与源句柄。
+- **删除源文件锚定**：`remove_books(delete_source_files=true)` 在 `remove_dir_all` /
+  `remove_file` 前复用同一安全路径判定；文件必须是压缩包，宽目录/系统目录/应用目录
+  一律拒绝并回报错误，绝不因恶意备份路径误删用户目录。
 - `preferences.json` 由前端白名单采集（主题/语言/阅读器偏好），后端只校验
   JSON 对象与大小并原样透传；恢复后前端写回 localStorage 并即时应用主题/语言。
 - **跨版本前向兼容**（0.17.0）：manifest `schema` 高于当前程序时不再拒绝——

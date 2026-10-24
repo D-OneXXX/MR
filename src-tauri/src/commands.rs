@@ -665,6 +665,10 @@ pub async fn remove_books(
                 let Some(b) = db::get_book(&conn, id)? else {
                     continue;
                 };
+                if let Err(reason) = validate_delete_target(Path::new(&b.path)) {
+                    errors.push(format!("{}：{reason}", b.title));
+                    continue;
+                }
                 match delete_source_if_local(&b.path, &b.source_type) {
                     Ok(deleted) => {
                         if deleted {
@@ -2716,6 +2720,163 @@ fn clear_readonly(path: &Path) -> Result<(), std::io::Error> {
     set_readonly_flag(path, false)
 }
 
+fn path_key(path: &Path) -> String {
+    let raw = path.to_string_lossy().replace('/', "\\");
+    if cfg!(windows) {
+        raw.to_ascii_lowercase()
+    } else {
+        raw
+    }
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    path_key(a) == path_key(b)
+}
+
+/// `target` 是否等于 `root` 或位于其下（用于系统目录，不用于用户主目录）。
+fn path_within(target: &Path, root: &Path) -> bool {
+    let t = path_key(target);
+    let mut r = path_key(root);
+    while r.ends_with('\\') && r.len() > 1 {
+        r.pop();
+    }
+    if t == r {
+        return true;
+    }
+    let prefix = if r.ends_with('\\') {
+        r
+    } else {
+        format!("{r}\\")
+    };
+    t.starts_with(&prefix)
+}
+
+fn canonical_existing(path: &Path) -> Option<PathBuf> {
+    if !path.exists() {
+        return None;
+    }
+    path.canonicalize().ok().or_else(|| Some(path.to_path_buf()))
+}
+
+fn sensitive_system_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(windows)]
+    {
+        for key in ["SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"] {
+            if let Some(value) = std::env::var_os(key) {
+                dirs.push(PathBuf::from(value));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for path in [
+            "/usr", "/etc", "/var", "/opt", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev",
+            "/proc", "/sys", "/run",
+        ] {
+            dirs.push(PathBuf::from(path));
+        }
+    }
+    dirs.into_iter().filter_map(|path| canonical_existing(&path)).collect()
+}
+
+fn sensitive_user_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut push = |path: Option<PathBuf>| {
+        if let Some(path) = path {
+            if let Some(path) = canonical_existing(&path) {
+                dirs.push(path);
+            }
+        }
+    };
+    push(dirs::home_dir());
+    push(dirs::home_dir().and_then(|home| home.parent().map(Path::to_path_buf)));
+    push(dirs::document_dir());
+    push(dirs::desktop_dir());
+    push(dirs::download_dir());
+    push(dirs::picture_dir());
+    push(dirs::video_dir());
+    push(dirs::audio_dir());
+    push(dirs::data_dir());
+    push(dirs::data_local_dir());
+    push(dirs::cache_dir());
+    push(dirs::config_dir());
+    if let Ok(data) = crate::data_dir() {
+        push(Some(data));
+    }
+    if let Some(cache) = crate::paths::cache_dir() {
+        push(Some(cache.to_path_buf()));
+    }
+    dirs
+}
+
+/// 判断一个本地书源路径是否允许参与“删除源文件”。
+///
+/// 规则：
+/// - 必须是绝对路径、当前存在；
+/// - 文件必须是 `.zip`/`.cbz`（绝不删除 library.db、日志或任意普通文件）；
+/// - 目录不得是文件系统根、系统目录、用户主目录/文档/桌面/下载等宽目录本身；
+/// - 允许这些目录的**子目录**作为漫画书目录，避免误伤正常书库。
+///
+/// 该函数同时用于 `.mrbackup` 恢复过滤，避免恶意备份把宽目录伪装成书籍。
+pub(crate) fn is_safe_library_source_path(path: &Path) -> bool {
+    if !path.is_absolute() {
+        return false;
+    }
+    let Some(canon) = canonical_existing(path) else {
+        return false;
+    };
+    if canon.is_file() && !crate::source::is_archive_path(&canon) {
+        return false;
+    }
+    if canon.parent().is_none() {
+        return false;
+    }
+    if sensitive_system_dirs()
+        .iter()
+        .any(|root| path_within(&canon, root))
+    {
+        return false;
+    }
+    if sensitive_user_dirs()
+        .iter()
+        .any(|dir| same_path(&canon, dir))
+    {
+        return false;
+    }
+    // 应用数据/缓存目录内部一律不可删除：library.db、日志、缓存都在这里。
+    let mut protected_roots = Vec::new();
+    if let Ok(data) = crate::data_dir() {
+        if let Some(path) = canonical_existing(&data) {
+            protected_roots.push(path);
+        }
+    }
+    if let Some(cache) = crate::paths::cache_dir() {
+        if let Some(path) = canonical_existing(cache) {
+            protected_roots.push(path);
+        }
+    }
+    if protected_roots
+        .iter()
+        .any(|root| path_within(&canon, root))
+    {
+        return false;
+    }
+    true
+}
+
+/// 删除源文件前的锚定校验：路径缺失不阻断“硬删记录”，
+/// 但任何不安全目标都必须被拒绝，且不调用 remove_dir_all/remove_file。
+fn validate_delete_target(path: &Path) -> Result<(), &'static str> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if !is_safe_library_source_path(path) {
+        return Err("sensitive-delete-target");
+    }
+    Ok(())
+}
+
 /// 本地书删除源文件；在线书返回 false（不触碰远程源）。
 /// 本地路径已不存在也返回 false：记录仍会硬删，但 `deleted_files` 不计数
 /// （brief 的辅助语义：没有实际删除动作就不虚报）。
@@ -2904,6 +3065,48 @@ mod tests {
         set_file_readonly(&file).unwrap();
         assert!(delete_source_if_local(&file.to_string_lossy(), "local").unwrap());
         assert!(!file.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_target_guard_rejects_sensitive_and_non_archive_paths() {
+        let dir = test_temp_dir("delete-guard");
+        let book_dir = dir.join("book");
+        std::fs::create_dir_all(&book_dir).unwrap();
+        assert!(validate_delete_target(&book_dir).is_ok(), "普通书目录应允许");
+        assert!(is_safe_library_source_path(&book_dir));
+
+        let archive = dir.join("book.cbz");
+        std::fs::write(&archive, b"cbz").unwrap();
+        assert!(validate_delete_target(&archive).is_ok());
+        assert!(is_safe_library_source_path(&archive));
+
+        let text = dir.join("notes.txt");
+        std::fs::write(&text, b"text").unwrap();
+        assert!(
+            validate_delete_target(&text).is_err(),
+            "非压缩包文件绝不能进入 remove_file"
+        );
+        assert!(!is_safe_library_source_path(&text));
+
+        // 缺失路径允许硬删记录，但不会产生删除动作。
+        assert!(validate_delete_target(&dir.join("gone.cbz")).is_ok());
+
+        if let Some(home) = dirs::home_dir() {
+            assert!(
+                validate_delete_target(&home).is_err(),
+                "用户主目录本身必须拒绝"
+            );
+            assert!(!is_safe_library_source_path(&home));
+        }
+        if let Some(docs) = dirs::document_dir().filter(|path| path.exists()) {
+            assert!(
+                validate_delete_target(&docs).is_err(),
+                "用户文档目录本身必须拒绝"
+            );
+        }
+        assert!(!is_safe_library_source_path(Path::new("relative/manga.cbz")));
 
         std::fs::remove_dir_all(&dir).ok();
     }

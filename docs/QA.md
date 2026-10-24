@@ -10,8 +10,9 @@
   （visual / reader / online / cache / privacy / architecture / chaos 全绿；
   前两次全量运行出现已知 chaos/CDP 偶发超时，第三次全新隔离运行通过；
   Windows 发布工作流因此增加一次完整套件重试，仍失败则阻断发布）
-- Rust 单测：**302 passed**（新增：Shift_JIS 假名裁决解码、伪装包魔数嗅探、
-  备份高 schema 前向兼容、启动 quick_check、DB 隔离恢复、删除锚定与恶意备份过滤）
+- Rust 单测：**311 passed**（新增：Shift_JIS 假名裁决解码、伪装包魔数嗅探、
+  备份高 schema 前向兼容、启动 quick_check、DB 隔离恢复、删除锚定与恶意备份过滤、
+  reading_log 外键迁移回填/孤儿清理/表达式唯一索引、进度写入失败回滚）
 - `npx tsc --noEmit`、`npm run build`、版本门禁：通过（0.17.0 五端同步）
 - 社区构建冒烟：无 `TAURI_SIGNING_PRIVATE_KEY` 时 `npm run build:community`
   正确生成 `createUpdaterArtifacts=false` 覆盖层并清理（详见下方验收要点）。
@@ -54,6 +55,13 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **阅读进度事务与外键（P1.11）**：`reading_log.book_id` 改为可空
+  `REFERENCES books(id) ON DELETE CASCADE`，旧库 `migrate_reading_log_foreign_key`
+  单事务重建：`''` 全局旧史转 NULL、孤儿书 id 清理、表达式唯一索引
+  `(date, COALESCE(book_id,''))` 重建；`set_progress` 的页码更新与当日页数累加
+  同事务提交，硬删/软删/重定位同样事务化，重定位改 id 前
+  `PRAGMA defer_foreign_keys=ON`。单测覆盖迁移回填与孤儿清理、全局 NULL 唯一约束、
+  外键拒绝未知书、进度写入失败整体回滚、重定位同日合并。
 - **缓存写入可观测（P1.10）**：render/online 缓存写失败统一计入 `cache_health`；
   首次失败 emit `cache-write-failed` 并六语 toast，诊断包 `cacheWriteFailures` 可见。
   更新安装前查询 `get_temp_free_bytes`，<256MB 明确提示，不直出 OS 错误。

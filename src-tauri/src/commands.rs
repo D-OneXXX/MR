@@ -1277,18 +1277,16 @@ pub async fn set_progress(
     page: u32,
     scroll_pct: Option<f64>,
 ) -> Result<(), String> {
-    // 页码钳制到 0..page_count-1，防脏数据刷坏看板。
-    let clamped: u32 = state.db.with(|conn| {
+    // 页码钳制与写入必须在同一 DB 锁内完成，避免两次 db.with 之间
+    // 书籍被删除/页数变化导致写入越界。
+    let pct = scroll_pct.map(|p| p.clamp(0.0, 1.0));
+    state.db.with(|conn| {
         let row = db::get_book(conn, &book_id)
             .map_err(err)?
             .ok_or_else(|| "书籍不存在".to_string())?;
-        let max = row.page_count.saturating_sub(1);
-        Ok::<u32, String>(page.min(max))
-    })?;
-    let pct = scroll_pct.map(|p| p.clamp(0.0, 1.0));
-    state
-        .db
-        .with(|conn| db::set_progress(conn, &book_id, clamped, pct).map_err(err))
+        let clamped = page.min(row.page_count.saturating_sub(1));
+        db::set_progress(conn, &book_id, clamped, pct).map_err(err)
+    })
 }
 
 /// 显式清空阅读页窗口（阅读器卸载/切书时可调；换书首个 get_page 也会自动清）。

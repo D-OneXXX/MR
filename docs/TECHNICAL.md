@@ -92,7 +92,7 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 | 表 | 主键 | 内容 |
 |---|---|---|
 | `books` | `id` | path、title、page_count、current_page、scroll_pct、source_type、meta_json |
-| `reading_log` | `(date, book_id)` | 逐日阅读页数 |
+| `reading_log` | `(date, COALESCE(book_id,''))` | 逐日阅读页数；`book_id` 可空外键 |
 | `settings` | `k` | 主题、缓存、目录、在线源等设置 |
 | `app_meta` | `k` | last_run_version 等内部标记 |
 | `online_filter_profiles` | `host` | 站点选择器、CDN 模板、宽度/aspect 区间、uses |
@@ -109,8 +109,17 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `source_type` / `meta_json`，并按新页数钳制页码。移动/改名文件后重导入不会产生重复书。
 - 在线 `meta_json` 是 `StoredMeta`：`pages[]`、`filtered[]`、`filter_profile`、系列/下一话链路。
 - `PageRef` 可带 `anchor { channel, messageId, photoIndex, refreshBase }`。
-- `reading_log(date PK)` 旧库迁移在单事务内完成；崩溃遗留的 `reading_log_legacy`
-  会在下次启动合并后删除。
+- `reading_log` 旧库迁移在单事务内完成；崩溃遗留的 `reading_log_legacy`
+  会在下次启动合并后删除。旧形态（`book_id NOT NULL DEFAULT ''` + `(date, book_id)` 主键）
+  由 `migrate_reading_log_foreign_key` 单事务重建为可空 `book_id REFERENCES books(id)
+  ON DELETE CASCADE`：空串转为 NULL（承载迁移前的全局旧史），真实但已不存在的
+  `book_id` 按孤儿丢弃；唯一性由表达式索引
+  `idx_reading_log_book_date(date, COALESCE(book_id,''))` 保证。重建后的索引创建位于
+  所有旧表迁移之后，兼容还没有 `book_id` 列的上古库。
+- **进度写入事务**：`set_progress` 的页码更新与当日 `reading_log` 累加在同一事务提交，
+  UPSERT 使用无 conflict target 的 `ON CONFLICT DO UPDATE`（匹配表达式唯一索引）；
+  `remove_books`（软删/硬删）与 `relocate_book` 同样在单事务内完成。`relocate_book`
+  改 `books.id` 前执行 `PRAGMA defer_foreign_keys=ON`，子行迁移完成后再统一校验外键。
 - 页数缩小用 `MIN(current_page, page_count-1)` 钳制。
 
 ## 6. 后端模块

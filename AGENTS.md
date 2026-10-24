@@ -207,6 +207,11 @@
 - **SQLite 并发**：所有生产连接必须经 `db::open` / `db::configure` 开启
   `journal_mode=WAL`、`busy_timeout=5000`、`synchronous=NORMAL`、`foreign_keys=ON`；
   禁止绕过该入口直接 `Connection::open`，否则高速滚动进度与规则落盘会互相锁库。
+- **进度原子性**：`set_progress` 的 `books` 更新与 `reading_log` 累加必须同一事务；
+  `reading_log.book_id` 是 `REFERENCES books(id) ON DELETE CASCADE` 的可空外键
+  （NULL 承载迁移前全局旧史），唯一性靠表达式索引
+  `(date, COALESCE(book_id,''))`，禁止退回 `(date, book_id)` 主键或裸 `book_id`。
+  `relocate_book` 必须在事务内 `PRAGMA defer_foreign_keys=ON` 后再改 `books.id`。
 - **数据库启动自检**：`init_schema` 后必须运行 `PRAGMA quick_check`；失败时写入稳定
   错误码并阻塞前端，提供 `recover_database_from_backup`（staging → 校验 → 隔离旧库 →
   原子替换）与 `open_data_dir`。**禁止**静默继续启动或吞掉 `set_settings` 的数据库错误。

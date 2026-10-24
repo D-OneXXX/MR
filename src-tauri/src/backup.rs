@@ -914,11 +914,14 @@ fn copy_all_tables(conn: &Connection, allowed_books: &[String]) -> Result<(), St
         BOOK_COLUMNS,
         "id IN (SELECT id FROM restore_allowed_books)",
     ));
-    sql.push_str(&copy_sql_where(
-        "reading_log",
-        READING_LOG_COLUMNS,
-        "book_id='' OR book_id IN (SELECT id FROM restore_allowed_books)",
-    ));
+    // 旧备份的 book_id='' 是全局旧史，迁移为新 schema 的 NULL；
+    // 外键忽略 NULL，真实 book_id 只复制白名单书。
+    sql.push_str(
+        "INSERT INTO reading_log(date, book_id, pages)
+         SELECT date, NULLIF(book_id, ''), pages FROM backup_db.reading_log
+         WHERE book_id IS NULL OR book_id='' OR book_id IN
+               (SELECT id FROM restore_allowed_books);\n",
+    );
     sql.push_str(&copy_sql(
         "online_filter_profiles",
         PROFILE_COLUMNS,
@@ -1214,8 +1217,9 @@ mod tests {
             db::set_setting(&conn, "online_proxy", "socks5://live-proxy:1080").unwrap();
             db::set_setting(&conn, "experimental_online", "false").unwrap();
             db::set_setting(&conn, "online_headers", "Cookie: live=9").unwrap();
-            conn.execute("DELETE FROM books", []).unwrap();
             conn.execute("DELETE FROM reading_log", []).unwrap();
+            conn.execute("DELETE FROM books", []).unwrap();
+            db::upsert_book(&conn, "ghost", "p/ghost", "ghost", 1).unwrap();
             conn.execute(
                 "INSERT INTO reading_log(date, book_id, pages) VALUES ('2020-01-01','ghost',7)",
                 [],

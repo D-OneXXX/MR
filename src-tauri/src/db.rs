@@ -80,9 +80,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
         );
         CREATE TABLE IF NOT EXISTS reading_log(
             date TEXT NOT NULL,
-            book_id TEXT NOT NULL DEFAULT '',
-            pages INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY(date, book_id)
+            book_id TEXT REFERENCES books(id) ON DELETE CASCADE,
+            pages INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS settings(
             k TEXT PRIMARY KEY,
@@ -133,6 +132,12 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
     )?;
     migrate_reading_log(conn)?;
     migrate_book_columns(conn)?;
+    migrate_reading_log_foreign_key(conn)?;
+    // 索引必须在旧表形态迁移完成后再建（旧 reading_log 可能还没有 book_id）。
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_log_book_date
+             ON reading_log(date, COALESCE(book_id, ''));",
+    )?;
     Ok(())
 }
 
@@ -152,10 +157,11 @@ fn create_reading_log(conn: &Connection) -> Result<(), BackendError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS reading_log(
              date TEXT NOT NULL,
-             book_id TEXT NOT NULL DEFAULT '',
-             pages INTEGER NOT NULL DEFAULT 0,
-             PRIMARY KEY(date, book_id)
-         );",
+             book_id TEXT REFERENCES books(id) ON DELETE CASCADE,
+             pages INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_log_book_date
+             ON reading_log(date, COALESCE(book_id, ''));",
     )?;
     Ok(())
 }
@@ -187,7 +193,7 @@ fn migrate_reading_log(conn: &Connection) -> Result<(), BackendError> {
             // 崩溃恢复：旧表已 rename，但新表/合并未完成。
             conn.execute(
                 "INSERT OR IGNORE INTO reading_log(date, book_id, pages)
-                 SELECT date, '', pages FROM reading_log_legacy",
+                 SELECT date, NULL, pages FROM reading_log_legacy",
                 [],
             )?;
             conn.execute("DROP TABLE reading_log_legacy", [])?;
@@ -197,7 +203,7 @@ fn migrate_reading_log(conn: &Connection) -> Result<(), BackendError> {
             create_reading_log(conn)?;
             conn.execute(
                 "INSERT OR IGNORE INTO reading_log(date, book_id, pages)
-                 SELECT date, '', pages FROM reading_log_legacy",
+                 SELECT date, NULL, pages FROM reading_log_legacy",
                 [],
             )?;
             conn.execute("DROP TABLE reading_log_legacy", [])?;
@@ -205,6 +211,54 @@ fn migrate_reading_log(conn: &Connection) -> Result<(), BackendError> {
         Ok(())
     })();
 
+    match migrated {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+fn reading_log_has_books_fk(conn: &Connection) -> Result<bool, BackendError> {
+    let mut stmt = conn.prepare("PRAGMA foreign_key_list('reading_log')")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let table: String = row.get(2)?;
+        if table == "books" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// 给 reading_log 补 books 外键（可空 book_id 承载旧全局历史）。
+///
+/// - 全局旧史 `book_id=''` 迁移为 NULL（外键忽略 NULL）；
+/// - 真实但已不存在的 book_id 视为孤儿并清掉；
+/// - 表达式唯一索引保证 `(date, COALESCE(book_id,''))` 唯一；
+/// - 单事务重建，失败回滚。
+fn migrate_reading_log_foreign_key(conn: &Connection) -> Result<(), BackendError> {
+    if reading_log_has_books_fk(conn)? {
+        return Ok(());
+    }
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let migrated = (|| -> Result<(), BackendError> {
+        conn.execute("ALTER TABLE reading_log RENAME TO reading_log_old_fk", [])?;
+        create_reading_log(conn)?;
+        conn.execute(
+            "INSERT INTO reading_log(date, book_id, pages)
+             SELECT date, NULLIF(book_id, ''), pages
+             FROM reading_log_old_fk
+             WHERE book_id = '' OR book_id IN (SELECT id FROM books)",
+            [],
+        )?;
+        conn.execute("DROP TABLE reading_log_old_fk", [])?;
+        Ok(())
+    })();
     match migrated {
         Ok(()) => {
             conn.execute_batch("COMMIT")?;
@@ -351,6 +405,9 @@ pub fn relocate_book(
     page_count: u32,
 ) -> Result<BookRow, BackendError> {
     let tx = conn.unchecked_transaction()?;
+    // id 变更会短暂让 reading_log 旧子行指向不存在的父行；延迟到事务提交
+    // 前校验，等下面把子行合并/迁移到新 id 后再统一验证。
+    tx.execute_batch("PRAGMA defer_foreign_keys=ON")?;
     let updated = tx.execute(
         "UPDATE books SET id=?2, path=?3, title=?4, page_count=?5,
             current_page=MIN(current_page, MAX(?5 - 1, 0)), removed=0
@@ -365,7 +422,7 @@ pub fn relocate_book(
         tx.execute(
             "INSERT INTO reading_log(date, book_id, pages)
              SELECT date, ?2, pages FROM reading_log WHERE book_id=?1
-             ON CONFLICT(date, book_id) DO UPDATE
+             ON CONFLICT DO UPDATE
                 SET pages=MAX(reading_log.pages, excluded.pages)",
             params![old_id, new_id],
         )?;
@@ -429,7 +486,8 @@ pub fn list_books(conn: &Connection, query: Option<&str>) -> Result<Vec<BookRow>
 /// 设置进度并把"前进页数"计入当日 `reading_log`（只增不减，避免回翻刷榜）。
 /// `pct`：条漫模式的滚动偏移百分比（0.0..1.0）；分页模式传 None（清为 -1）。
 pub fn set_progress(conn: &Connection, id: &str, page: u32, pct: Option<f64>) -> Result<(), BackendError> {
-    let prev: u32 = conn
+    let tx = conn.unchecked_transaction()?;
+    let prev: u32 = tx
         .query_row(
             "SELECT current_page FROM books WHERE id=?1",
             params![id],
@@ -439,19 +497,23 @@ pub fn set_progress(conn: &Connection, id: &str, page: u32, pct: Option<f64>) ->
         .unwrap_or(0);
     let now = now_str();
     let pct_val = pct.unwrap_or(-1.0).clamp(-1.0, 1.0);
-    conn.execute(
+    tx.execute(
         "UPDATE books SET current_page=?1, scroll_pct=?2, updated_at=?3 WHERE id=?4",
         params![page as i64, pct_val, now, id],
     )?;
     if page > prev {
         let delta = (page - prev) as i64;
         let today = today_str();
-        conn.execute(
+        // reading_log 的唯一约束是表达式索引 (date, COALESCE(book_id,''))，
+        // 不能用 (date, book_id) 作为 conflict target；无目标 UPSERT 对所有
+        // 唯一冲突生效。页面只增不减，直接累加。
+        tx.execute(
             "INSERT INTO reading_log(date, book_id, pages) VALUES (?1, ?2, ?3)
-             ON CONFLICT(date, book_id) DO UPDATE SET pages = pages + ?3",
+             ON CONFLICT DO UPDATE SET pages = reading_log.pages + excluded.pages",
             params![today, id, delta],
         )?;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -518,7 +580,7 @@ pub fn reading_log_days(
     Ok(out)
 }
 
-/// 逐日逐书阅读页数（堆叠趋势用）；排除迁移来的 book_id='' 全局旧史。日期升序。
+/// 逐日逐书阅读页数（堆叠趋势用）；排除迁移来的 NULL 全局旧史。日期升序。
 pub fn reading_by_book(
     conn: &Connection,
     days: i64,
@@ -526,7 +588,8 @@ pub fn reading_by_book(
     let cutoff = cutoff_date(days);
     let mut stmt = conn.prepare(
         "SELECT date, book_id, SUM(pages) FROM reading_log
-         WHERE date>=?1 AND book_id<>'' GROUP BY date, book_id ORDER BY date",
+         WHERE date>=?1 AND book_id IS NOT NULL AND book_id<>''
+         GROUP BY date, book_id ORDER BY date",
     )?;
     let rows = stmt.query_map(params![cutoff], |r| {
         let date: String = r.get(0)?;
@@ -584,22 +647,27 @@ pub fn set_meta(conn: &Connection, k: &str, v: &str) -> Result<(), BackendError>
 
 /// 移除（软删）：只从书库隐藏，源文件与阅读进度全部保留；重导入/重扫描自动恢复。
 pub fn soft_remove_books(conn: &Connection, ids: &[String]) -> Result<usize, BackendError> {
+    let tx = conn.unchecked_transaction()?;
     let mut n = 0;
     for id in ids {
-        n += conn.execute("UPDATE books SET removed=1 WHERE id=?1", params![id])?;
+        n += tx.execute("UPDATE books SET removed=1 WHERE id=?1", params![id])?;
     }
+    tx.commit()?;
     Ok(n)
 }
 
 /// 删除（硬删）：级联清理该书全部记录（进度/页 OCR/批量任务/翻译缓存）。
 /// 只清数据库；源文件与内存缓存由调用方处理。
 pub fn hard_delete_books(conn: &Connection, ids: &[String]) -> Result<usize, BackendError> {
+    let tx = conn.unchecked_transaction()?;
     let mut n = 0;
     for id in ids {
-        conn.execute("DELETE FROM books WHERE id=?1", params![id])?;
-        conn.execute("DELETE FROM reading_log WHERE book_id=?1", params![id])?;
+        // 外键 ON DELETE CASCADE 会清理 reading_log；显式 DELETE 兼容旧库。
+        tx.execute("DELETE FROM reading_log WHERE book_id=?1", params![id])?;
+        tx.execute("DELETE FROM books WHERE id=?1", params![id])?;
         n += 1;
     }
+    tx.commit()?;
     Ok(n)
 }
 
@@ -1068,6 +1136,86 @@ mod tests {
     }
 
     #[test]
+    fn reading_log_foreign_key_migration_backfills_and_drops_orphans() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "第一卷", 10).unwrap();
+        // 回退成 0.17.0 之前的 reading_log 形态，模拟待迁移旧库。
+        conn.execute_batch(
+            "DROP INDEX idx_reading_log_book_date;
+             ALTER TABLE reading_log RENAME TO reading_log_before_fk;
+             CREATE TABLE reading_log(
+                 date TEXT NOT NULL,
+                 book_id TEXT NOT NULL DEFAULT '',
+                 pages INTEGER NOT NULL DEFAULT 0,
+                 PRIMARY KEY(date, book_id)
+             );
+             INSERT INTO reading_log(date, book_id, pages) VALUES
+                 ('2026-10-01', '', 12),
+                 ('2026-10-02', 'b1', 5),
+                 ('2026-10-03', 'ghost', 3);
+             DROP TABLE reading_log_before_fk;",
+        )
+        .unwrap();
+
+        init_schema(&conn).unwrap();
+
+        // 全局旧史迁为 NULL；孤儿 ghost 被丢弃；真实书保留。
+        let global: Option<String> = conn
+            .query_row(
+                "SELECT book_id FROM reading_log WHERE date='2026-10-01'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(global.is_none(), "book_id='' 必须迁移为 NULL");
+        let orphan: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM reading_log WHERE book_id='ghost'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphan, 0, "不存在的 book_id 必须按孤儿清理");
+        assert_eq!(
+            reading_log_days(&conn, Some("b1"), 30).unwrap(),
+            vec![("2026-10-02".into(), 5)]
+        );
+
+        // 可空外键真实生效：未知 book_id 写入被拒绝。
+        assert!(conn
+            .execute(
+                "INSERT INTO reading_log(date, book_id, pages) VALUES ('2026-10-04', 'ghost', 1)",
+                [],
+            )
+            .is_err());
+        // 表达式唯一索引覆盖全局 NULL 行（SQLite 普通唯一索引不会约束 NULL）。
+        assert!(conn
+            .execute(
+                "INSERT INTO reading_log(date, book_id, pages) VALUES ('2026-10-01', NULL, 1)",
+                [],
+            )
+            .is_err());
+        assert!(conn
+            .execute(
+                "INSERT INTO reading_log(date, book_id, pages) VALUES ('2026-10-02', 'b1', 1)",
+                [],
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn set_progress_rolls_back_when_reading_log_write_fails() {
+        let conn = mem();
+        // 不存在的书：books 更新命中 0 行，reading_log 插入被外键拒绝；
+        // 整个事务必须回滚，不能留下孤儿阅读记录。
+        assert!(set_progress(&conn, "missing", 5, None).is_err());
+        assert_eq!(today_pages(&conn).unwrap(), 0);
+        assert!(reading_log_days(&conn, Some("missing"), 7)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
     fn reading_log_per_book_accounting() {
         let conn = mem();
         for id in ["b1", "b2"] {
@@ -1251,12 +1399,15 @@ mod tests {
         let conn = mem();
         upsert_book(&conn, "old", "p/old", "旧", 30).unwrap();
         set_progress(&conn, "old", 15, None).unwrap();
-        // 目标 id 同日已有 3 页（书籍行不存在也无妨）：迁移后取 MAX。
+        // 目标 id 同日已有 3 页（测试仅在 FK 关闭时造这条“未来书”记录）：
+        // 迁移会先更新 books id，再合并 reading_log，随后 FK 重新成立。
+        conn.execute("PRAGMA foreign_keys=OFF", []).unwrap();
         conn.execute(
             "INSERT INTO reading_log(date, book_id, pages) VALUES (?1, 'new', 3)",
             params![today_str()],
         )
         .unwrap();
+        conn.execute("PRAGMA foreign_keys=ON", []).unwrap();
 
         let row = relocate_book(&conn, "old", "new", "p/new", "新", 5).unwrap();
         assert_eq!(row.page_count, 5);

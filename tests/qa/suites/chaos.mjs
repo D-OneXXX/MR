@@ -247,7 +247,9 @@ export async function runChaosSuite(ctx, report) {
     freezeStage = "wait-recovery";
     const targetsAfter = await targetsOnPort(ctx);
     const mainAfter = targetsAfter.find((target) => target.url.includes("localhost:1420/") && !target.url.includes("recovery.html"));
-    const recovery = await waitForRecovery(ctx, 6000);
+    // 6s 是产品判定阈值；Windows 冷启动/杀软扫描下恢复窗 target 暴露
+    // 可能再花几秒，给 CDP 发现留 12s，仍由窗口内容断言 6s 判定是否生效。
+    const recovery = await waitForRecovery(ctx, 12000);
     freezeStage = "assert-recovery";
     const body = await recovery.page.eval("document.body.innerText");
     const autoRestarted = mainAfter && mainBefore && mainAfter.id !== mainBefore.id;
@@ -346,7 +348,7 @@ export async function runChaosSuite(ctx, report) {
     }
     await freezeMain(ctx.page);
     await sleep(7200);
-    const recovery = await waitForRecovery(ctx, 6000);
+    const recovery = await waitForRecovery(ctx, 12000);
     await recovery.page.clickText("Enter safe mode");
     await sleep(3000);
     await ctx.reconnectMain();

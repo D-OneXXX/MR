@@ -19,9 +19,7 @@ interface Props {
   maxZoom: number;
   /** HUD 隐藏时整体淡出且不可聚焦（不卸载 DOM）。 */
   hidden: boolean;
-  /** 版式切换组（单/双页 + 方向 + 封面偏移），渲染在标题之后。 */
-  modeSlot?: ReactNode;
-  /** 页签切换器等可选插槽（渲染在版式之后）。 */
+  /** 页签切换器等可选插槽（渲染在标题之后）。 */
   tabsSlot?: ReactNode;
   /** 在线提纯：过滤抽屉与“标记本页”操作（渲染在页签之后）。 */
   filterSlot?: ReactNode;
@@ -30,14 +28,13 @@ interface Props {
   onReset: () => void;
 }
 
-/** 阅读器顶部 HUD：返回、标题、版式组、页签、缩放组与窗口控制，均为悬浮胶囊。 */
+/** 阅读器顶部 HUD：返回、标题、页签、缩放组与窗口控制，均为悬浮胶囊。 */
 export default function ReaderHudTop({
   title,
   zoom,
   minZoom,
   maxZoom,
   hidden,
-  modeSlot,
   tabsSlot,
   filterSlot,
   onBack,
@@ -58,7 +55,7 @@ export default function ReaderHudTop({
         concealed && "-translate-y-2 opacity-0",
       )}
     >
-      <div className="pointer-events-auto flex h-11 min-w-0 max-w-[min(1080px,calc(100vw-9rem))] flex-1 items-center gap-0.5 rounded-full border border-border/70 bg-card/95 pl-1.5 pr-1 text-foreground shadow-hard-sm backdrop-blur-md">
+      <div className="pointer-events-auto flex h-11 min-w-0 max-w-[min(760px,calc(100vw-9rem))] flex-1 items-center gap-0.5 rounded-full border border-border/70 bg-card/95 pl-1.5 pr-1 text-foreground shadow-hard-sm backdrop-blur-md">
         <Button
           variant="pill-ghost"
           size="icon"
@@ -69,13 +66,11 @@ export default function ReaderHudTop({
           <ArrowLeft className="size-4" />
         </Button>
         <span
-          className="mx-1 min-w-0 max-w-[16vw] truncate text-[13px] font-semibold"
+          className="mx-1 min-w-0 max-w-[30vw] truncate text-[13px] font-semibold"
           title={title}
         >
           {title}
         </span>
-
-        {modeSlot}
 
         {tabsSlot}
 

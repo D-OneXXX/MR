@@ -122,6 +122,10 @@ impl RequestHeaders {
 /// ureq 阻塞传输实现。
 pub struct UreqTransport {
     agent: ureq::Agent,
+    /// 代理配置存在且 NO_PROXY 命中时使用的直连 agent。
+    direct_agent: Option<ureq::Agent>,
+    /// 进程环境里的 NO_PROXY 规则（逗号/空白分隔，已去除 scheme/path）。
+    no_proxy: Vec<String>,
     headers: RequestHeaders,
     /// 辅助会话注册表（进程内存）：命中已注册 origin 时复用该会话的 UA。
     /// `None` 表示没有辅助上下文，一律使用标准桌面 Chrome UA。
@@ -212,26 +216,150 @@ fn normalize_proxy(raw: &str) -> Result<Option<String>, OnlineError> {
     }))
 }
 
+/// 进程环境里的 NO_PROXY（兼容全小写变量名）。
+fn no_proxy_env() -> Option<String> {
+    std::env::var_os("NO_PROXY")
+        .or_else(|| std::env::var_os("no_proxy"))
+        .map(|value| value.to_string_lossy().into_owned())
+}
+
+/// 拆分单条 NO_PROXY 规则：去 scheme/path、识别 `host:port` 与 `[v6]:port`。
+fn normalize_no_proxy_rule(raw: &str) -> Option<String> {
+    let mut rule = raw.trim().to_ascii_lowercase();
+    if rule.is_empty() {
+        return None;
+    }
+    if rule == "*" {
+        return Some(rule);
+    }
+    if let Some((scheme, rest)) = rule.split_once("://") {
+        // 带 scheme 的规则按 URL 处理，路径不属于主机。
+        rule = if scheme == "http" || scheme == "https" {
+            rest.split('/').next().unwrap_or(rest).to_string()
+        } else {
+            rest.to_string()
+        };
+    } else if rule.contains('/') {
+        // 不支持 CIDR：带 `/` 的裸规则直接忽略，避免把网络前缀误当主机后缀。
+        return None;
+    }
+    if rule.starts_with('[') {
+        // [::1]:8080 → [::1]:8080（保留括号，匹配时同样按括号主机比较）
+        return Some(rule);
+    }
+    // 只有一个冒号才按 host:port 处理；IPv6 字面量本身含多个冒号。
+    if rule.matches(':').count() == 1 {
+        if let Some((host, port)) = rule.rsplit_once(':') {
+            if port.parse::<u16>().is_ok() && !host.is_empty() {
+                return Some(format!("{host}:{port}"));
+            }
+        }
+    }
+    Some(rule)
+}
+
+fn parse_no_proxy(raw: &str) -> Vec<String> {
+    raw.split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(normalize_no_proxy_rule)
+        .collect()
+}
+
+fn split_no_proxy_host_port(rule: &str) -> (&str, Option<u16>) {
+    if rule.starts_with('[') {
+        if let Some((host, tail)) = rule.split_once(']') {
+            let port = tail
+                .strip_prefix(':')
+                .and_then(|value| value.parse::<u16>().ok());
+            return (host.trim_start_matches('['), port);
+        }
+    }
+    if rule.matches(':').count() == 1 {
+        if let Some((host, port)) = rule.rsplit_once(':') {
+            if let Ok(port) = port.parse::<u16>() {
+                return (host, Some(port));
+            }
+        }
+    }
+    (rule, None)
+}
+
+/// NO_PROXY 匹配：`*` 全放行；域名规则同时匹配子域；带端口时必须同端口。
+fn no_proxy_matches(host: &str, port: Option<u16>, rules: &[String]) -> bool {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if host.is_empty() {
+        return false;
+    }
+    let host_lower = host.to_ascii_lowercase();
+    for rule in rules {
+        if rule == "*" {
+            return true;
+        }
+        let (rule_host, rule_port) = split_no_proxy_host_port(rule);
+        if let Some(rule_port) = rule_port {
+            if port != Some(rule_port) {
+                continue;
+            }
+        }
+        let rule_host = rule_host
+            .trim_start_matches("*.")
+            .trim_start_matches('.');
+        if rule_host.is_empty() {
+            continue;
+        }
+        if host_lower == rule_host
+            || host_lower.ends_with(&format!(".{rule_host}"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn build_agent(proxy: Option<&str>) -> Result<ureq::Agent, OnlineError> {
+    let mut builder = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        // 关闭 ureq 自动重定向：手动跟随以便每个 hop 重新应用请求头。
+        .redirects(0)
+        .user_agent(ONLINE_UA);
+    if let Some(proxy) = proxy {
+        let p = ureq::Proxy::new(proxy).map_err(|e| OnlineError::Proxy(e.to_string()))?;
+        builder = builder.proxy(p);
+    }
+    Ok(builder.build())
+}
+
 impl UreqTransport {
     pub fn new(proxy: &str, headers: &str) -> Result<Self, OnlineError> {
         let proxy = normalize_proxy(proxy)?;
         let headers = RequestHeaders::parse(headers)?;
-        let mut builder = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            // 关闭 ureq 自动重定向：手动跟随以便每个 hop 重新应用请求头。
-            .redirects(0)
-            .user_agent(ONLINE_UA);
-        if let Some(proxy) = proxy {
-            let p = ureq::Proxy::new(&proxy).map_err(|e| OnlineError::Proxy(e.to_string()))?;
-            builder = builder.proxy(p);
-        }
+        let no_proxy = parse_no_proxy(no_proxy_env().as_deref().unwrap_or_default());
+        let agent = build_agent(proxy.as_deref())?;
+        // 只有真的配置了代理才需要直连分支；代理地址非法时上面已经拒绝。
+        let direct_agent = if proxy.is_some() && !no_proxy.is_empty() {
+            Some(build_agent(None)?)
+        } else {
+            None
+        };
         Ok(Self {
-            agent: builder.build(),
+            agent,
+            direct_agent,
+            no_proxy,
             headers,
             assisted: None,
             allow_loopback: allow_loopback_for_dev(),
         })
+    }
+
+    /// 按 NO_PROXY 选择代理/直连 agent；两条路径都保留同一超时与重定向策略。
+    fn agent_for(&self, target: &url::Url) -> &ureq::Agent {
+        let host = target.host_str().unwrap_or_default();
+        if self.direct_agent.is_some()
+            && no_proxy_matches(host, target.port_or_known_default(), &self.no_proxy)
+        {
+            return self.direct_agent.as_ref().expect("direct agent");
+        }
+        &self.agent
     }
 
     /// 构造带辅助会话上下文的传输：请求目标命中已注册 origin 时复用该会话的 UA，
@@ -321,7 +449,7 @@ impl UreqTransport {
         referer: Option<&str>,
     ) -> Result<RawResponse, OnlineError> {
         let within_scope = scope.is_some_and(|s| same_origin(target, s));
-        let mut req = self.agent.get(target.as_str());
+        let mut req = self.agent_for(target).get(target.as_str());
         // 辅助会话请求头：只在目标 origin 与登记 origin 完全一致时附带。
         // 放在用户请求头之前，保证用户显式设置优先。
         if let Some(headers) = self.assisted_headers(target) {
@@ -510,6 +638,27 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread::JoinHandle;
+
+    #[test]
+    fn no_proxy_rules_match_exact_subdomain_port_and_wildcard() {
+        let rules = parse_no_proxy(
+            "example.com, .internal.test, https://secure.test/path, api.test:8443",
+        );
+        assert!(no_proxy_matches("example.com", Some(443), &rules));
+        assert!(no_proxy_matches("cdn.example.com", Some(443), &rules));
+        assert!(!no_proxy_matches("notexample.com", Some(443), &rules));
+        assert!(no_proxy_matches("db.internal.test", Some(443), &rules));
+        assert!(no_proxy_matches("secure.test", Some(443), &rules));
+        assert!(no_proxy_matches("api.test", Some(8443), &rules));
+        assert!(!no_proxy_matches("api.test", Some(443), &rules));
+
+        let wildcard = parse_no_proxy("*");
+        assert!(no_proxy_matches("anything.example", None, &wildcard));
+        let none = parse_no_proxy("");
+        assert!(!no_proxy_matches("example.com", None, &none));
+        // CIDR 不做半吊子解析，宁可忽略也不误放行。
+        assert!(parse_no_proxy("10.0.0.0/8").is_empty());
+    }
 
     fn spawn_server(responses: Vec<(u16, &'static str, Vec<u8>)>) -> (String, JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

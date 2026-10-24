@@ -771,6 +771,8 @@ fn extract_db_entry(
         std::io::copy(&mut reader, &mut out).map_err(|e| format!("解压备份数据库失败：{e}"))?;
     out.sync_all()
         .map_err(|e| format!("落盘备份临时库失败：{e}"))?;
+    // 解包出的书库含本地路径与阅读历史：Unix 下仅当前用户可读写。
+    crate::paths::harden_private_file(dest);
     if copied > MAX_DB_BYTES {
         return Err("library.db 超过大小上限（1 GiB）".into());
     }

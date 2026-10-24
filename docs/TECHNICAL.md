@@ -421,7 +421,10 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `system`（exe 位于 `/usr`、`/opt`，deb/rpm 管辖）/ `portable` / 空串（非 Linux）。
 - **AppImage 运行态**：自研更新通道新增 `appimage` 制品格式
   （`resolve_format` 识别 `.AppImage`/`deb`/`.rpm`）；`install_appimage`
-  备份旧文件 → 改名新包 → 拉起新进程，任一步失败回滚，无需 root。
+  备份旧文件 → `replace_with_copy` 把新包复制到目标同目录隐藏临时文件 →
+  `fsync` 文件与目录后原子改名 → 拉起新进程，任一步失败回滚，无需 root。
+  下载目录与 AppImage 常位于不同挂载点，直接 `rename` 会 EXDEV；同目录
+  复制也避免跨设备半截文件。
 - **系统安装态（.deb/.rpm）**：应用绝不以 root 自居改 `/usr` 下文件；
   安装按钮替换为手动引导（`sudo apt install ./MangaReader_<v>_amd64.deb` /
   `sudo dnf install ./MangaReader-<v>-x86_64.rpm`），安装包暂存于
@@ -615,7 +618,17 @@ ubuntu-22.04）执行 `cargo check --all-targets` + `cargo test --lib` +
   折叠为 `<MOUNT>/`，其后漫画路径继续按 `<MANGA_DIR>/<MANGA_FILE>` 收尾。
 - **系统代理**：环境变量（大小写不敏感）→ GNOME `gsettings`（mode=manual 时
   https→http→socks）→ KDE `~/.config/kioslaverc`（`[Proxy Settings]`
-  `ProxyType=1`）；解析为纯函数跨平台可测。
+  `ProxyType=1`）；解析为纯函数跨平台可测。探测命令走
+  `spawn_blocking`，不再占用主线程；在线 HTTP transport 同时读取
+  `NO_PROXY`/`no_proxy`，命中域名（含子域）、端口或 `*` 时改用独立直连
+  agent，代理与直连保留同一超时/重定向/SSRF 校验。CIDR 规则明确忽略，
+  不做半吊子解析。
+- **唤醒与私有数据（P1.15）**：Linux watchdog 同时读取
+  `CLOCK_BOOTTIME`（含 suspend）与 `Instant`；任一跳跃都按唤醒处理并重置
+  心跳，避免睡眠前的旧心跳在唤醒瞬间误弹恢复窗。数据/缓存目录在 Unix
+  下收紧为 0700，`library.db`/WAL/SHM 与备份解包临时库为 0600。
+  书路径必须是 UTF-8（否则 `non-utf8-path` 显式拒绝），命令行
+  `args_os` 中的非 UTF-8 参数只记日志并忽略，绝不做 lossy 后误当另一本书。
 - **Wayland 窗口容错**：`ensure_window_on_screen` 读取显示器/坐标失败时降级
   `window.center()` 并记日志，绝不 panic、不阻断恢复窗；`data-tauri-drag-region`
   与自绘按钮由 tao 层在 X11/Wayland 一致支持。

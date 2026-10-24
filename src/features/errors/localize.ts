@@ -28,6 +28,7 @@ const STABLE_ERROR_CODES: ReadonlyArray<{ code: string; key: string }> = [
   { code: "online-too-many-pages", key: "error.onlineTooManyPages" },
   { code: "online-fetch-failed", key: "error.onlineFetchFailed" },
   { code: "update-unsupported-format", key: "error.updateUnsupportedFormat" },
+  { code: "non-utf8-path", key: "error.nonUtf8Path" },
 ];
 
 /**

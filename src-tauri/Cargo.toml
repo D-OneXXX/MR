@@ -50,6 +50,10 @@ regex = "1"
 # 在线 HTML 图集：按 charset 正确解码（GBK/Shift_JIS 等）。
 encoding_rs = "0.8"
 
+# Linux 专用：CLOCK_BOOTTIME（含 suspend 的单调时钟，唤醒恢复判定）。
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 # Windows 专用：系统代理注册表读取与配对桥接签名校验。
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

@@ -1590,7 +1590,61 @@ fn spawn_installer(path: &Path, format: &str, relaunch_exe: &Path) -> Result<(),
     }
 }
 
-/// AppImage 原地替换：备份旧文件 → 新文件改名到位 → 拉起新版本。
+/// 跨文件系统安全替换：先复制到目标目录的隐藏临时文件，fsync 后再原子改名。
+///
+/// `/tmp` 与 AppImage 所在目录通常是不同挂载点，直接 `rename` 会报 EXDEV。
+/// 复制到同目录后改名既能跨设备，也保证目标文件要么是旧版、要么是完整新版。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn replace_with_copy(source: &Path, target: &Path) -> Result<(), String> {
+    use std::io::Write as _;
+
+    let parent = target
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "目标文件缺少父目录".to_string())?;
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("appimage");
+    let temp = parent.join(format!(".{name}.mr-new"));
+    let _ = std::fs::remove_file(&temp);
+
+    let result = (|| -> std::io::Result<()> {
+        let mut input = std::fs::File::open(source)?;
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        std::io::copy(&mut input, &mut output)?;
+        output.flush()?;
+        output.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("复制更新包失败：{error}"));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(&temp, permissions)
+            .map_err(|error| format!("无法设置执行权限：{error}"))?;
+    }
+
+    if let Err(error) = std::fs::rename(&temp, target) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("替换目标文件失败：{error}"));
+    }
+    // 目录项落盘，断电重启后不会回退到旧 inode。
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+/// AppImage 原地替换：备份旧文件 → 新文件复制到位 → 拉起新版本。
 /// 任何一步失败都回滚，保证旧版本始终可双击运行。
 #[cfg(target_os = "linux")]
 fn install_appimage(new_appimage: &Path, _relaunch_exe: &Path) -> Result<(), String> {
@@ -1616,7 +1670,7 @@ fn install_appimage(new_appimage: &Path, _relaunch_exe: &Path) -> Result<(), Str
     let backup = target.with_extension("old-appimage");
     let _ = std::fs::remove_file(&backup);
     std::fs::rename(&target, &backup).map_err(|err| format!("无法备份当前 AppImage：{err}"))?;
-    if let Err(err) = std::fs::rename(new_appimage, &target) {
+    if let Err(err) = replace_with_copy(new_appimage, &target) {
         let _ = std::fs::rename(&backup, &target);
         return Err(format!("无法替换 AppImage：{err}"));
     }
@@ -2328,6 +2382,32 @@ QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfN
         let decoded = String::from_utf16(&units).unwrap();
         assert_eq!(decoded, script);
         assert!(decoded.contains("漫画 目录"));
+    }
+
+    #[test]
+    fn replace_with_copy_atomically_replaces_target() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "mr-update-copy-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("download.AppImage");
+        let target = dir.join("installed.AppImage");
+        std::fs::write(&source, b"new-version").unwrap();
+        std::fs::write(&target, b"old-version").unwrap();
+
+        replace_with_copy(&source, &target).expect("同目录复制+改名应成功");
+        assert_eq!(std::fs::read(&target).unwrap(), b"new-version");
+        assert!(
+            !dir.join(".installed.AppImage.mr-new").exists(),
+            "不得残留临时文件"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

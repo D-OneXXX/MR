@@ -10,10 +10,13 @@
   （visual / reader / online / cache / privacy / architecture / chaos 全绿；
   前两次全量运行出现已知 chaos/CDP 偶发超时，第三次全新隔离运行通过；
   Windows 发布工作流因此增加一次完整套件重试，仍失败则阻断发布）
-- Rust 单测：**312 passed**（新增：Shift_JIS 假名裁决解码、伪装包魔数嗅探、
-  备份高 schema 前向兼容、启动 quick_check、DB 隔离恢复、删除锚定与恶意备份过滤、
+- Rust 单测：**314 passed**（Windows 宿主；Linux CI 另跑 2 个
+  `cfg(unix)` 用例 → 316：私有权限收紧、非 UTF-8 路径拒绝。新增：
+  Shift_JIS 假名裁决解码、伪装包魔数嗅探、备份高 schema 前向兼容、
+  启动 quick_check、DB 隔离恢复、删除锚定与恶意备份过滤、
   reading_log 外键迁移回填/孤儿清理/表达式唯一索引、进度写入失败回滚、
-  压缩包指纹未变跳过解包与变更后强制重扫）
+  压缩包指纹未变跳过解包与变更后强制重扫、NO_PROXY 匹配、
+  AppImage 跨设备复制替换、boot 时钟唤醒判定）
 - `npx tsc --noEmit`、`npm run build`、版本门禁：通过（0.17.0 五端同步）
 - 社区构建冒烟：无 `TAURI_SIGNING_PRIVATE_KEY` 时 `npm run build:community`
   正确生成 `createUpdaterArtifacts=false` 覆盖层并清理（详见下方验收要点）。
@@ -56,6 +59,14 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **Linux 运行时盲区（P1.15）**：watchdog 增加 `CLOCK_BOOTTIME` 唤醒判定
+  （suspend 后旧心跳不再误弹恢复窗）；系统代理探测改 `spawn_blocking`，
+  在线 transport 支持 `NO_PROXY`（域名/子域/端口/`*`，CIDR 忽略）；
+  Unix 数据/缓存目录 0700、书库与备份临时库 0600；AppImage 更新改为
+  同目录复制 + `fsync` + 原子改名（跨挂载点不再 EXDEV）；非 UTF-8
+  书路径显式 `non-utf8-path` 拒绝，命令行非 UTF-8 参数只记日志。
+  Linux 专属 `cfg` 代码仍需 `ci-linux-check.yml` 在 ubuntu-22.04 实际编译；
+  Windows 宿主已跑通 314 个单测与全量 QA。
 - **导入并发守卫（P1.14）**：书库导入加单飞锁，拖放/按钮/对话框回调
   重叠触发时只弹六语 `import.busy`，不再并发 `import_books` 抢库锁；
   导入进行中两个导入按钮禁用，进度卡与逐路径失败聚合保持不变。

@@ -29,6 +29,44 @@ pub(crate) fn cache_dir() -> Option<&'static Path> {
     CACHE_DIR.get().map(PathBuf::as_path)
 }
 
+/// Unix：数据/缓存目录只允许当前用户进入（0700），Windows 无操作。
+pub(crate) fn harden_private_dir(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut permissions = meta.permissions();
+            if permissions.mode() & 0o777 != 0o700 {
+                permissions.set_mode(0o700);
+                let _ = std::fs::set_permissions(path, permissions);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+/// Unix：书库/临时数据库只允许当前用户读写（0600），Windows 无操作。
+pub(crate) fn harden_private_file(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut permissions = meta.permissions();
+            if permissions.mode() & 0o777 != 0o600 {
+                permissions.set_mode(0o600);
+                let _ = std::fs::set_permissions(path, permissions);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 /// 纯函数：决定数据根。空/纯空白的环境变量视为未设置。
 pub(crate) fn resolve_data_root(
     mr_data_dir: Option<&str>,
@@ -250,5 +288,30 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_private_paths_are_hardened() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unique_temp_dir("perms");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        harden_private_dir(&dir);
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+
+        let file = dir.join("library.db");
+        std::fs::write(&file, b"x").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        harden_private_file(&file);
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

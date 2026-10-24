@@ -90,8 +90,16 @@ fn proxy_from_system_settings(
     normalize_proxy_value(&select_proxy_server(server)?)
 }
 
+/// 系统代理探测可能启动 `gsettings` / 读取 KDE 配置，必须离开主线程；
+/// 同步命令在部分平台上会卡住首帧。Tauri 侧只暴露异步包装。
 #[tauri::command]
-pub fn detect_system_proxy() -> Result<Option<String>, String> {
+pub async fn detect_system_proxy() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(detect_system_proxy_blocking)
+        .await
+        .map_err(|error| format!("系统代理探测失败：{error}"))?
+}
+
+fn detect_system_proxy_blocking() -> Result<Option<String>, String> {
     let pairs: Vec<(String, String)> = std::env::vars_os()
         .map(|(key, value)| {
             (

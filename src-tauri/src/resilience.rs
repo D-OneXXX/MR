@@ -301,6 +301,35 @@ fn is_resume_gap(gap: Duration) -> bool {
     gap >= RESUME_GAP
 }
 
+/// 含 suspend 的单调时钟（Linux `CLOCK_BOOTTIME`）。
+///
+/// `Instant` 在 Linux 走 `CLOCK_MONOTONIC`，睡眠期间不前进；只靠它无法
+/// 识别“唤醒后 WebView 还没恢复心跳”的瞬间，可能把睡眠前的旧心跳误判为
+/// 冻结。非 Linux 返回 None，行为保持原样。
+#[cfg(target_os = "linux")]
+fn boot_time_now() -> Option<Duration> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime 只写入我们提供的 timespec。
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) };
+    if rc != 0 || ts.tv_sec < 0 || !(0..1_000_000_000).contains(&ts.tv_nsec) {
+        return None;
+    }
+    Some(Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn boot_time_now() -> Option<Duration> {
+    None
+}
+
+/// 任一时钟出现大跳跃都视为睡眠/调试暂停，而不是 UI 冻结。
+fn resume_detected(monotonic_gap: Duration, boot_gap: Option<Duration>) -> bool {
+    is_resume_gap(monotonic_gap) || boot_gap.is_some_and(is_resume_gap)
+}
+
 fn should_replace_main(main_exists: bool, responsive: bool) -> bool {
     !main_exists || !responsive
 }
@@ -507,12 +536,19 @@ fn spawn_watchdog(app: AppHandle, state: Arc<ResilienceState>) {
         .name("mr-ui-watchdog".to_string())
         .spawn(move || {
             let mut last_tick = Instant::now();
+            let mut last_boot = boot_time_now();
             loop {
             std::thread::sleep(WATCHDOG_TICK);
             let now = Instant::now();
             let gap = now.duration_since(last_tick);
             last_tick = now;
-            if is_resume_gap(gap) {
+            let boot_now = boot_time_now();
+            let boot_gap = match (last_boot, boot_now) {
+                (Some(before), Some(after)) => Some(after.saturating_sub(before)),
+                _ => None,
+            };
+            last_boot = boot_now;
+            if resume_detected(gap, boot_gap) {
                 *state.last_heartbeat.lock() = Some(now);
                 state.freeze_notified.store(false, Ordering::SeqCst);
                 continue;
@@ -1023,6 +1059,17 @@ mod tests {
     fn resume_gap_and_missing_main_trigger_rebuild_not_freeze() {
         assert!(!is_resume_gap(Duration::from_secs(1)));
         assert!(is_resume_gap(Duration::from_secs(3)));
+        // Linux CLOCK_BOOTTIME 跨 suspend 前进，而 Instant 不动：
+        // 只要 boot 时钟跳跃就必须当作唤醒，不能弹恢复窗。
+        assert!(resume_detected(
+            Duration::from_secs(1),
+            Some(Duration::from_secs(3600))
+        ));
+        assert!(!resume_detected(
+            Duration::from_secs(1),
+            Some(Duration::from_secs(1))
+        ));
+        assert!(!resume_detected(Duration::from_secs(1), None));
         assert!(!should_replace_main(true, true));
         assert!(should_replace_main(true, false));
         assert!(should_replace_main(false, false));

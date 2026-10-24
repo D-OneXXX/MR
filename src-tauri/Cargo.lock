@@ -2460,6 +2460,7 @@ dependencies = [
  "hex",
  "image",
  "jpeg-decoder",
+ "libc",
  "lru",
  "minisign-verify 0.2.5",
  "parking_lot",

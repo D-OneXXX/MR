@@ -392,7 +392,14 @@ fn archive_stamp(path: &Path) -> Option<db::SourceStamp> {
 /// 已入库的压缩包若 mtime/字节数都未变，直接复用页数，不再解包；
 /// 目录始终全量扫描（嵌套文件变化不会可靠地反映在目录 mtime 上）。
 fn scan_single_book(conn: &rusqlite::Connection, path: &Path) -> Result<BookInfo, BackendError> {
-    let path_str = path.to_string_lossy().to_string();
+    // 书库 id = sha256(path)，path 会落 SQLite/JSON；非 UTF-8 必须显式拒绝，
+    // 否则 lossy 转换可能让两本不同的书落到同一个 id。
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| {
+            BackendError::Msg("路径包含非 UTF-8 字符，当前版本暂不支持（non-utf8-path）".into())
+        })?
+        .to_string();
     let id = db::book_id_for_path(&path_str);
     let stamp = archive_stamp(path);
     if let (Some(stamp), Ok(Some(row))) = (stamp, db::get_book(conn, &id)) {
@@ -3181,6 +3188,27 @@ mod tests {
             .unwrap();
         z.write_all(b"not-a-real-png").unwrap(); // 导入只数条目名，不解码
         z.finish().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_book_path_is_rejected_instead_of_lossy_collision() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let dir = test_temp_dir("non-utf8");
+        let mut name = b"bad-".to_vec();
+        name.push(0xFF);
+        name.extend_from_slice(b".cbz");
+        let path = dir.join(std::ffi::OsString::from_vec(name));
+        build_zip(&path);
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_schema(&conn).unwrap();
+        let error = scan_single_book(&conn, &path).unwrap_err().to_string();
+        assert!(error.contains("non-utf8-path"), "{error}");
+        assert!(db::list_books(&conn, None).unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

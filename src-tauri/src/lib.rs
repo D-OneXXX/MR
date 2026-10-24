@@ -330,6 +330,9 @@ fn install_app_paths<R: tauri::Runtime>(app: &tauri::App<R>) -> (PathBuf, PathBu
     if let Err(err) = std::fs::create_dir_all(&cache) {
         logging::log_error("paths", &format!("创建缓存目录失败：{err}"));
     }
+    // Linux 多用户桌面：书库与应用数据默认只给当前用户（0700）。
+    paths::harden_private_dir(&data);
+    paths::harden_private_dir(&cache);
     paths::install(data.clone(), cache.clone());
     (data, cache, env_override.is_some())
 }
@@ -382,6 +385,11 @@ fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
             "书库数据库完整性自检失败（db-quick-check-failed，详情已省略）",
         );
         return Err(error.to_string());
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let mut raw = db_path.as_os_str().to_os_string();
+        raw.push(suffix);
+        paths::harden_private_file(Path::new(&raw));
     }
     state.clear_db_error();
     let current_version = env!("CARGO_PKG_VERSION");
@@ -494,7 +502,18 @@ pub fn run() {
             open_with::handle_launch(
                 app.handle(),
                 std::env::args_os()
-                    .map(|value| value.to_string_lossy().into_owned())
+                    .filter_map(|value| match value.into_string() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            // 非 UTF-8 路径无法无损穿过 IPC/JSON；忽略并留痕，
+                            // 绝不 to_string_lossy 后当成另一本书导入。
+                            logging::log_error(
+                                "open_with",
+                                "忽略非 UTF-8 命令行路径（non-utf8-path）",
+                            );
+                            None
+                        }
+                    })
                     .collect(),
             );
             if let Err(e) = resilience::initialize(app.handle(), &resilience_state) {

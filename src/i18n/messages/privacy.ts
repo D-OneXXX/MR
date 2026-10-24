@@ -109,6 +109,23 @@ const zhCN = {
   "privacy.audit.clearTitle": "清除在线痕迹？",
   "privacy.audit.clearBody":
     "所有站点将退出登录，图片缓存会被清空。书库、阅读进度与本地设置不会删除。",
+  "privacy.guard.title": "卡死保护与安全模式",
+  "privacy.guard.description":
+    "心跳看门狗与暴躁点击感知为常开保护；安全模式可在此手动进入或退出。",
+  "privacy.guard.alwaysOn": "常开保护",
+  "privacy.guard.watchdog": "心跳看门狗",
+  "privacy.guard.watchdogDesc":
+    "界面无响应时仅打开独立恢复窗口等待你选择，绝不自动重建主窗口。",
+  "privacy.guard.rage": "暴躁点击感知",
+  "privacy.guard.rageDesc":
+    "连续快速点击会被视为卡死信号，只用于唤起恢复窗口，不做任何自动操作。",
+  "privacy.guard.safeModeRow": "安全模式",
+  "privacy.guard.safeModeDesc":
+    "进入后暂停在线功能并锁定基础单页模式，用于排查问题；退出会重启应用。",
+  "privacy.guard.safeModeOn": "已激活",
+  "privacy.guard.safeModeOff": "未激活",
+  "privacy.guard.enter": "手动进入安全模式",
+  "privacy.guard.entering": "正在进入…",
   "privacy.audit.clearAction": "立即清除",
   "privacy.audit.cleared":
     "已清理 {webviews} 个 WebView 的浏览数据，并释放 {size} 缓存。",
@@ -250,6 +267,23 @@ const en: Record<keyof typeof zhCN, string> = {
   "privacy.audit.clearTitle": "Clear online traces?",
   "privacy.audit.clearBody":
     "All sites will be signed out and image caches cleared. Your library, reading progress and local settings are kept.",
+  "privacy.guard.title": "Crash guard & safe mode",
+  "privacy.guard.description":
+    "The heartbeat watchdog and rage-click sensing are always-on protections; safe mode can be entered or exited here.",
+  "privacy.guard.alwaysOn": "Always on",
+  "privacy.guard.watchdog": "Heartbeat watchdog",
+  "privacy.guard.watchdogDesc":
+    "When the UI stops responding it only opens the independent recovery window and waits for your choice — it never rebuilds the main window on its own.",
+  "privacy.guard.rage": "Rage-click sensing",
+  "privacy.guard.rageDesc":
+    "Rapid repeated clicks are treated as a hang signal and only summon the recovery window; no automatic action is taken.",
+  "privacy.guard.safeModeRow": "Safe mode",
+  "privacy.guard.safeModeDesc":
+    "Entering pauses online features and locks the reader to basic single-page mode for troubleshooting; exiting reloads the app.",
+  "privacy.guard.safeModeOn": "Active",
+  "privacy.guard.safeModeOff": "Inactive",
+  "privacy.guard.enter": "Enter safe mode manually",
+  "privacy.guard.entering": "Entering…",
   "privacy.audit.clearAction": "Clear now",
   "privacy.audit.cleared":
     "Cleared browsing data from {webviews} WebView(s) and released {size} of cache.",
@@ -390,6 +424,23 @@ const zhTW: Record<keyof typeof zhCN, string> = {
   "privacy.audit.clearTitle": "清除線上痕跡？",
   "privacy.audit.clearBody":
     "所有網站將登出，圖片快取會被清空。書庫、閱讀進度與本機設定不會刪除。",
+  "privacy.guard.title": "卡死保護與安全模式",
+  "privacy.guard.description":
+    "心跳看門狗與暴躁點擊感知為常開保護；安全模式可在此手動進入或退出。",
+  "privacy.guard.alwaysOn": "常開保護",
+  "privacy.guard.watchdog": "心跳看門狗",
+  "privacy.guard.watchdogDesc":
+    "介面無回應時僅開啟獨立恢復視窗等待你選擇，絕不自動重建主視窗。",
+  "privacy.guard.rage": "暴躁點擊感知",
+  "privacy.guard.rageDesc":
+    "連續快速點擊會被視為卡死訊號，只用於喚起恢復視窗，不做任何自動操作。",
+  "privacy.guard.safeModeRow": "安全模式",
+  "privacy.guard.safeModeDesc":
+    "進入後暫停線上功能並鎖定基礎單頁模式，用於排查問題；退出會重新啟動應用程式。",
+  "privacy.guard.safeModeOn": "已啟用",
+  "privacy.guard.safeModeOff": "未啟用",
+  "privacy.guard.enter": "手動進入安全模式",
+  "privacy.guard.entering": "正在進入…",
   "privacy.audit.clearAction": "立即清除",
   "privacy.audit.cleared":
     "已清理 {webviews} 個 WebView 的瀏覽資料，並釋放 {size} 快取。",
@@ -535,6 +586,23 @@ const es: Record<keyof typeof zhCN, string> = {
   "privacy.audit.clearTitle": "¿Borrar los rastros en línea?",
   "privacy.audit.clearBody":
     "Todos los sitios cerrarán sesión y se vaciarán las cachés de imágenes. Tu biblioteca, tu progreso de lectura y los ajustes locales se conservan.",
+  "privacy.guard.title": "Protección ante cuellos y modo seguro",
+  "privacy.guard.description":
+    "El vigilante de latido y la detección de clics frustrados son protecciones siempre activas; el modo seguro se puede activar o desactivar aquí.",
+  "privacy.guard.alwaysOn": "Siempre activo",
+  "privacy.guard.watchdog": "Vigilante de latido",
+  "privacy.guard.watchdogDesc":
+    "Si la interfaz deja de responder, solo abre la ventana de recuperación independiente y espera tu elección; nunca reconstruye la ventana principal por su cuenta.",
+  "privacy.guard.rage": "Detección de clics frustrados",
+  "privacy.guard.rageDesc":
+    "Los clics rápidos y repetidos se tratan como señal de cuello y solo invocan la ventana de recuperación; no se ejecuta ninguna acción automática.",
+  "privacy.guard.safeModeRow": "Modo seguro",
+  "privacy.guard.safeModeDesc":
+    "Al activarlo se pausan las funciones en línea y se bloquea el lector en modo de página única para diagnosticar; al salir se reinicia la app.",
+  "privacy.guard.safeModeOn": "Activo",
+  "privacy.guard.safeModeOff": "Inactivo",
+  "privacy.guard.enter": "Activar modo seguro",
+  "privacy.guard.entering": "Activando…",
   "privacy.audit.clearAction": "Borrar ahora",
   "privacy.audit.cleared":
     "Se borraron los datos de navegación de {webviews} WebView y se liberaron {size} de caché.",
@@ -678,6 +746,23 @@ const ja: Record<keyof typeof zhCN, string> = {
   "privacy.audit.clearTitle": "オンラインの痕跡を消去しますか？",
   "privacy.audit.clearBody":
     "すべてのサイトからログアウトし、画像キャッシュを空にします。書庫、読書進捗、ローカル設定は削除されません。",
+  "privacy.guard.title": "フリーズ保護とセーフモード",
+  "privacy.guard.description":
+    "ハートビートウォッチドッグと連打検知は常時有効な保護です。セーフモードはここで手動切り替えできます。",
+  "privacy.guard.alwaysOn": "常時有効",
+  "privacy.guard.watchdog": "ハートビートウォッチドッグ",
+  "privacy.guard.watchdogDesc":
+    "UI が応答しなくなった場合、独立した復旧ウィンドウを開いて選択を待つだけで、メインウィンドウを自動再構築しません。",
+  "privacy.guard.rage": "連打（rage click）検知",
+  "privacy.guard.rageDesc":
+    "短時間の連続クリックはフリーズのシグナルとみなされ、復旧ウィンドウを呼び出すだけです。自動操作は行いません。",
+  "privacy.guard.safeModeRow": "セーフモード",
+  "privacy.guard.safeModeDesc":
+    "有効にするとオンライン機能を停止し、基本的な単ページ表示に固定して原因を切り分けます。終了するとアプリが再読み込みされます。",
+  "privacy.guard.safeModeOn": "有効",
+  "privacy.guard.safeModeOff": "無効",
+  "privacy.guard.enter": "セーフモードを手動で有効化",
+  "privacy.guard.entering": "有効化中…",
   "privacy.audit.clearAction": "今すぐ消去",
   "privacy.audit.cleared":
     "{webviews} 個の WebView の閲覧データを消去し、{size} のキャッシュを解放しました。",
@@ -821,6 +906,23 @@ const ko: Record<keyof typeof zhCN, string> = {
   "privacy.audit.clearTitle": "온라인 흔적을 삭제할까요?",
   "privacy.audit.clearBody":
     "모든 사이트에서 로그아웃되고 이미지 캐시가 비워집니다. 서재, 읽기 진행률, 로컬 설정은 삭제되지 않습니다.",
+  "privacy.guard.title": "멈춤 보호와 안전 모드",
+  "privacy.guard.description":
+    "하트비트 와치독과 격렬 클릭 감지는 항상 켜진 보호입니다. 안전 모드는 여기서 수동으로 켜고 끌 수 있습니다.",
+  "privacy.guard.alwaysOn": "상시 작동",
+  "privacy.guard.watchdog": "하트비트 와치독",
+  "privacy.guard.watchdogDesc":
+    "UI가 응답하지 않으면 독립 복구 창만 열고 선택을 기다립니다. 메인 창을 스스로 다시 만들지 않습니다.",
+  "privacy.guard.rage": "격렬 클릭 감지",
+  "privacy.guard.rageDesc":
+    "빠른 연속 클릭은 멈춤 신호로 간주되어 복구 창을 불러올 뿐, 자동 조치는 하지 않습니다.",
+  "privacy.guard.safeModeRow": "안전 모드",
+  "privacy.guard.safeModeDesc":
+    "켜면 온라인 기능이 일시 중지되고 기본 단일 페이지 모드로 고정되어 문제를 좁힐 수 있습니다. 끄면 앱이 다시 로드됩니다.",
+  "privacy.guard.safeModeOn": "활성",
+  "privacy.guard.safeModeOff": "비활성",
+  "privacy.guard.enter": "안전 모드 수동 진입",
+  "privacy.guard.entering": "진입 중…",
   "privacy.audit.clearAction": "지금 삭제",
   "privacy.audit.cleared":
     "WebView {webviews}개의 탐색 데이터를 지우고 {size} 캐시를 해제했습니다.",

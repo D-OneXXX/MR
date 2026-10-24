@@ -490,6 +490,8 @@ pub fn run() {
             // 1) 先锚定数据/缓存根（app_data_dir / app_cache_dir），再初始化日志。
             let (data_dir, _cache_dir, isolated) = install_app_paths(app);
             logging::init(data_dir.join("logs"));
+            // 1.1) 清理上次更新遗留的临时包 / AppImage 旧备份（>24h）。
+            update::cleanup_stale_artifacts();
             // 2) 旧 Local AppData 数据一次性接续（仅补缺失文件；隔离模式跳过）。
             migrate_legacy_into(&data_dir, isolated);
             // 3) AppState 的渲染/在线缓存根依赖已安装的 cache_dir，必须最后创建。

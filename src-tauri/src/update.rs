@@ -14,7 +14,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine as _;
 use minisign_verify::{Error as MinisignError, PublicKey, Signature};
@@ -1006,6 +1006,59 @@ fn update_dir() -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join(UPDATE_DIR_NAME);
     std::fs::create_dir_all(&dir).map_err(|err| format!("无法创建更新缓存目录：{err}"))?;
     Ok(dir)
+}
+
+const STALE_UPDATE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// 删除更新临时目录里超过 24h 的遗留文件；不创建目录、不跟随符号链接。
+/// 返回删除数量。
+fn cleanup_older_than(dir: &Path, now: SystemTime, max_age: Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let age = now.duration_since(modified).unwrap_or_default();
+        if age >= max_age && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// 启动时清理上次下载/安装遗留的临时包与 AppImage 旧备份。
+///
+/// 更新目录在系统临时目录，不能假设系统会替应用回收；AppImage 的
+/// `.old-appimage` 备份只在替换失败时用于回滚，能走到下一次启动说明
+/// 新版本已成功运行，旧备份可以安全删除。
+pub fn cleanup_stale_artifacts() {
+    let dir = std::env::temp_dir().join(UPDATE_DIR_NAME);
+    let removed = cleanup_older_than(&dir, SystemTime::now(), STALE_UPDATE_AGE);
+    if removed > 0 {
+        crate::logging::log_error(
+            "update",
+            &format!("已清理 {removed} 个陈旧更新临时文件"),
+        );
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(appimage) = std::env::var_os("APPIMAGE").map(PathBuf::from) {
+            let backup = appimage.with_extension("old-appimage");
+            if backup.is_file() {
+                let _ = std::fs::remove_file(backup);
+            }
+        }
+    }
 }
 
 fn pending_install_path() -> Result<PathBuf, String> {
@@ -2389,6 +2442,37 @@ QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfN
         let decoded = String::from_utf16(&units).unwrap();
         assert_eq!(decoded, script);
         assert!(decoded.contains("漫画 目录"));
+    }
+
+    #[test]
+    fn cleanup_removes_only_stale_update_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "mr-update-clean-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stale = dir.join("old.AppImage");
+        let fresh = dir.join("new.AppImage");
+        std::fs::write(&stale, b"old").unwrap();
+        std::fs::write(&fresh, b"new").unwrap();
+        let now = SystemTime::now();
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(now - Duration::from_secs(48 * 3600))
+            .unwrap();
+
+        let removed = cleanup_older_than(&dir, now, STALE_UPDATE_AGE);
+        assert_eq!(removed, 1);
+        assert!(!stale.exists(), "48h 前的临时包必须清理");
+        assert!(fresh.exists(), "24h 内的文件可能仍在使用，不得删除");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

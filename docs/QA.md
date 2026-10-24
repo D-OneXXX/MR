@@ -59,6 +59,9 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **更新残留清理（P2）**：启动清理 `mangareader-updates/` 中超过 24h 的
+  普通文件，并删除成功运行后的 `.old-appimage`；回归
+  `cleanup_removes_only_stale_update_files` 覆盖只删陈旧、不碰新文件。
 - **备份原子覆盖（P2）**：导出到已存在的 `.mrbackup` 时不再先删旧文件，
   而是同目录临时文件 `sync_all` 后直接 rename 覆盖并 fsync 父目录；
   回归 `export_replaces_existing_backup_without_leaving_temp_files` 覆盖替换与无残留。

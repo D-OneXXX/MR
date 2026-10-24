@@ -259,6 +259,9 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 恢复：zip 条目数/大小/名称校验，缺 `manifest` 或路径穿越直接拒绝；`library.db`
   解压到系统临时目录，只读 `integrity_check`、必需表和列、manifest 计数全部通过后，
   才用 `ATTACH` + 单事务清空/复制核心表；失败 `ROLLBACK`，活库不动。
+- **更新残留清理**：启动时删除系统临时目录 `mangareader-updates/` 内超过
+  24 小时的文件；AppImage 运行态下同时删除已验证成功运行后的
+  `.old-appimage` 回滚备份。只处理普通文件，不跟随符号链接、不创建目录。
 - **原子导出**：`.mrbackup` 先写到目标同目录唯一隐藏临时文件，zip 完成后
   `flush + sync_all`，再直接 `rename` 覆盖旧备份并 fsync 父目录；不再先删旧文件，
   崩溃时最多留下临时文件，上一份可用备份始终存在。

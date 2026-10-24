@@ -137,6 +137,23 @@ export default function AppShell() {
   }, [safeMode]);
 
   useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen<string>("cache-write-failed", () => {
+      if (!disposed) toast(translate("cache.writeFailed"));
+    })
+      .then((off) => {
+        if (disposed) off();
+        else unlisten = off;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
     if (loc.pathname === "/") setLibraryBadge(0);
   }, [loc.pathname]);
 

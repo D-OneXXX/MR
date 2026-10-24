@@ -337,6 +337,10 @@ export default function DiagnosticPanel({ compact = false }: { compact?: boolean
                   : t("diagnostics.network.direct")
               }
             />
+            <RuntimeTile
+              label={t("diagnostics.runtime.cacheFailures")}
+              value={String(runtime.cacheWriteFailures ?? 0)}
+            />
           </div>
 
           <div className="flex flex-wrap gap-1.5 text-[10px]">

@@ -66,14 +66,19 @@ impl RenderCache {
     pub fn put(&self, book_id: &str, index: u32, req_w: u32, req_h: u32, bytes: &[u8]) {
         let dir = self.book_dir(book_id);
         if std::fs::create_dir_all(&dir).is_err() {
+            crate::cache_health::record_failure();
             return;
         }
         let final_path = self.file_path(book_id, index, req_w, req_h);
         let tmp = dir.join(format!(".tmp-{index:06}@{req_w}x{req_h}"));
         if std::fs::write(&tmp, bytes).is_ok() {
-            let _ = std::fs::rename(&tmp, &final_path);
+            if std::fs::rename(&tmp, &final_path).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+                crate::cache_health::record_failure();
+            }
         } else {
             let _ = std::fs::remove_file(&tmp);
+            crate::cache_health::record_failure();
         }
     }
 
@@ -103,14 +108,19 @@ impl RenderCache {
     pub fn put_tile(&self, book_id: &str, index: u32, tile: u32, w: u32, bytes: &[u8]) {
         let dir = self.book_dir(book_id);
         if std::fs::create_dir_all(&dir).is_err() {
+            crate::cache_health::record_failure();
             return;
         }
         let final_path = dir.join(format!("{index:06}t{tile:02}@{w}.jpg"));
         let tmp = dir.join(format!(".tmp-{index:06}t{tile:02}@{w}"));
         if std::fs::write(&tmp, bytes).is_ok() {
-            let _ = std::fs::rename(&tmp, &final_path);
+            if std::fs::rename(&tmp, &final_path).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+                crate::cache_health::record_failure();
+            }
         } else {
             let _ = std::fs::remove_file(&tmp);
+            crate::cache_health::record_failure();
         }
     }
 

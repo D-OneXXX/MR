@@ -4,6 +4,7 @@
 mod backup;
 mod browser;
 pub mod cache;
+mod cache_health;
 mod commands;
 pub mod disk_cache;
 pub mod db;
@@ -95,6 +96,8 @@ pub struct MemoryStats {
     pub disk_cache_limit_bytes: u64,
     pub render_cache_bytes: u64,
     pub online_cache_bytes: u64,
+    /// 本次进程累计派生缓存写入失败次数（诊断可见，首次失败会 toast）。
+    pub cache_write_failures: u64,
 }
 
 /// 条漫布局数据：单页源图尺寸（header 解析，不解码）。
@@ -482,6 +485,7 @@ pub fn run() {
             migrate_legacy_into(&data_dir, isolated);
             // 3) AppState 的渲染/在线缓存根依赖已安装的 cache_dir，必须最后创建。
             app.manage(Arc::new(AppState::new()));
+            cache_health::install(app.handle().clone());
             if init_app(app).is_err() {
                 // 具体错误码已写入 AppState；这里只记录脱敏错误码，不输出路径。
                 logging::log_error("startup", "后端初始化失败（db-init-failed）");
@@ -527,6 +531,7 @@ pub fn run() {
             commands::get_webtoon_layout,
             commands::get_webtoon_tile,
             commands::get_memory_stats,
+            commands::get_temp_free_bytes,
             commands::get_dashboard,
             commands::get_reading_log,
             commands::get_reading_by_book,

@@ -23,6 +23,7 @@ import { useUpdater } from "@/features/update/UpdateProvider";
 import {
   checkNativeUpdate,
   closeNativeUpdate,
+  getTempFreeBytes,
   installNativeUpdate,
   isWindowsPlatform,
   relaunchApp,
@@ -161,7 +162,14 @@ export default function UpdatesPanel() {
       toast(t("updates.linux.manualBlocked"));
       return;
     }
+    // 下载前预检临时目录空间，避免底层直接抛 os error 112。
     nativeBusyRef.current = true;
+    const freeBytes = await getTempFreeBytes().catch(() => null);
+    if (freeBytes !== null && freeBytes < 256 * 1024 * 1024) {
+      nativeBusyRef.current = false;
+      toast(t("updates.disk.full"));
+      return;
+    }
     setNativeFailure(null);
     setNativeDownload({ downloaded: 0, total: null, percent: null });
     setNativePhaseSafe("downloading");

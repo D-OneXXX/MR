@@ -105,6 +105,8 @@ const zhCN = {
     "无法读取数据库健康状态；请打开数据目录查看日志。",
   "dbRecovery.selectTitle": "选择 .mrbackup 备份",
   "dbRecovery.filterName": "MangaReader 备份",
+  "cache.writeFailed":
+    "缓存写入失败：磁盘可能已满；阅读不受影响，请到设置中清理缓存或释放磁盘空间。",
   "error.requestFailed": "调用 {cmd} 失败",
   "error.backendGeneric": "操作失败；详情已写入本地日志。",
   "error.archiveDisguisedRar": "该文件实际是 RAR 压缩包（仅改了后缀名），请转换为标准无密码 ZIP/CBZ 后再导入",
@@ -222,6 +224,8 @@ const zhTW: CommonMessages = {
     "無法讀取資料庫健康狀態；請開啟資料目錄查看日誌。",
   "dbRecovery.selectTitle": "選擇 .mrbackup 備份",
   "dbRecovery.filterName": "MangaReader 備份",
+  "cache.writeFailed":
+    "快取寫入失敗：磁碟可能已滿；閱讀不受影響，請到設定中清理快取或釋放磁碟空間。",
   "error.requestFailed": "呼叫 {cmd} 失敗",
   "error.backendGeneric": "操作失敗；詳情已寫入本機日誌。",
   "error.archiveDisguisedRar": "該檔案實際是 RAR 壓縮包（僅改了副檔名），請轉換為標準無密碼 ZIP/CBZ 後再匯入",
@@ -340,6 +344,8 @@ const en: CommonMessages = {
     "Could not read database health. Open the data folder to inspect the log.",
   "dbRecovery.selectTitle": "Choose a .mrbackup backup",
   "dbRecovery.filterName": "MangaReader backup",
+  "cache.writeFailed":
+    "Cache write failed. The disk may be full; reading is unaffected. Clear the cache or free disk space in Settings.",
   "error.requestFailed": "Request failed: {cmd}",
   "error.backendGeneric": "The operation failed. Details were written to the local log.",
   "error.archiveDisguisedRar": "This file is actually a RAR archive with a renamed extension. Please convert it to a standard, unencrypted ZIP/CBZ and import again.",
@@ -460,6 +466,8 @@ const es: CommonMessages = {
     "No se pudo leer el estado de la base de datos. Abre la carpeta de datos para revisar el registro.",
   "dbRecovery.selectTitle": "Elegir una copia .mrbackup",
   "dbRecovery.filterName": "Copia de MangaReader",
+  "cache.writeFailed":
+    "Falló la escritura en caché. El disco puede estar lleno; la lectura no se ve afectada. Borra la caché o libera espacio en Ajustes.",
   "error.requestFailed": "Error al llamar a {cmd}",
   "error.backendGeneric": "La operación falló. Los detalles se guardaron en el registro local.",
   "error.archiveDisguisedRar": "Este archivo es en realidad un comprimido RAR con la extensión renombrada. Conviértelo a un ZIP/CBZ estándar sin contraseña e impórtalo de nuevo.",
@@ -580,6 +588,8 @@ const ja: CommonMessages = {
     "データベースの状態を読み取れません。データフォルダーを開いてログを確認してください。",
   "dbRecovery.selectTitle": ".mrbackup バックアップを選択",
   "dbRecovery.filterName": "MangaReader バックアップ",
+  "cache.writeFailed":
+    "キャッシュの書き込みに失敗しました。ディスクが満杯の可能性があります。読書には影響しません。設定でキャッシュを消去するか、空き容量を確保してください。",
   "error.requestFailed": "{cmd} の呼び出しに失敗しました",
   "error.backendGeneric": "操作に失敗しました。詳細はローカルログに記録しました。",
   "error.archiveDisguisedRar": "このファイルは実は拡張子を変えただけの RAR 圧縮ファイルです。パスワードなしの標準 ZIP/CBZ に変換してから読み込んでください。",
@@ -700,6 +710,8 @@ const ko: CommonMessages = {
     "데이터베이스 상태를 읽을 수 없습니다. 데이터 폴더를 열어 로그를 확인하세요.",
   "dbRecovery.selectTitle": ".mrbackup 백업 선택",
   "dbRecovery.filterName": "MangaReader 백업",
+  "cache.writeFailed":
+    "캐시 쓰기에 실패했습니다. 디스크가 가득 찼을 수 있습니다. 읽기에는 영향이 없습니다. 설정에서 캐시를 지우거나 디스크 공간을 확보하세요.",
   "error.requestFailed": "{cmd} 호출 실패",
   "error.backendGeneric": "작업에 실패했습니다. 자세한 내용은 로컬 로그에 기록했습니다.",
   "error.archiveDisguisedRar": "이 파일은 확장자만 바꾼 RAR 압축 파일입니다. 암호 없는 표준 ZIP/CBZ로 변환한 뒤 다시 가져오세요.",

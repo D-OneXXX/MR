@@ -12,6 +12,8 @@ export interface DiagnosticRuntime {
   proxyScheme?: string | null;
   onlineEnabled: boolean;
   safeMode: boolean;
+  /** 本次进程派生缓存写入失败次数；>0 表示磁盘已满/权限/IO 异常。 */
+  cacheWriteFailures: number;
 }
 
 export interface DiagnosticBreadcrumb {

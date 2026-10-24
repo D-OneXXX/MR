@@ -1135,7 +1135,15 @@ fn blocking_memory(
         disk_cache_limit_bytes: disk.1,
         render_cache_bytes: disk.2,
         online_cache_bytes: disk.3,
+        cache_write_failures: crate::cache_health::failures(),
     }
+}
+
+/// 更新下载前预检：系统临时目录所在卷的可用字节数。
+/// 失败返回 None，由前端决定是否放行（不把探测失败伪装成磁盘耗尽）。
+#[tauri::command]
+pub fn get_temp_free_bytes() -> Option<u64> {
+    crate::platform::free_bytes(&std::env::temp_dir())
 }
 
 #[tauri::command]

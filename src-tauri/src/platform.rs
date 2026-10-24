@@ -109,6 +109,20 @@ fn linux_nvidia_present() -> bool {
 /// - `system`：`/usr`、`/opt` 下的系统安装（deb/rpm 包管理器管辖）；
 /// - `portable`：其余（开发态、手动解压运行）；
 /// - Windows/macOS：空串，前端据此完全跳过 Linux 更新策略分支。
+/// 目标路径所在卷的可用字节数（更新下载前预检）。
+///
+/// 用 sysinfo 的挂载点列表做跨平台探测：取包含 canonical path 的最长挂载点，
+/// 避免把 Windows 多盘符或 Linux bind mount 的 `/` 当成唯一答案。
+pub fn free_bytes(path: &std::path::Path) -> Option<u64> {
+    let canonical = path.canonicalize().ok()?;
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    disks
+        .iter()
+        .filter(|disk| canonical.starts_with(disk.mount_point()))
+        .max_by_key(|disk| disk.mount_point().as_os_str().len())
+        .map(|disk| disk.available_space())
+}
+
 pub fn install_channel() -> &'static str {
     #[cfg(target_os = "linux")]
     {

@@ -64,6 +64,8 @@ pub struct DiagnosticRuntime {
     pub proxy_scheme: Option<String>,
     pub online_enabled: bool,
     pub safe_mode: bool,
+    /// 本次进程派生缓存写入失败次数；>0 表示磁盘已满/权限/IO 异常。
+    pub cache_write_failures: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -821,6 +823,7 @@ pub fn diagnostics_collect(
         proxy_scheme,
         online_enabled: settings.experimental_online,
         safe_mode: context.safe_mode,
+        cache_write_failures: crate::cache_health::failures(),
     };
 
     let breadcrumbs = breadcrumbs_slot()

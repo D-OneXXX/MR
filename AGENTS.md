@@ -202,6 +202,8 @@
   严禁在新增路径里退回普通字典序。
 - **磁盘缓存**：`render_cache/` 与 `online_cache/` 共用 `diskCacheBudgetMb`（500MB–10GB，默认 2048MB）
   软上限，读取刷新 mtime，LRU 淘汰；清理只删派生目录，绝不碰 `library.db` 与阅读进度。
+  缓存写失败必须计入 `cache_health`（首次 toast + 诊断可见），不得永久静默；
+  更新下载前必须检查临时目录剩余空间并给出本地化错误。
 - **SQLite 并发**：所有生产连接必须经 `db::open` / `db::configure` 开启
   `journal_mode=WAL`、`busy_timeout=5000`、`synchronous=NORMAL`、`foreign_keys=ON`；
   禁止绕过该入口直接 `Connection::open`，否则高速滚动进度与规则落盘会互相锁库。

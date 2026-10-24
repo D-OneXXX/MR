@@ -67,6 +67,11 @@ export function isWindowsPlatform(): boolean {
   return platformKind() === "windows";
 }
 
+/** 更新下载前预检系统临时目录剩余空间；探测失败返回 null。 */
+export async function getTempFreeBytes(): Promise<number | null> {
+  return invoke<number | null>("get_temp_free_bytes");
+}
+
 /** Manual check against the endpoints configured in `tauri.conf.json`. */
 export async function checkNativeUpdate(): Promise<NativeUpdateCheck | null> {
   const update = await check();

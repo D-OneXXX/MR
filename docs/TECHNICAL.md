@@ -69,6 +69,10 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 两个缓存目录共用 `diskCacheBudgetMb` 软上限（默认 2048 MB，可调 500–10240 MB）；
   读取时刷新文件 mtime，启动、累计写盘 256 MB、每 5 分钟与退出时按最旧优先 LRU 清理。
   清理只删除派生目录，绝不触碰 `library.db`、书库记录或阅读进度。
+- **缓存写入可观测**：`cache_health` 进程级计数器累计 render/online 缓存写失败；首次失败
+  写脱敏日志并 emit `cache-write-failed`，AppShell 六语 toast，诊断包
+  `cacheWriteFailures` 可见。更新安装前通过 `platform::free_bytes` 检查系统临时目录
+  剩余空间，<256MB 明确提示，不直出 `os error 112`。
 - SQLite 所有生产连接统一经 `db::open`：`journal_mode=WAL`、`busy_timeout=5000`、
   `synchronous=NORMAL`、`foreign_keys=ON`，避免条漫滚动进度 / 规则落盘 / 缓存统计并发写入时锁库。
 - 启动时在 `init_schema` 后执行 `PRAGMA quick_check`。打开/结构/完整性失败会写入

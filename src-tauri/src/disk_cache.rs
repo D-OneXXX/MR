@@ -96,6 +96,7 @@ impl OnlinePageCache {
         }
         let dir = self.book_dir(book_id);
         if fs::create_dir_all(&dir).is_err() {
+            crate::cache_health::record_failure();
             return false;
         }
         let final_path = self.file_path(book_id, url, referer, ext);
@@ -110,12 +111,14 @@ impl OnlinePageCache {
         ));
         if fs::write(&tmp, bytes).is_err() {
             let _ = fs::remove_file(&tmp);
+            crate::cache_health::record_failure();
             return false;
         }
         // Windows 的 rename 不覆盖已有文件：先清掉旧副本，失败也不阻断写入。
         let _ = fs::remove_file(&final_path);
         if fs::rename(&tmp, &final_path).is_err() {
             let _ = fs::remove_file(&tmp);
+            crate::cache_health::record_failure();
             return false;
         }
         true

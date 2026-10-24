@@ -42,6 +42,8 @@ const zhCN = {
   "updates.native.progressLabel": "GitHub 更新下载进度",
   "updates.native.errorCheck": "无法连接 GitHub 更新服务，请检查网络后重试。",
   "updates.native.errorInstall": "下载或安装更新失败，当前版本未受影响。",
+  "updates.disk.full":
+    "系统临时目录剩余空间不足（至少需要 256 MB），请清理磁盘后重试。",
   "updates.native.errorRelaunch": "重启应用失败，请手动关闭并重新打开 MangaReader。",
   "updates.linux.manualTitle": "系统安装需要手动更新",
   "updates.linux.manualHint":
@@ -96,6 +98,8 @@ const en: Record<keyof typeof zhCN, string> = {
     "Could not reach the GitHub update service. Check your connection and try again.",
   "updates.native.errorInstall":
     "Downloading or installing the update failed. Your current version is unaffected.",
+  "updates.disk.full":
+    "The system temporary folder has less than 256 MB free. Free some disk space and try again.",
   "updates.native.errorRelaunch":
     "Could not restart the app. Close and open MangaReader manually.",
   "updates.linux.manualTitle":
@@ -149,6 +153,8 @@ const zhTW: Record<keyof typeof zhCN, string> = {
   "updates.native.progressLabel": "GitHub 更新下載進度",
   "updates.native.errorCheck": "無法連線 GitHub 更新服務，請檢查網路後重試。",
   "updates.native.errorInstall": "下載或安裝更新失敗，目前版本未受影響。",
+  "updates.disk.full":
+    "系統暫存目錄剩餘空間不足（至少需要 256 MB），請清理磁碟後重試。",
   "updates.native.errorRelaunch":
     "無法重新啟動應用程式，請手動關閉並重新開啟 MangaReader。",
   "updates.linux.manualTitle": "系統安裝需要手動更新",
@@ -204,6 +210,8 @@ const es: Record<keyof typeof zhCN, string> = {
     "No se pudo contactar con el servicio de actualizaciones de GitHub. Revisa la conexión e inténtalo de nuevo.",
   "updates.native.errorInstall":
     "La descarga o instalación de la actualización falló. La versión actual no se ha modificado.",
+  "updates.disk.full":
+    "La carpeta temporal del sistema tiene menos de 256 MB libres. Libera espacio y vuelve a intentarlo.",
   "updates.native.errorRelaunch":
     "No se pudo reiniciar la aplicación. Cierra y abre MangaReader manualmente.",
   "updates.linux.manualTitle":
@@ -260,6 +268,8 @@ const ja: Record<keyof typeof zhCN, string> = {
     "GitHub の更新サービスに接続できませんでした。ネットワークを確認して再試行してください。",
   "updates.native.errorInstall":
     "アップデートのダウンロードまたはインストールに失敗しました。現在のバージョンは影響を受けません。",
+  "updates.disk.full":
+    "システムの一時フォルダーの空き容量が 256 MB 未満です。ディスクを空けて再試行してください。",
   "updates.native.errorRelaunch":
     "アプリを再起動できませんでした。MangaReader を手動で閉じて開き直してください。",
   "updates.linux.manualTitle":
@@ -316,6 +326,8 @@ const ko: Record<keyof typeof zhCN, string> = {
     "GitHub 업데이트 서비스에 연결하지 못했습니다. 네트워크를 확인한 후 다시 시도하세요.",
   "updates.native.errorInstall":
     "업데이트 다운로드 또는 설치에 실패했습니다. 현재 버전은 영향을 받지 않습니다.",
+  "updates.disk.full":
+    "시스템 임시 폴더의 여유 공간이 256MB 미만입니다. 디스크 공간을 확보한 후 다시 시도하세요.",
   "updates.native.errorRelaunch":
     "앱을 다시 시작하지 못했습니다. MangaReader를 직접 종료한 후 다시 여세요.",
   "updates.linux.manualTitle":

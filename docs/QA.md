@@ -59,6 +59,9 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **旧版备份夹具**：手工构造 0.16 形态库（无 `source_stats`、旧
+  `reading_log(date,book_id)` 主键、全局 `book_id=''`）并打包恢复，
+  断言书/进度保留且全局 10 页 + 书 5 页合计 15 页不丢。
 - **P2/P3 静态清零**：构建基线监听 `.git/index`/refs/前后端源码；Webtoon
   预解码失败/超时进入失败态且 `<img>` onError 可重试；暴躁点击签名加入
   testid/id/aria-label/title/text 与 DOM 路径兜底；发布工作流改为按 YAML

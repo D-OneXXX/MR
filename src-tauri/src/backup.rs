@@ -1391,6 +1391,98 @@ mod tests {
     }
 
     #[test]
+    fn restore_accepts_legacy_016_shape_backup() {
+        let dir = temp_dir("legacy-backup");
+        let legacy_path = dir.join("legacy.db");
+        let legacy_book = dir.join("旧书.cbz");
+        fs::write(&legacy_book, b"legacy-cbz-placeholder").unwrap();
+        {
+            let conn = Connection::open(&legacy_path).unwrap();
+            // 0.16 形态：无 source_stats，reading_log 仍是 (date, book_id) 主键，
+            // 全局旧史用空串 book_id。
+            conn.execute_batch(
+                "CREATE TABLE books(
+                    id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+                    page_count INTEGER NOT NULL DEFAULT 0,
+                    current_page INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    removed INTEGER NOT NULL DEFAULT 0,
+                    scroll_pct REAL NOT NULL DEFAULT -1,
+                    source_type TEXT NOT NULL DEFAULT 'local',
+                    meta_json TEXT NOT NULL DEFAULT '{}'
+                 );
+                 CREATE TABLE reading_log(
+                    date TEXT NOT NULL, book_id TEXT NOT NULL DEFAULT '',
+                    pages INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(date, book_id)
+                 );
+                 CREATE TABLE settings(k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '');
+                 CREATE TABLE online_filter_profiles(
+                    host TEXT PRIMARY KEY, main_selector TEXT, cdn_pattern TEXT,
+                    width_min INTEGER, width_max INTEGER, aspect_max REAL,
+                    uses INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT ''
+                 );
+                 CREATE TABLE online_filter_rules(
+                    id TEXT PRIMARY KEY, host TEXT NOT NULL, action TEXT NOT NULL,
+                    source TEXT NOT NULL, pattern_json TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '',
+                    hits INTEGER NOT NULL DEFAULT 0
+                 );",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO books(id, path, title, page_count, current_page)
+                 VALUES ('b1', ?1, '旧书', 20, 12)",
+                params![legacy_book.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO reading_log(date, book_id, pages) VALUES
+                 ('2026-01-01', '', 10), ('2026-01-02', 'b1', 5)",
+                [],
+            )
+            .unwrap();
+        }
+        let counts = {
+            let conn = Connection::open(&legacy_path).unwrap();
+            count_core_rows(&conn).unwrap()
+        };
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "format": BACKUP_FORMAT,
+            "schema": 1,
+            "appVersion": "0.16.0",
+            "createdAt": "2026-01-02 00:00:00",
+            "counts": counts,
+            "excludes": ["online_headers"],
+        }))
+        .unwrap();
+        let db_bytes = fs::read(&legacy_path).unwrap();
+        let backup = dir.join("legacy.mrbackup");
+        write_raw_zip(
+            &backup,
+            &[("manifest.json", &manifest), ("library.db", &db_bytes)],
+        );
+
+        let live = dir.join("live.db");
+        {
+            let conn = db::open(&live).unwrap();
+            db::init_schema(&conn).unwrap();
+        }
+        let restored = restore_backup_blocking(&live, &backup).expect("旧版备份应可恢复");
+        assert_eq!(restored.books, 1);
+        let conn = db::open(&live).unwrap();
+        let book = db::get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(book.title, "旧书");
+        assert_eq!(book.current_page, 12);
+        assert_eq!(
+            db::reading_log_days(&conn, None, 3650).unwrap().iter().map(|row| row.1).sum::<u32>(),
+            15,
+            "全局旧史 10 + 书 b1 的 5 页都必须保留"
+        );
+        drop(conn);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn exported_database_excludes_credentials_events_and_internal_meta() {
         let dir = temp_dir("purge");
         let db_path = seeded_db(&dir);

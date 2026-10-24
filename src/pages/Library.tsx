@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   BookMarked,
@@ -12,11 +11,10 @@ import {
   Plus,
   ShieldCheck,
   Trash2,
-  Upload,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useI18n, translate } from "@/i18n";
+import { useDropImport } from "@/features/import/DropImportProvider";
 import { useSafeMode } from "@/features/safeMode/SafeModeContext";
 import { useWorkspace } from "@/features/workspace/WorkspaceContext";
 import { recordBreadcrumb } from "@/features/resilience";
@@ -48,12 +46,6 @@ const GROUP_KEY = "mr-library-group-series";
 const FILTER_KEY = "mr-library-source-filter";
 /** 书库渐进窗口：首屏 60 张，滚动/点击再追加，避免几千卡片同时挂载。 */
 const PAGE_SIZE = 60;
-
-interface ImportProgress {
-  done: number;
-  total: number;
-  current: string;
-}
 
 interface CtxMenuState {
   x: number;
@@ -95,7 +87,7 @@ function notifyError(cmd: string, error: unknown): void {
 export default function LibraryPage() {
   const nav = useNavigate();
   const ws = useWorkspace();
-  const { t, formatNumber } = useI18n();
+  const { t, locale, formatNumber } = useI18n();
   const { active: safeMode } = useSafeMode();
   const [groupSeries, setGroupSeries] = useState(readGrouping);
   const [sourceFilter, setSourceFilter] = useState(readSourceFilter);
@@ -121,11 +113,8 @@ export default function LibraryPage() {
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<BookInfo[] | null>(null);
 
-  // 导入进度（右下角小卡）与全局拖放高亮
-  const [importing, setImporting] = useState<ImportProgress | null>(null);
-  const [dragActive, setDragActive] = useState(false);
-  // 单飞锁：拖放、按钮、外部刷新可能同时触发导入，重叠扫描会互相抢库锁。
-  const importGuardRef = useRef(false);
+  // 导入由应用级 Provider 统一管理：任意页面拖放都可用，单飞锁跨路由生效。
+  const { importPaths, importing } = useDropImport();
 
   useEffect(() => {
     try {
@@ -317,13 +306,13 @@ export default function LibraryPage() {
       const bi = b.chapterIndex ?? Number.MAX_SAFE_INTEGER;
       if (ai !== bi) return ai - bi;
       return (
-        a.title.localeCompare(b.title, "zh", {
+        a.title.localeCompare(b.title, locale, {
           numeric: true,
           sensitivity: "base",
         }) || a.updatedAt.localeCompare(b.updatedAt)
       );
     });
-  }, [accessibleAllBooks, selectedBook]);
+  }, [accessibleAllBooks, selectedBook, locale]);
 
   const commitSearch = useCallback(() => {
     setDebounced(query.trim());
@@ -415,78 +404,6 @@ export default function LibraryPage() {
     setSelectMode(true);
   }, [selectMode, exitSelectMode]);
 
-  /* ---------- 导入（逐路径调用，聚合结果后统一 toast） ---------- */
-  const importPaths = useCallback(
-    async (paths: string[]) => {
-      if (importGuardRef.current) {
-        toast(translate("import.busy"));
-        return;
-      }
-      const clean = paths.map((path) => path.trim()).filter(Boolean);
-      if (clean.length === 0) return;
-      importGuardRef.current = true;
-      try {
-        let added = 0;
-        let restored = 0;
-        let skipped = 0;
-        let failed = 0;
-        const failMsgs: string[] = [];
-        for (let i = 0; i < clean.length; i += 1) {
-          setImporting({ done: i, total: clean.length, current: clean[i] });
-          try {
-            const result = await api.importBooks([clean[i]]);
-            added += result.added;
-            restored += result.restored;
-            skipped += result.skipped;
-            failed += result.failed;
-            for (const item of result.items) {
-              if (item.status === "failed") {
-                failMsgs.push(
-                  translate("import.itemFailed", {
-                    path: item.path,
-                    message: localizeBackendError(item.message),
-                  }),
-                );
-              }
-            }
-          } catch (e) {
-            failed += 1;
-            failMsgs.push(
-              typeof e === "string" && e.length > 0
-                ? localizeBackendError(e)
-                : translate("import.failedFallback"),
-            );
-          }
-        }
-        await reload(debounced);
-        const parts = [
-          translate("import.added", { count: formatNumber(added) }),
-        ];
-        if (restored > 0) {
-          parts.push(
-            translate("import.restored", { count: formatNumber(restored) }),
-          );
-        }
-        if (skipped > 0) {
-          parts.push(
-            translate("import.inLibrary", { count: formatNumber(skipped) }),
-          );
-        }
-        if (failed > 0) {
-          parts.push(
-            translate("import.failed", { count: formatNumber(failed) }),
-          );
-        }
-        toast(translate("import.complete", { summary: parts.join(" · ") }));
-        if (failMsgs.length > 0) toast(failMsgs[0]);
-      } finally {
-        importGuardRef.current = false;
-        setImporting(null);
-      }
-    },
-    [debounced, formatNumber, reload],
-  );
-
   // 添加压缩包：文件对话框（zip/cbz 多选）→ 每个压缩包 = 一本书。
   const onAddFiles = useCallback(async () => {
     try {
@@ -529,37 +446,6 @@ export default function LibraryPage() {
     } catch {
       toast(translate("import.folderPickerUnavailable"));
     }
-  }, [importPaths]);
-
-  // 拖入文件/文件夹入库：Tauri drag-drop 事件同时驱动高亮覆盖层。
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    getCurrentWebview()
-      .onDragDropEvent((event) => {
-        const payload = event.payload;
-        if (payload.type === "enter" || payload.type === "over") {
-          setDragActive(true);
-          return;
-        }
-        if (payload.type === "leave") {
-          setDragActive(false);
-          return;
-        }
-        setDragActive(false);
-        if (payload.paths.length > 0) void importPaths(payload.paths);
-      })
-      .then((off) => {
-        if (disposed) off();
-        else unlisten = off;
-      })
-      .catch(() => {
-        /* 非 Tauri 环境忽略 */
-      });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
   }, [importPaths]);
 
   /* ---------- 移除记录 / 删除源文件（语义与旧版完全一致） ---------- */
@@ -764,12 +650,18 @@ export default function LibraryPage() {
           ) : null}
           <span className="whitespace-nowrap tabular-nums" aria-live="polite">
             {groupSeries
-              ? t("library.countGroups", {
-                  count: formatNumber(displayBooks.length),
-                })
-              : t("library.countBooks", {
-                  count: formatNumber(displayBooks.length),
-                })}
+              ? t(
+                  displayBooks.length === 1
+                    ? "library.countGroupsOne"
+                    : "library.countGroups",
+                  { count: formatNumber(displayBooks.length) },
+                )
+              : t(
+                  displayBooks.length === 1
+                    ? "library.countBooksOne"
+                    : "library.countBooks",
+                  { count: formatNumber(displayBooks.length) },
+                )}
           </span>
         </div>
       </div>
@@ -944,43 +836,6 @@ export default function LibraryPage() {
         />
       )}
 
-      {/* 导入进度（portal 到 body，right/bottom 相对视口） */}
-      {importing &&
-        createPortal(
-          <div
-            className="fade-in fixed bottom-6 right-5 z-[70] w-[min(320px,86vw)] rounded-2xl border border-border bg-card p-4 text-card-foreground shadow-hard"
-            role="status"
-            aria-live="polite"
-          >
-            <div className="flex items-baseline gap-2">
-              <span className="text-sm font-semibold">
-                {t("import.progress", {
-                  done: formatNumber(importing.done + 1),
-                  total: formatNumber(importing.total),
-                })}
-              </span>
-              <span className="ml-auto shrink-0 text-xs font-semibold tabular-nums text-muted-foreground">
-                {Math.round((importing.done / importing.total) * 100)}%
-              </span>
-            </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full rounded-full bg-primary transition-[width]"
-                style={{
-                  width: `${(importing.done / importing.total) * 100}%`,
-                }}
-              />
-            </div>
-            <div
-              className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground"
-              title={importing.current}
-            >
-              {importing.current}
-            </div>
-          </div>,
-          document.body,
-        )}
-
       <BookDetailSheet
         book={sheetBook}
         open={sheetOpen}
@@ -1003,24 +858,6 @@ export default function LibraryPage() {
         onRemove={onRemoveMissing}
       />
 
-      {/* 拖入时的全屏覆盖提示（Tauri enter/over/leave/drop） */}
-      {dragActive &&
-        createPortal(
-          <div className="fade-in pointer-events-none fixed inset-0 z-[110] flex items-center justify-center bg-background/70 p-8 backdrop-blur-sm">
-            <div className="flex w-full max-w-lg flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-primary bg-card px-8 py-12 text-center shadow-hard">
-              <span className="grid size-12 place-items-center rounded-full border border-border bg-primary text-primary-foreground shadow-hard-sm">
-                <Upload className="size-6" />
-              </span>
-              <p className="text-lg font-bold tracking-tight text-foreground">
-                {t("import.dropTitle")}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                {t("import.dropHint")}
-              </p>
-            </div>
-          </div>,
-          document.body,
-        )}
     </div>
   );
 }

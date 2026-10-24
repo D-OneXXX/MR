@@ -550,15 +550,23 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
     `OnlineImportDialog` 已删除，验证交接（配对桥）迁移为浏览器页常驻卡片，
     状态模块抽至 `src/features/online/handoffState.ts`（StatusPill 复用）。
     顶栏状态胶囊的「上次连通性」改由浏览器地址栏解析结果（成功/失败）写入。
+  - 计数单复数：书库头部按 `count === 1` 使用 `library.countBooksOne` /
+    `library.countGroupsOne`，英文/西语不再出现 “1 books / 1 libros”。
+  - Toast 最多 3 条；批量操作条打开时通过 `--mr-toast-bottom` 把 toast
+    抬到胶囊条上方，避免遮挡。
+  - 章节自然序使用当前界面 locale 的 `localeCompare`（不再固定 `zh`）；
+    MB 统计统一走 `Intl.NumberFormat`，西语显示小数逗号。
   - 书库导入入口唯一对：`[+ 导入文件夹]` `[+ 导入压缩包]`（顶栏）+ 整窗拖拽；
     空状态不再重复渲染第二组导入按钮。
   - 书库渐进窗口：首屏最多 60 张卡，底部哨兵进入视口（600px 提前量）或点击
     `library.loadMore` 按钮再追加 60 张；搜索/来源筛选/合集模式/安全模式变化时
     重置窗口。`BookCard` 用 `IntersectionObserver`（320px 提前量）才请求
     `get_thumbnail`，离屏卡片不占 IPC 与解码。
-  - 导入单飞：书库用 `importGuardRef` 阻止拖放/按钮/对话框回调重叠触发导入，
-    进行中再次触发只提示六语 `import.busy`；顶部两个导入按钮同时禁用。
-    每个路径仍逐个 `import_books` 以维持进度卡与失败聚合。
+  - 应用级导入：`DropImportProvider` 挂在路由之外，Tauri drag-drop 在书库/
+    阅读器/设置/浏览器都可用；全局 `importGuardRef` 单飞，重叠触发只提示
+    六语 `import.busy`。书库按钮通过 `useDropImport` 共用同一实现，导入中
+    两个按钮禁用；每个路径逐个 `import_books`，进度卡与失败聚合只有一份
+    （多条失败额外提示 `import.moreFailures`），完成后广播书库刷新。
   - 前端不再调用的后端命令（保留注册、契约不变）：`test_online_connection`、
     `import_resolved_pages`、`resolve_online_batch`、`clear_thumbnail_cache`。
 - 书库失效态：`BookInfo.missing` 为 true 时书卡显示「文件位置已变更」胶囊，

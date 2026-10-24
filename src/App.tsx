@@ -16,6 +16,7 @@ import {
 } from "./features/workspace/WorkspaceContext";
 import { useSafeMode } from "./features/safeMode/SafeModeContext";
 import OpenWithBridge from "./features/openWith/OpenWithBridge";
+import { DropImportProvider } from "./features/import/DropImportProvider";
 import { useI18n } from "./i18n";
 
 /** 阅读路由：key 绑定 bookId，切页签时强制卸载旧 Reader（释放图片/条漫 DOM）。 */
@@ -37,8 +38,10 @@ export default function App() {
   return (
     <SafeModeBootGate>
       <WorkspaceProvider>
-        <OpenWithBridge />
-        <AppRoutes />
+        <DropImportProvider>
+          <OpenWithBridge />
+          <AppRoutes />
+        </DropImportProvider>
       </WorkspaceProvider>
     </SafeModeBootGate>
   );

@@ -41,7 +41,8 @@ export function Toaster() {
     const handler: ToastListener = (msg) => {
       const id = nextId;
       nextId += 1;
-      setItems((prev) => [...prev.slice(-3), { id, msg }]);
+      // 最多 3 条：超过会遮住底部批量操作条与内容。
+      setItems((prev) => [...prev.slice(-2), { id, msg }]);
       window.setTimeout(() => {
         setItems((prev) => prev.filter((item) => item.id !== id));
       }, 4200);
@@ -59,7 +60,7 @@ export function Toaster() {
 
   return (
     <div
-      className="pointer-events-none fixed bottom-5 left-1/2 z-[120] flex w-[min(92vw,460px)] -translate-x-1/2 flex-col items-center gap-2"
+      className="pointer-events-none fixed bottom-[var(--mr-toast-bottom,1.25rem)] left-1/2 z-[120] flex w-[min(92vw,460px)] -translate-x-1/2 flex-col items-center gap-2"
       aria-live="polite"
     >
       {items.map((item) => (

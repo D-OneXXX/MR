@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { BookX, Trash2, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/i18n";
@@ -21,6 +22,13 @@ export default function LibrarySelectionBar({
   onCancel,
 }: Props) {
   const { t } = useI18n();
+  // 批量操作条固定在底部：把 toast 抬到它上方，避免文字与按钮互相遮挡。
+  useEffect(() => {
+    document.body.style.setProperty("--mr-toast-bottom", "6.5rem");
+    return () => {
+      document.body.style.removeProperty("--mr-toast-bottom");
+    };
+  }, []);
   return createPortal(
     <div
       className="pointer-events-none fixed inset-x-0 bottom-6 z-[75] flex justify-center px-4"

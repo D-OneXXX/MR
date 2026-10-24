@@ -59,6 +59,10 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **UI/i18n 长尾（P2）**：书库计数单数键（1 book / 1 libro）、章节排序
+  改用当前 locale、设置 MB 走 `Intl.NumberFormat`；Toast 上限 3 条并在
+  批量操作条打开时上移；`index.html` 标题改中性 `MangaReader`（运行时
+  仍由 locale 覆盖）；ContextMenu 仅在焦点位于菜单内时接管方向键。
 - **更新残留清理（P2）**：启动清理 `mangareader-updates/` 中超过 24h 的
   普通文件，并删除成功运行后的 `.old-appimage`；回归
   `cleanup_removes_only_stale_update_files` 覆盖只删陈旧、不碰新文件。
@@ -88,9 +92,10 @@
   书路径显式 `non-utf8-path` 拒绝，命令行非 UTF-8 参数只记日志。
   Linux 专属 `cfg` 代码仍需 `ci-linux-check.yml` 在 ubuntu-22.04 实际编译；
   Windows 宿主已跑通 314 个单测与全量 QA。
-- **导入并发守卫（P1.14）**：书库导入加单飞锁，拖放/按钮/对话框回调
-  重叠触发时只弹六语 `import.busy`，不再并发 `import_books` 抢库锁；
-  导入进行中两个导入按钮禁用，进度卡与逐路径失败聚合保持不变。
+- **应用级导入与并发守卫（P1.14/P2）**：`DropImportProvider` 挂路由之外，
+  任意页面拖入压缩包都能入库；全局单飞锁阻止拖放/按钮/对话框重叠扫描，
+  导入中两个按钮禁用。进度卡与失败聚合只有一份，多条失败追加
+  `import.moreFailures` 提示；完成后广播书库刷新。
 - **错误本地化（P1.13）**：书库 loadError/导入条目、详情 Sheet 章节与阅读记录、
   设置页设置/统计加载、浏览器地址解析/Telegram/下载、隐私自检与清痕、
   安全模式进出、Webtoon 布局与 PageToc 全部改走 `localizeBackendError`，

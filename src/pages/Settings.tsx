@@ -189,9 +189,12 @@ function sumLast7Days(heatmap: Dashboard["heatmap"]): number {
   );
 }
 
-function formatMb(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "0.0 MB";
-  return `${(bytes / 1048576).toFixed(1)} MB`;
+function formatMb(bytes: number, locale: string): string {
+  const safe = Number.isFinite(bytes) && bytes >= 0 ? bytes : 0;
+  return `${new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(safe / 1048576)} MB`;
 }
 
 /** 缓存占用百分比：非法值/零上限安全，结果限制在 0-100。 */
@@ -561,7 +564,7 @@ export default function SettingsPage() {
       const result = await api.clearTempCache();
       toast(
         t("settings.toast.tempCleared", {
-          size: formatMb(result.bytesFreed),
+          size: formatMb(result.bytesFreed, locale),
         }),
       );
       await refreshMemory();
@@ -1376,8 +1379,8 @@ export default function SettingsPage() {
                       {t("settings.cache.diskUsage")}
                     </span>
                     <span className="font-mono font-semibold tabular-nums">
-                      {formatMb(mem.diskCacheBytes)} /{" "}
-                      {formatMb(mem.diskCacheLimitBytes)} ·{" "}
+                      {formatMb(mem.diskCacheBytes, locale)} /{" "}
+                      {formatMb(mem.diskCacheLimitBytes, locale)} ·{" "}
                       {formatNumber(diskCachePct)}%
                     </span>
                   </div>
@@ -1385,11 +1388,11 @@ export default function SettingsPage() {
                   <div className="grid gap-2 sm:grid-cols-2">
                     <MemoryTile
                       label={t("settings.cache.diskRender")}
-                      value={formatMb(mem.renderCacheBytes)}
+                      value={formatMb(mem.renderCacheBytes, locale)}
                     />
                     <MemoryTile
                       label={t("settings.cache.diskOnline")}
-                      value={formatMb(mem.onlineCacheBytes)}
+                      value={formatMb(mem.onlineCacheBytes, locale)}
                     />
                   </div>
                 </>

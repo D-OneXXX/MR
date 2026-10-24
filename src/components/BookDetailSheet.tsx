@@ -42,14 +42,14 @@ export interface BookDetailSheetProps {
   onRelocate?: (book: BookInfo) => void;
 }
 
-function sortChapters(list: BookInfo[]): BookInfo[] {
+function sortChapters(list: BookInfo[], locale: string): BookInfo[] {
   return [...list].sort((a, b) => {
     const ai = a.chapterIndex;
     const bi = b.chapterIndex;
     if (ai != null && bi != null && ai !== bi) return ai - bi;
     if (ai != null && bi == null) return -1;
     if (ai == null && bi != null) return 1;
-    return a.title.localeCompare(b.title, "zh", {
+    return a.title.localeCompare(b.title, locale, {
       numeric: true,
       sensitivity: "base",
     });
@@ -406,7 +406,7 @@ function SeriesSection({
   onOpenChange: (open: boolean) => void;
   onRead: (book: BookInfo, page?: number) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [fetched, setFetched] = useState<BookInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -424,7 +424,7 @@ function SeriesSection({
     api.getSeriesBooks(seriesId).then(
       (rows) => {
         if (!alive) return;
-        setFetched(sortChapters(rows));
+        setFetched(sortChapters(rows, locale));
         setLoading(false);
       },
       (e) => {
@@ -444,8 +444,8 @@ function SeriesSection({
   }, [active, shouldFetch, seriesId, tick]);
 
   const list = useMemo(
-    () => sortChapters(provided ?? fetched ?? []),
-    [provided, fetched],
+    () => sortChapters(provided ?? fetched ?? [], locale),
+    [provided, fetched, locale],
   );
 
   if (!book.seriesId && list.length <= 1) return null;

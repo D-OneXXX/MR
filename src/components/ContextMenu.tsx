@@ -59,6 +59,9 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
         return;
       }
       if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      // 只有焦点仍在菜单内才接管方向键；焦点跑到输入框后必须放行原生输入。
+      const target = e.target as Node | null;
+      if (!target || !ref.current?.contains(target)) return;
       const nodes = ref.current?.querySelectorAll<HTMLButtonElement>(
         '[role="menuitem"]',
       );

@@ -128,7 +128,7 @@ fn mul_round(x: u64, num: u64, den: u64) -> u64 {
 }
 
 /// 读取并校验源图尺寸：0 尺寸 / 像素数超限 / 头解析失败 → `BackendError`（不 panic）。
-fn source_dimensions(raw: &RawPage) -> Result<(u32, u32), BackendError> {
+pub(crate) fn source_dimensions(raw: &RawPage) -> Result<(u32, u32), BackendError> {
     let dims = image::ImageReader::new(std::io::Cursor::new(&raw.bytes))
         .with_guessed_format()?
         .into_dimensions()
@@ -522,6 +522,40 @@ fn render_band_tile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_dimensions_rejects_oversized_header_before_decode() {
+        use image::ImageEncoder as _;
+        let mut bytes = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut bytes)
+            .write_image(&[0, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .expect("编码 1×1 PNG");
+        // PNG: 8B signature + 4B length + 4B "IHDR" + width/height。
+        bytes[16..20].copy_from_slice(&20_000u32.to_be_bytes());
+        bytes[20..24].copy_from_slice(&9_000u32.to_be_bytes());
+        // 重新计算 IHDR 的 CRC（type + data），证明拒绝原因是像素上限而非坏头。
+        let mut crc = 0xffff_ffffu32;
+        for byte in &bytes[12..29] {
+            crc ^= *byte as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        bytes[29..33].copy_from_slice(&(crc ^ 0xffff_ffff).to_be_bytes());
+        let raw = RawPage {
+            bytes,
+            ext: "png".into(),
+        };
+        let error = source_dimensions(&raw).unwrap_err().to_string();
+        assert!(
+            error.contains("超过解码上限"),
+            "超限 header 必须在整图解码前拒绝：{error}"
+        );
+    }
 
     #[test]
     fn fit_size_downscales_only() {

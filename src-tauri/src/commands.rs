@@ -2543,7 +2543,14 @@ pub async fn get_filtered_preview(
                 resp.status
             )));
         }
-        let image = image::load_from_memory(&resp.body)
+        // 与 pipeline 共用 header 预检：超巨图/解码炸弹在读整图前拒绝，
+        // panic=abort 下绝不能把不受控尺寸交给 image::load_from_memory。
+        let raw = crate::source::RawPage {
+            bytes: resp.body,
+            ext: String::new(),
+        };
+        crate::pipeline::source_dimensions(&raw)?;
+        let image = image::load_from_memory(&raw.bytes)
             .map_err(|e| BackendError::Decode(format!("过滤图预览解码失败：{e}")))?;
         let (orig_w, orig_h) = image.dimensions();
         let thumb = image.thumbnail(360, 540);

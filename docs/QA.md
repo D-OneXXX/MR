@@ -54,6 +54,8 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **解码炸弹防护（P1.9）**：过滤图预览复用 `source_dimensions` header 预检，
+  20k×9k 超限 PNG 在 `load_from_memory` 前被拒绝；单测 `source_dimensions_rejects_oversized_header_before_decode`。
 - **SSRF 防护（P1.8）**：`normalize_url` / `ensure_http_url` 与 HTTP transport 每一跳
   （含重定向）都阻断字面 IP 与 DNS 解析后的私网/link-local/元数据地址；QA loopback
   仅 debug 环境显式放行。单测覆盖 IPv4/IPv6 私网、CGNAT、映射地址、元数据地址。

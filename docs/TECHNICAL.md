@@ -138,6 +138,9 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   - `WEBTOON_TILE_H = 2048`：输出切片高度上限。
 - 条漫走「先切后缩」：解码一次 → 按源图切带（每带 ≤4096 行）→ 逐带缩放到显示宽 → 输出连续切片；
   峰值内存只多活「一条源带 + 一张切片栅格」，不再同时持有原图/整图副本/全部切片。
+- `get_filtered_preview` 与取页/切片共用 `pipeline::source_dimensions` header 预检
+  （`MAX_SOURCE_PIXELS = 160M`），超巨图/解码炸弹在 `image::load_from_memory` 前拒绝，
+  避免 `panic = abort` 下直接闪退。
 - 切片边界与前端 `webtoon_tile_count` / `tileTopAt` 同一公式（`round(j*disp_h/n)`），
   前后端几何一致，不出现缝隙或重叠。
 - 在线清单缺 `width/height`（典型：Telegram 相册只有 CDN URL）时，用户**显式进入条漫**

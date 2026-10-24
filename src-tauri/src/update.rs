@@ -914,6 +914,9 @@ async fn fetch_manifest(raw_url: &str) -> Result<ValidManifest, String> {
     }
     // 重定向后的最终地址同样受策略约束。
     validate_download_url(response.url().as_str())?;
+    if configured_public_key().is_none() && !is_loopback_url(response.url()) {
+        return Err("未配置更新签名公钥，已拒绝未签名更新".to_string());
+    }
     if response
         .content_length()
         .map(|len| len > MANIFEST_MAX_BYTES as u64)
@@ -932,7 +935,9 @@ async fn fetch_manifest(raw_url: &str) -> Result<ValidManifest, String> {
         }
         body.extend_from_slice(&chunk);
     }
-    verify_manifest_signature(&body)?;
+    let allow_unsigned =
+        configured_public_key().is_none() && is_loopback_url(response.url());
+    verify_manifest_signature(&body, allow_unsigned)?;
     let manifest: Manifest =
         serde_json::from_slice(&body).map_err(|_| "更新清单格式无效".to_string())?;
     validate_manifest(manifest)
@@ -940,18 +945,45 @@ async fn fetch_manifest(raw_url: &str) -> Result<ValidManifest, String> {
 
 /// 清单签名覆盖版本、URL、sha256、size 与 notes 等所有字段；签名前把
 /// `signature` 字段移除，再对 serde_json 的稳定键序序列化做 minisign 校验。
-fn verify_manifest_signature(body: &[u8]) -> Result<(), String> {
-    if configured_public_key().is_none() {
-        return Ok(());
-    }
+///
+/// 未配置公钥时只允许调用方明确传入 `allow_unsigned=true`（生产路径仅在
+/// 回环 URL 下传入）；远程清单绝不放行。
+fn verify_manifest_signature(body: &[u8], allow_unsigned: bool) -> Result<(), String> {
+    verify_manifest_signature_with(body, configured_public_key(), allow_unsigned)
+}
+
+fn parse_public_key(raw: &str) -> Result<PublicKey, String> {
+    let parsed = if raw.contains('\n') {
+        PublicKey::decode(raw)
+    } else {
+        PublicKey::from_base64(raw)
+    };
+    parsed.map_err(|_| "更新签名公钥无效，已拒绝更新".to_string())
+}
+
+fn verify_manifest_signature_with(
+    body: &[u8],
+    public_key: Option<&str>,
+    allow_unsigned: bool,
+) -> Result<(), String> {
     let mut value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| "更新清单格式无效".to_string())?;
     let signature_text = value
         .get("signature")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "更新清单缺少签名，已拒绝更新".to_string())?;
-    let signature = parse_signature(signature_text)?;
-    let key = load_public_key()?;
+        .map(str::to_string);
+    let Some(public_key) = public_key else {
+        // 没有公钥可验证，清单签名不能视为可信；只允许显式回环测试放行。
+        return if allow_unsigned {
+            Ok(())
+        } else {
+            Err("未配置更新签名公钥，已拒绝未签名更新".to_string())
+        };
+    };
+    let signature_text =
+        signature_text.ok_or_else(|| "更新清单缺少签名，已拒绝更新".to_string())?;
+    let signature = parse_signature(&signature_text)?;
+    let key = parse_public_key(public_key)?;
     if let Some(object) = value.as_object_mut() {
         object.remove("signature");
     }
@@ -2164,6 +2196,91 @@ mod tests {
         assert!(generated.starts_with(&format!("{}-7-", std::process::id())));
         assert!(generated.ends_with(".msi"));
         assert!(Path::new(&generated).components().count() == 1);
+    }
+
+    const TEST_PUBKEY: &str =
+        "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+    const TEST_SIGNATURE: &str = "untrusted comment: signature from minisign secret key
+RWQf6LRCGA9i59SLOFxz6NxvASXDJeRtuZykwQepbDEGt87ig1BNpWaVWuNrm73YiIiJbq71Wi+dP9eKL8OC351vwIasSSbXxwA=
+trusted comment: timestamp:1555779966\tfile:test
+QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfNQUaOAA==";
+    fn wrong_public_key() -> PublicKey {
+        let mut raw = base64::engine::general_purpose::STANDARD
+            .decode(TEST_PUBKEY)
+            .expect("测试公钥 base64");
+        raw[10] ^= 0x01;
+        parse_public_key(&base64::engine::general_purpose::STANDARD.encode(raw))
+            .expect("翻转字节后的公钥仍应可解析")
+    }
+
+    fn signature_test_file(tag: &str, data: &[u8]) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("系统时钟早于 UNIX_EPOCH")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mr-update-sign-{tag}-{}-{nanos}.bin",
+            std::process::id()
+        ));
+        std::fs::write(&path, data).expect("写入签名测试文件");
+        path
+    }
+
+    #[test]
+    fn signature_file_rejects_tampered_bytes_and_wrong_key() {
+        let path = signature_test_file("verify", b"test");
+        let key = PublicKey::from_base64(TEST_PUBKEY).expect("测试公钥");
+        let signature = Signature::decode(TEST_SIGNATURE).expect("测试签名");
+
+        verify_signature_file(&path, &key, &signature).expect("原始字节应验签通过");
+
+        std::fs::write(&path, b"tampered").unwrap();
+        assert!(
+            verify_signature_file(&path, &key, &signature).is_err(),
+            "篡改字节必须拒绝"
+        );
+
+        std::fs::write(&path, b"test").unwrap();
+        let wrong = wrong_public_key();
+        assert!(
+            verify_signature_file(&path, &wrong, &signature).is_err(),
+            "错误公钥必须拒绝"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn unsigned_manifest_is_only_allowed_for_explicit_unsigned_mode() {
+        let body = br#"{"version":"0.9.1","notes":"test","full":{"url":"https://example.com/x.exe","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1}}"#;
+        assert!(
+            verify_manifest_signature_with(body, None, true).is_ok(),
+            "回环/测试显式放行时允许无签名清单"
+        );
+        assert!(
+            verify_manifest_signature_with(body, None, false).is_err(),
+            "未配置公钥且非显式放行时必须拒绝"
+        );
+        assert!(
+            verify_manifest_signature_with(body, Some(TEST_PUBKEY), false).is_err(),
+            "配置公钥时未签名清单必须拒绝"
+        );
+
+        let signature = serde_json::json!({
+            "version": "0.9.1",
+            "notes": "test",
+            "signature": TEST_SIGNATURE,
+            "full": {
+                "url": "https://example.com/x.exe",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "size": 1
+            }
+        });
+        let raw = serde_json::to_vec(&signature).unwrap();
+        assert!(
+            verify_manifest_signature_with(&raw, Some(TEST_PUBKEY), false).is_err(),
+            "签名覆盖的是制品字节，不是任意清单 JSON，必须拒绝"
+        );
     }
 
     #[test]

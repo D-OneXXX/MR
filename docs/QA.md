@@ -19,6 +19,18 @@
 
 ### 0.17.0 新增验收要点
 
+- **全站 UI 去重清剿（严格配额）**：设置 5 分区卡片配额收敛完成——
+  存储 3 卡（书库统计+目录扫描 / 缓存与 LRU 单滑杆+单清空按钮 / 备份恢复，
+  保留 `settings-tab-cache`、`disk-cache-usage`、`#disk-cache-budget`、
+  `clear-temp-cache` 标识）、网络 3 卡（代理胶囊组[跟随系统/手动/直连] /
+  提纯引擎 / 在线直读开关，连通性测试输入框删除）、隐私 2 卡
+  （声明+自检+Windows 指引+清除痕迹合一，仅 1 个重检按钮；新增卡死保护
+  与安全模式卡：看门狗/暴躁点击为常开保护展示 + 手动进出安全模式）、
+  常规 3 卡（主题/语言/快捷键）。阅读器版式/方向/封面偏移收拢至顶部 HUD
+  唯一工具栏（随模式动态显隐），阅读设置弹层与「更多」菜单删除，底部
+  Dock 只留唯一滑杆与页码。书库页只保留一对导入按钮 + 拖拽，空状态重复
+  按钮删除；`OnlineImportDialog` 删除，浏览器页地址栏成为全站唯一直读
+  输入框，验证交接迁移为浏览器页常驻卡片（`features/online/handoffState`）。
 - **压缩包编码**：GBK 中文名包（`zip_entry_name_fixup_recovers_gbk_but_keeps_utf8`）
   与 Shift_JIS 假名包（`zip_entry_name_fixup_recovers_shift_jis_via_kana_tiebreak`）
   展示名恢复正常，`lookup` 仍用 zip crate 解码名保证读页命中。
@@ -28,7 +40,7 @@
   不再无限转圈。人工用例：把 `.rar` 改名 `.cbz` 导入 → 立即弹
   六语格式提示（zh 原文、其余语言按 `error.archiveDisguisedRar`）。
 - **双页模式**：宽 > 高×1.1 的页自动独占居中（`.reader-double.solo-center`）；
-  `mr-reader-cover` 开关（Dock 胶囊 + 阅读设置弹层）切换首页封面单独成页，
+  `mr-reader-cover` 开关（顶部 HUD 胶囊，随双页模式显隐）切换首页封面单独成页，
   sanitizer flag 规则与备份偏好白名单已同步。
 - **唤醒自愈**：Reader/Webtoon 在 `visibilitychange`/`focus` 后 400ms 校验
   视口图片，坏图静默重取（分页 ≤2、切片 ≤3 上限防重取风暴）。

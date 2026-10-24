@@ -1940,6 +1940,53 @@ mod tests {
         Version::parse(raw).expect("测试版本号应有效")
     }
 
+    /// 一次性回环 HTTP 服务：返回清单地址与线程句柄。
+    fn serve_manifest_once(
+        status: &str,
+        body: String,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定回环端口");
+        let addr = listener.local_addr().expect("读取端口");
+        let status = status.to_string();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("接受请求");
+            let mut buffer = [0u8; 4096];
+            let _ = stream.read(&mut buffer);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("写响应");
+        });
+        (format!("http://{addr}/manifest.json"), handle)
+    }
+
+    #[tokio::test]
+    async fn fetch_manifest_accepts_unsigned_loopback_and_reports_http_errors() {
+        let body = serde_json::json!({
+            "version": "0.18.0",
+            "notes": "mock server",
+            "full": {
+                "url": "http://127.0.0.1:9/MangaReader.exe",
+                "size": 1024,
+                "sha256": sha('a'),
+            }
+        })
+        .to_string();
+        let (url, handle) = serve_manifest_once("200 OK", body);
+        let manifest = fetch_manifest(&url).await.expect("回环未签名清单应放行");
+        assert_eq!(manifest.version_raw, "0.18.0");
+        assert_eq!(manifest.full.size, 1024);
+        handle.join().unwrap();
+
+        let (url, handle) = serve_manifest_once("503 Service Unavailable", "{}".into());
+        let error = fetch_manifest(&url).await.expect_err("5xx 必须拒绝");
+        assert!(error.contains("HTTP 503"), "{error}");
+        handle.join().unwrap();
+    }
+
     fn entry(url: &str, from: Option<&str>, format: Option<&str>) -> ArtifactEntry {
         ArtifactEntry {
             from_version: from.map(str::to_string),

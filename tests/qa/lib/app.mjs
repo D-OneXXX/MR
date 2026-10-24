@@ -146,6 +146,8 @@ export async function startQaApp({
       MR_DATA_DIR: dataDir,
       MR_RENDER_CACHE_DIR: path.join(dataDir, "render_cache"),
       MR_ONLINE_CACHE_DIR: path.join(dataDir, "online_cache"),
+      // QA 在线夹具运行在 127.0.0.1；只对 debug 构建生效，release 永远拒绝回环。
+      MR_ALLOW_LOOPBACK_ONLINE: "1",
       WEBVIEW2_USER_DATA_FOLDER: webviewDir,
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
       QA_CDP_PORT: String(cdpPort),

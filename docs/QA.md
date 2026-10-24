@@ -54,6 +54,9 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **SSRF 防护（P1.8）**：`normalize_url` / `ensure_http_url` 与 HTTP transport 每一跳
+  （含重定向）都阻断字面 IP 与 DNS 解析后的私网/link-local/元数据地址；QA loopback
+  仅 debug 环境显式放行。单测覆盖 IPv4/IPv6 私网、CGNAT、映射地址、元数据地址。
 - **CSP 收紧（P0.5）**：生产 `app.security.csp` 不再为空；devCsp 仅放行 Vite HMR。
   真实生产资产启动验证：`http://tauri.localhost/` 返回 CSP 头，IPC 调用成功，
   `data:image` 缩略图与阅读页图片加载成功，`securitypolicyviolation` 为 0。

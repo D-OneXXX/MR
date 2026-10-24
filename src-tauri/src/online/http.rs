@@ -1,10 +1,14 @@
 //! 阻塞 HTTP Transport：ureq + 代理 + 重试 + 响应大小上限。
 
 use std::io::Read;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::online::{validate_proxy, OnlineError, ONLINE_UA};
+use crate::online::{
+    allow_loopback_for_dev, is_blocked_ip, validate_host_literal, validate_proxy, OnlineError,
+    ONLINE_UA,
+};
 use crate::state::AssistedSessionRegistry;
 
 /// 一次 HTTP 请求的最终结果（含重定向后的最终 URL）。
@@ -122,6 +126,8 @@ pub struct UreqTransport {
     /// 辅助会话注册表（进程内存）：命中已注册 origin 时复用该会话的 UA。
     /// `None` 表示没有辅助上下文，一律使用标准桌面 Chrome UA。
     assisted: Option<Arc<AssistedSessionRegistry>>,
+    /// 仅 debug 测试/QA 通过环境变量放行回环；release 恒为 false。
+    allow_loopback: bool,
 }
 
 struct RawResponse {
@@ -224,6 +230,7 @@ impl UreqTransport {
             agent: builder.build(),
             headers,
             assisted: None,
+            allow_loopback: allow_loopback_for_dev(),
         })
     }
 
@@ -256,6 +263,40 @@ impl UreqTransport {
         self.assisted
             .as_ref()
             .and_then(|registry| registry.headers_for_url(target))
+    }
+
+    /// 每一跳都校验目标：字面 IP/localhost + DNS 解析后的全部地址。
+    /// 仅 debug/QA 的显式回环开关可放行 127.0.0.0/8 与 ::1；
+    /// 私网、link-local、169.254.169.254、fc00::/7、fe80::/10 永远拒绝。
+    fn validate_target(&self, target: &url::Url) -> Result<(), OnlineError> {
+        let host = target
+            .host_str()
+            .filter(|host| !host.is_empty())
+            .ok_or_else(|| OnlineError::Network("URL 缺少主机名".into()))?;
+        validate_host_literal(host, self.allow_loopback).map_err(OnlineError::Network)?;
+        if host.parse::<IpAddr>().is_ok()
+            || host.eq_ignore_ascii_case("localhost")
+            || host.ends_with(".localhost")
+        {
+            return Ok(());
+        }
+        let port = target.port_or_known_default().unwrap_or(443);
+        let addrs = (host, port)
+            .to_socket_addrs()
+            .map_err(|_| OnlineError::Network("域名解析失败".into()))?;
+        let mut saw = false;
+        for addr in addrs {
+            saw = true;
+            if is_blocked_ip(addr.ip(), self.allow_loopback) {
+                return Err(OnlineError::Network(
+                    "目标域名解析到本机/私网/链路本地地址，已拒绝".into(),
+                ));
+            }
+        }
+        if !saw {
+            return Err(OnlineError::Network("域名没有可用地址".into()));
+        }
+        Ok(())
     }
 
     /// 单次请求：应用手动请求头与派生的 Referer/Origin。
@@ -332,6 +373,7 @@ impl UreqTransport {
     ) -> Result<RawResponse, OnlineError> {
         let mut current = url.clone();
         for hop in 0..=MAX_REDIRECTS {
+            self.validate_target(&current)?;
             let raw = self.execute(&current, scope, max_bytes, referer)?;
             if !is_redirect(raw.status) {
                 return Ok(raw);
@@ -374,6 +416,11 @@ fn ensure_http_url(raw: &str) -> Result<url::Url, OnlineError> {
     if !matches!(u.scheme(), "http" | "https") {
         return Err(OnlineError::Network("仅支持 http/https URL".into()));
     }
+    validate_host_literal(
+        u.host_str().unwrap_or_default(),
+        allow_loopback_for_dev(),
+    )
+    .map_err(OnlineError::Network)?;
     Ok(u)
 }
 
@@ -424,6 +471,7 @@ impl HttpTransport for UreqTransport {
         header_scope: Option<&str>,
     ) -> Result<HttpResponse, OnlineError> {
         let url = ensure_http_url(url)?;
+        self.validate_target(&url)?;
         let scope = parse_header_scope(header_scope);
         for attempt in 0..=2u32 {
             match self.get_once(&url, max_bytes, referer, scope.as_ref())? {
@@ -511,6 +559,22 @@ mod tests {
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"ok");
         h.join().unwrap();
+    }
+
+    #[test]
+    fn transport_rejects_private_and_metadata_literals() {
+        let t = UreqTransport::new("", "").unwrap();
+        for url in [
+            "http://10.0.0.1/x",
+            "http://192.168.1.1/x",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[fc00::1]/x",
+        ] {
+            assert!(t.get(url, 1024, None, None).is_err(), "必须拒绝：{url}");
+        }
+        assert!(ensure_http_url("http://169.254.169.254/").is_err());
+        // 单元测试/debug QA 显式放行 loopback 夹具。
+        assert!(ensure_http_url("http://127.0.0.1:1/").is_ok());
     }
 
     #[test]

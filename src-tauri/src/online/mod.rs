@@ -10,6 +10,7 @@ pub mod http;
 pub mod telegram;
 
 use std::collections::HashSet;
+use std::net::IpAddr;
 use std::sync::{Condvar, Mutex};
 
 use crate::source::BackendError;
@@ -97,6 +98,66 @@ impl From<OnlineError> for BackendError {
     }
 }
 
+/// 仅 debug/单元测试可通过显式环境变量放行回环夹具；release 永远拒绝。
+pub(crate) fn allow_loopback_for_dev() -> bool {
+    cfg!(test)
+        || (cfg!(debug_assertions)
+            && std::env::var_os("MR_ALLOW_LOOPBACK_ONLINE").is_some())
+}
+
+/// 私网 / link-local / 元数据 / 保留地址阻断。
+pub(crate) fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
+    if ip.is_loopback() {
+        return !allow_loopback;
+    }
+    if ip.is_unspecified() || ip.is_multicast() {
+        return true;
+    }
+    match ip {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                // 100.64.0.0/10 CGNAT
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                // 0.0.0.0/8
+                || octets[0] == 0
+                // 224.0.0.0/4 及以上为组播/保留
+                || octets[0] >= 224
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_blocked_ip(IpAddr::V4(v4), allow_loopback);
+            }
+            v6.is_unique_local() || v6.is_unicast_link_local()
+        }
+    }
+}
+
+/// 对字面 IP / localhost 做早期校验；域名解析留给 HTTP transport 在每跳执行。
+pub(crate) fn validate_host_literal(
+    host: &str,
+    allow_loopback: bool,
+) -> Result<(), String> {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if host.is_empty() {
+        return Err("URL 缺少主机名".to_string());
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_blocked_ip(ip, allow_loopback) {
+            return Err("目标地址位于本机/私网/链路本地，已拒绝".to_string());
+        }
+        return Ok(());
+    }
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        if !allow_loopback {
+            return Err("目标地址指向 localhost，已拒绝".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// 规范化外部 URL：仅允许 http/https、拒绝 userinfo、去掉 fragment、限制 2048 字节。
 pub fn normalize_url(raw: &str) -> Result<url::Url, BackendError> {
     let raw = raw.trim();
@@ -110,6 +171,11 @@ pub fn normalize_url(raw: &str) -> Result<url::Url, BackendError> {
     if !u.username().is_empty() || u.password().is_some() {
         return Err(BackendError::Msg("URL 不能包含用户名或密码".into()));
     }
+    validate_host_literal(
+        u.host_str().unwrap_or_default(),
+        allow_loopback_for_dev(),
+    )
+    .map_err(BackendError::Msg)?;
     u.set_fragment(None);
     Ok(u)
 }
@@ -654,5 +720,60 @@ mod tests {
             t.scopes(),
             vec![Some("http://example.com/list?token=secret".to_string())]
         );
+    }
+
+    #[test]
+    fn ssrf_ip_ranges_are_blocked_except_dev_loopback() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+        let blocked = [
+            Ipv4Addr::new(10, 1, 2, 3),
+            Ipv4Addr::new(172, 16, 0, 1),
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(169, 254, 169, 254),
+            Ipv4Addr::new(100, 64, 0, 1),
+            Ipv4Addr::new(0, 0, 0, 0),
+            Ipv4Addr::new(224, 0, 0, 1),
+        ];
+        for ip in blocked {
+            assert!(
+                is_blocked_ip(IpAddr::V4(ip), false),
+                "私网/保留地址必须阻断：{ip}"
+            );
+        }
+        assert!(!is_blocked_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), false));
+        assert!(!is_blocked_ip(IpAddr::V4(Ipv4Addr::new(172, 32, 0, 1)), false));
+        assert!(is_blocked_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), false));
+        assert!(!is_blocked_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), true));
+        assert!(is_blocked_ip(IpAddr::V6(Ipv6Addr::LOCALHOST), false));
+        assert!(!is_blocked_ip(IpAddr::V6(Ipv6Addr::LOCALHOST), true));
+        assert!(is_blocked_ip(
+            IpAddr::V6("fc00::1".parse().unwrap()),
+            true
+        ));
+        assert!(is_blocked_ip(
+            IpAddr::V6("fe80::1".parse().unwrap()),
+            true
+        ));
+        assert!(is_blocked_ip(
+            "::ffff:127.0.0.1".parse().unwrap(),
+            false
+        ));
+    }
+
+    #[test]
+    fn normalize_url_rejects_private_literals_but_allows_loopback_in_tests() {
+        for bad in [
+            "http://10.0.0.1/x",
+            "http://172.16.0.1/x",
+            "http://192.168.0.1/x",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[fc00::1]/x",
+            "http://[fe80::1]/x",
+        ] {
+            assert!(normalize_url(bad).is_err(), "必须拒绝：{bad}");
+        }
+        assert!(normalize_url("http://127.0.0.1:8080/x").is_ok());
+        assert!(normalize_url("http://localhost:8080/x").is_ok());
+        assert!(normalize_url("http://example.com/x").is_ok());
     }
 }

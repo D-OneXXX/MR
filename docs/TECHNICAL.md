@@ -286,6 +286,10 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   UA 固定为标准桌面 Chrome，复用设置中的系统/自定义 HTTP(S)/SOCKS5 代理。
 - 原图按 `book_id + URL + Referer` 哈希落 `online_cache/`；成品 JPEG 落 `render_cache/`。
   两层都命中时不再发网络请求；403/404 的 Telegram 直链仍按消息锚点刷新。
+- **SSRF 防护**：`normalize_url` / `ensure_http_url` 拒绝字面私网、link-local、
+  169.254.169.254、::1、fc00::/7、fe80::/10；HTTP transport 在首跳与每一跳重定向
+  都重新做 DNS 解析并校验全部地址。回环只允许 debug 测试/QA 通过
+  `MR_ALLOW_LOOPBACK_ONLINE=1` 显式放行，release 构建永远关闭。
 - 两目录由 `AppState::trim_disk_cache` 共用软上限（设置项 `diskCacheBudgetMb`，500–10240 MB）；
   读取刷新 mtime，按最旧优先淘汰；设置页可查看占用/分项并一键清空临时缓存。
 - `clear_temp_cache` 同时清空内存页/缩略图/条漫切片与两个磁盘目录，但不删除 SQLite 的任何行。

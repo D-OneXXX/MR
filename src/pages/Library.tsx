@@ -7,7 +7,6 @@ import {
   BookX,
   Check,
   FolderPlus,
-  Link2,
   ListChecks,
   Loader2,
   Plus,
@@ -23,8 +22,6 @@ import { useWorkspace } from "@/features/workspace/WorkspaceContext";
 import { recordBreadcrumb } from "@/features/resilience";
 import {
   api,
-  isOnlineEnabled,
-  onExperimentalChange,
   type BookInfo,
   type Dashboard,
 } from "@/lib/tauri";
@@ -37,7 +34,6 @@ import ContextMenu from "@/components/ContextMenu";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import ErrorState from "@/components/ErrorState";
 import PixelPet from "@/components/PixelPet";
-import OnlineImportDialog from "@/components/OnlineImportDialog";
 import { toast } from "@/components/Toast";
 import LibraryFilters, {
   type SourceFilter,
@@ -127,14 +123,6 @@ export default function LibraryPage() {
   // 导入进度（右下角小卡）与全局拖放高亮
   const [importing, setImporting] = useState<ImportProgress | null>(null);
   const [dragActive, setDragActive] = useState(false);
-
-  // URL 在线直读入口（实验性开关门控 + 订阅变更）。
-  const [onlineOpen, setOnlineOpen] = useState(false);
-  const [onlineOn, setOnlineOn] = useState(isOnlineEnabled);
-  useEffect(() => onExperimentalChange(() => setOnlineOn(isOnlineEnabled())), []);
-  useEffect(() => {
-    if (!onlineOn || safeMode) setOnlineOpen(false);
-  }, [onlineOn, safeMode]);
 
   useEffect(() => {
     try {
@@ -393,18 +381,6 @@ export default function LibraryPage() {
     setSheetOpen(false);
     setSelectMode(true);
   }, [selectMode, exitSelectMode]);
-
-  const openOnline = useCallback(() => {
-    if (safeMode) {
-      toast(t("safeMode.onlineDisabled"));
-      return;
-    }
-    if (!onlineOn) {
-      toast(translate("library.enableOnlineFirst"));
-      return;
-    }
-    setOnlineOpen(true);
-  }, [onlineOn, safeMode, t]);
 
   /* ---------- 导入（逐路径调用，聚合结果后统一 toast） ---------- */
   const importPaths = useCallback(
@@ -690,17 +666,9 @@ export default function LibraryPage() {
           </div>
 
           <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+            {/* 本地导入唯一入口对：导入文件夹 / 导入压缩包（另支持整窗拖拽）。 */}
             <Button
               variant="pill-primary"
-              size="pill"
-              onClick={() => void onAddFiles()}
-              title={t("library.addBooksTitle")}
-            >
-              <Plus />
-              {t("library.addBooks")}
-            </Button>
-            <Button
-              variant="pill"
               size="pill"
               onClick={() => void onAddFolder()}
               title={t("library.addFolderTitle")}
@@ -711,17 +679,11 @@ export default function LibraryPage() {
             <Button
               variant="pill"
               size="pill"
-              onClick={openOnline}
-              title={
-                safeMode
-                  ? t("safeMode.onlineDisabled")
-                  : onlineOn
-                    ? t("library.onlineReadTitleOn")
-                    : t("library.onlineReadTitleOff")
-              }
+              onClick={() => void onAddFiles()}
+              title={t("library.addBooksTitle")}
             >
-              <Link2 />
-              {t("library.onlineRead")}
+              <Plus />
+              {t("library.addBooks")}
             </Button>
             <Button
               variant={selectMode ? "pill-primary" : "pill"}
@@ -779,24 +741,7 @@ export default function LibraryPage() {
         ) : visibleBooks.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-border bg-card/60 px-6 py-10 text-center shadow-hard-sm">
             <PixelPet mode="empty" message={emptyMessage} />
-            <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
-              <Button
-                variant="pill-primary"
-                size="pill-sm"
-                onClick={() => void onAddFiles()}
-              >
-                <Plus />
-                {t("library.addBooks")}
-              </Button>
-              <Button
-                variant="pill"
-                size="pill-sm"
-                onClick={() => void onAddFolder()}
-              >
-                <FolderPlus />
-                {t("library.addFolder")}
-              </Button>
-            </div>
+            {/* 空状态不再重复渲染导入按钮：顶栏右侧是唯一导入入口。 */}
             <p className="mt-4 text-xs text-muted-foreground">
               {t("library.dragHint")}
             </p>
@@ -970,16 +915,6 @@ export default function LibraryPage() {
           </div>,
           document.body,
         )}
-
-      {onlineOn && !safeMode && onlineOpen && (
-        <OnlineImportDialog
-          initialUrl=""
-          initialTab="link"
-          onClose={() => setOnlineOpen(false)}
-          onImported={() => void reload(debounced)}
-          onRead={(book) => openReader(book.id)}
-        />
-      )}
 
       <BookDetailSheet
         book={sheetBook}

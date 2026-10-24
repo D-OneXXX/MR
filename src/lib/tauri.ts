@@ -341,8 +341,6 @@ export const api = {
     }),
   getThumbnail: (bookId: string, maxSize?: number) =>
     invoke<PageImage>("get_thumbnail", { bookId, maxSize: maxSize ?? null }),
-  // 清空封面缓存（内存+磁盘首页成品），重新进入书库自动重建。
-  clearThumbCache: () => invoke<number>("clear_thumbnail_cache"),
   // 清空临时磁盘缓存（render + online 原图），返回释放体积与文件数。
   clearTempCache: () => invoke<ClearCacheResult>("clear_temp_cache"),
   getMemoryStats: () => invoke<MemoryStats>("get_memory_stats"),
@@ -373,23 +371,14 @@ export const api = {
     }),  // 解析 JSON 清单/单页 HTML 图集并入库或恢复；不改变已有书进度。
   resolveOnlineUrl: (url: string) =>
     invoke<BookInfo>("resolve_online_url", { url }),
-  // 只测试清单/图集 + 代理连通性，不写库。
-  testOnlineConnection: (url: string) =>
-    invoke<OnlineProbe>("test_online_connection", { url }),
   // 系统代理探测（只填入表单，不落库）。
   detectSystemProxy: () => invoke<string | null>("detect_system_proxy"),
-  // 手动图片 URL 列表入库。
-  importResolvedPages: (url: string, title: string, pageUrls: string[]) =>
-    invoke<BookInfo>("import_resolved_pages", { url, title, pageUrls }),
   // 外部系统浏览器配对桥接：长驻监听，结果经 online-handoff-imported 回传。
   startBrowserHandoff: (allowSessionHeaders: boolean) =>
     invoke<HandoffStatus>("start_browser_handoff", { allowSessionHeaders }),
   stopBrowserHandoff: () => invoke<void>("stop_browser_handoff"),
   getBrowserHandoffStatus: () =>
     invoke<HandoffStatus>("get_browser_handoff_status"),
-  // 多话合集 / 系列 / 下一话。
-  resolveOnlineBatch: (payloadJson: string) =>
-    invoke<BookInfo[]>("resolve_online_batch", { payloadJson }),
   // Telegram 公开频道/消息/Telegraph 直读（免登录，仅公开预览页）。
   resolveTelegramChannel: (url: string, before?: number | null) =>
     invoke<TelegramChannel>("resolve_telegram_channel", {

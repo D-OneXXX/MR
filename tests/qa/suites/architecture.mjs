@@ -937,7 +937,7 @@ const SETTINGS_TABS_PROBE = `(() => {
       hasStorage: !!panel.querySelector('[data-testid="disk-cache-usage"]') && !!panel.querySelector("#disk-cache-budget"),
       hasPrivacyVersion: /\\b20\\d\\d-\\d\\d\\b/.test(panelText),
       hasDiagnostics: !!panel.querySelector("#diagnostics-description"),
-      hasUpdate: !!panel.querySelector("#update-channel") || !!panel.querySelector("#update-manifest"),
+      hasUpdate: !!panel.querySelector("#update-check"),
     } : null,
     hash: location.hash,
   };

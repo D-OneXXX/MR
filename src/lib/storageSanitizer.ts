@@ -218,8 +218,6 @@ function canonicalUpdatePrefs(parsed: unknown): unknown | null {
   return {
     manifestUrl: typeof source.manifestUrl === "string" ? source.manifestUrl : "",
     channel: source.channel === "beta" ? "beta" : "stable",
-    autoCheck: source.autoCheck !== false,
-    autoDownload: source.autoDownload === true,
   };
 }
 

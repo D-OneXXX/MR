@@ -6,7 +6,7 @@
 
 - 角色：首席架构师 / 实施代理。
 - 使命：本地优先、零遥测、零静默副作用的 Windows 桌面漫画阅读器。
-- 当前版本：`0.16.0`（版本单一事实源是 `package.json`，`npm run version:sync` 负责同步）。
+- 当前版本：`0.17.0`（版本单一事实源是 `package.json`，`npm run version:sync` 负责同步）。
 
 ---
 

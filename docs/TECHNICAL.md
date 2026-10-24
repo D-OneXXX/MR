@@ -273,21 +273,30 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 
 ## 8. 更新与版本
 
-### 8.1 自定义补丁通道（保留）
+### 8.1 自定义补丁通道（后端保留，无设置页入口）
 
 - SemVer 严格 `MAJOR.MINOR.PATCH`，拒绝 `1.2`、`01.2.3`、四段版本。
 - PATCH 优先补丁；MINOR 可补丁；跨多个 MINOR / MAJOR 回退全量。
 - 更新清单签名覆盖 version、URL、sha256、size、notes 等字段；构建期 `MR_UPDATE_PUBKEY`。
 - 安装包按 sha256 + minisign 校验；下载连接超时 20s，分块空闲超时，总上限 60 分钟。
 - 安装使用 PowerShell `-EncodedCommand`（UTF-16LE），支持中文/emoji 路径；不写 UTF-8 `.cmd`。
+- 0.17.0 起设置页**不再暴露更新清单地址输入框**：端点在构建配置中锁死
+  （Windows: GitHub Releases `latest.json`，Linux: `latest-linux-critical.json`），
+  前端 `check_update` / `download_update` 包装与启动期静默自检已移除；
+  Rust 命令保留（回归测试与未来程序化接入），历史遗留的本机清单地址
+  （`mr-update-prefs`）仅供「隐私与安全」审计评估回环策略。
 
 ### 8.2 官方 Tauri Updater / GitHub Releases（0.16.0）
 
 - `bundle.createUpdaterArtifacts = true`；`plugins.updater.pubkey` 保存 minisign 公钥，
   `endpoints` 指向 `https://github.com/D-OneXXX/MR/releases/latest/download/latest.json`。
-- 客户端「设置 → 关于与维护」新增 GitHub 自动更新区：手动检查（不自动轮询）、
-  显示版本/日期/纯文本 notes、下载进度、安装完成提示；重启只在用户点击
-  `restart_app` 后发生。Windows 安装器退出/重启属于用户点击安装后的预期行为。
+- 客户端「设置 → 关于与维护」为**唯一一张「软件更新」卡片**（0.17.0 合并
+  双通道双卡片后）：手动检查（不自动轮询）、状态格展示 当前版本/可用版本/
+  构建基线/运行平台、纯文本 notes、下载进度、安装完成提示；底部右侧
+  `Minisign 签名校验` 徽章由 `get_app_info().signatureConfigured` 驱动
+  （汇总 `tauri.conf.json plugins.updater.pubkey` 与 `MR_UPDATE_PUBKEY`，
+  0.17.0 前只看后者导致「一边已配置一边未配置」的矛盾展示）；重启只在
+  用户点击 `restart_app` 后发生。Windows 安装器退出/重启属于用户点击安装后的预期行为。
 - CI（0.17.0 起拆分，见 §8.4）：`release-windows.yml` 在推送 `v*` 标签（排除
   `-linux*`）时：校验 tag 与 `package.json` 版本一致 →
   `npm ci` → `tauri-action@v1`（NSIS，`uploadUpdaterJson: true`）→ 上传签名安装包与

@@ -439,6 +439,19 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             diagnostics::install_panic_hook();
+            // 签名徽章统一事实源：从 tauri.conf.json 读取原生 GitHub 通道
+            // （plugins.updater.pubkey）是否配置，注入 update 模块供 get_app_info 汇总。
+            let native_pubkey_present = serde_json::to_value(app.config())
+                .map(|config| {
+                    config
+                        .get("plugins")
+                        .and_then(|plugins| plugins.get("updater"))
+                        .and_then(|updater| updater.get("pubkey"))
+                        .and_then(|pubkey| pubkey.as_str())
+                        .is_some_and(|key| !key.trim().is_empty())
+                })
+                .unwrap_or(false);
+            update::set_native_updater_pubkey_present(native_pubkey_present);
             // 1) 先锚定数据/缓存根（app_data_dir / app_cache_dir），再初始化日志。
             let (data_dir, _cache_dir, isolated) = install_app_paths(app);
             logging::init(data_dir.join("logs"));

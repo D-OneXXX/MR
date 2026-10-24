@@ -64,6 +64,8 @@ pub struct AppInfo {
     pub build_baseline: String,
     pub target: String,
     pub profile: String,
+    /// 任一更新通道配置了签名公钥（补丁通道 MR_UPDATE_PUBKEY 或
+    /// tauri.conf.json plugins.updater.pubkey）；「软件更新」卡片徽章使用。
     pub signature_configured: bool,
     pub sha256_enforced: bool,
     /// 构建来源指纹：`official`（官方 CI 注入 `MR_BUILD_ORIGIN=official`，
@@ -533,18 +535,31 @@ fn configured_public_key() -> Option<&'static str> {
         .filter(|key| !key.is_empty())
 }
 
-/// 是否在构建期配置了更新签名公钥（安全面板使用）。
+/// 原生 GitHub 通道（`tauri.conf.json plugins.updater.pubkey`）是否配置公钥。
+/// 由 `lib.rs` 在 setup 阶段注入一次；序列化整个 Config 而非逐字段匹配，
+/// 避免依赖 tauri-utils `PluginConfig` 的内部形态。
+static NATIVE_UPDATER_PUBKEY: OnceLock<bool> = OnceLock::new();
+
+pub fn set_native_updater_pubkey_present(present: bool) {
+    let _ = NATIVE_UPDATER_PUBKEY.set(present);
+}
+
+pub fn native_updater_pubkey_present() -> bool {
+    *NATIVE_UPDATER_PUBKEY.get().unwrap_or(&false)
+}
+
+/// 是否在构建期配置了补丁通道的更新签名公钥（下载/回环策略门使用；
+/// 原生通道公钥不参与补丁通道策略，见 `any_update_signature_configured`）。
 pub fn signature_configured() -> bool {
     configured_public_key().is_some()
 }
 
-/// 公钥来源："build"（编译期注入）或 "none"。
-pub fn signature_public_key_source() -> &'static str {
-    if signature_configured() {
-        "build"
-    } else {
-        "none"
-    }
+/// 是否配置了任一更新通道的签名公钥：
+/// - 补丁通道：编译期 `MR_UPDATE_PUBKEY`；
+/// - 原生 GitHub 通道：`tauri.conf.json plugins.updater.pubkey`。
+/// 这是设置页「软件更新」卡片签名徽章的唯一事实源。
+pub fn any_update_signature_configured() -> bool {
+    signature_configured() || native_updater_pubkey_present()
 }
 
 /// 最近一次校验的时间与状态（"verified" / "failed"）；安全面板使用。
@@ -1591,7 +1606,7 @@ pub fn get_app_info() -> AppInfo {
             "release"
         }
         .to_string(),
-        signature_configured: signature_configured(),
+        signature_configured: any_update_signature_configured(),
         sha256_enforced: true,
         build_origin: build_origin().to_string(),
         linux_install: crate::platform::install_channel().to_string(),

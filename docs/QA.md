@@ -78,10 +78,11 @@
   完整带回 `mr-locale=en`；导出快照不含 `online_headers` / 过滤事件 / app_meta。
   Rust 回归：`backup::tests` 5 项。
 - **Updater**：`tauri.conf.json` 的 `createUpdaterArtifacts` / `fileAssociations` /
-  `plugins.updater` 公钥与 `latest.json` endpoint 已校验；设置页「GitHub 自动更新」
-  与「本地备份与恢复」面板在真实应用中可见；静态套件（含 release-surface 守卫）
-  18/18 通过。
-  **未实际发布 GitHub Release**，`latest.json` 生成由 `release.yml` 的
+  `plugins.updater` 公钥与 `latest.json` endpoint 已校验；设置页「关于与维护」为
+  唯一一张「软件更新」卡片（含 当前版本/可用版本/构建基线/运行平台 四状态格与
+  Minisign 徽章，无清单地址输入框），「本地备份与恢复」面板在真实应用中可见；
+  静态套件（含 release-surface 守卫）18/18 通过。
+  **未实际发布 GitHub Release**，`latest.json` 生成由 `release-windows.yml` 的
   `tauri-action@v1`（`uploadUpdaterJson: true`）保证，需用户配置签名 secrets 后推送 tag 验证。
 
 ## 覆盖范围

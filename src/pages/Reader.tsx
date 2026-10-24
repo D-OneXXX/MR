@@ -4,14 +4,11 @@ import {
   ArrowLeft,
   ArrowRight,
   Ban,
+  BookOpen,
   Filter,
-  Info,
   Loader2,
-  Maximize2,
   RefreshCw,
-  RotateCcw,
   Search,
-  SlidersHorizontal,
   ShieldCheck,
 } from "lucide-react";
 import {
@@ -29,7 +26,6 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
-import { Slider } from "../components/ui/slider";
 import {
   Dialog,
   DialogContent,
@@ -87,8 +83,17 @@ const WT_DEFAULT_WIDTH = 100;
 const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 const clampWtWidth = (v: number) =>
   Math.max(WT_MIN_WIDTH, Math.min(WT_MAX_WIDTH, Math.round(v)));
-const sliderNumber = (v: number | readonly number[]): number =>
-  Array.isArray(v) ? Number(v[0]) : Number(v);
+
+/** 顶栏版式切换组：单页 / 双页 / 条漫（短标签供窄窗口使用）。 */
+const MODE_OPTIONS: ReadonlyArray<{
+  key: PageMode;
+  labelKey: MessageKey;
+  shortKey: MessageKey;
+}> = [
+  { key: "single", labelKey: "reader.mode.single", shortKey: "reader.mode.singleShort" },
+  { key: "double", labelKey: "reader.mode.double", shortKey: "reader.mode.doubleShort" },
+  { key: "webtoon", labelKey: "reader.mode.webtoon", shortKey: "reader.mode.webtoonShort" },
+];
 
 /** 条漫阅读宽度（视口宽度的百分比）；持久化在 localStorage。 */
 function loadWtWidth(): number {
@@ -191,15 +196,13 @@ export default function Reader() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [uiVisible, setUiVisible] = useState(true);
   const [tocOpen, setTocOpen] = useState(false);
-  const [setOpen, setSetOpen] = useState(false);
   const [entries, setEntries] = useState<PageEntry[] | null>(null);
   const [entriesLoading, setEntriesLoading] = useState(false);
   const [entriesError, setEntriesError] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sizeTick, setSizeTick] = useState(0);
   const [nextBusy, setNextBusy] = useState(false);
-  // 「更多」Popover 与进度拖拽预览（预览只读已缓存图片，不发请求）。
-  const [moreOpen, setMoreOpen] = useState(false);
+  // 进度拖拽预览（预览只读已缓存图片，不发请求）。
   const [scrub, setScrub] = useState<ScrubPreview | null>(null);
   const [tocShown, setTocShown] = useState(200);
   const [filtered, setFiltered] = useState<FilteredPage[]>([]);
@@ -773,9 +776,7 @@ export default function Reader() {
   useEffect(() => {
     const overlay =
       tocOpen ||
-      setOpen ||
       shortcutsOpen ||
-      moreOpen ||
       tabsMenuOpen ||
       filterOpen;
     overlayRef.current = overlay;
@@ -788,9 +789,7 @@ export default function Reader() {
     }
   }, [
     tocOpen,
-    setOpen,
     shortcutsOpen,
-    moreOpen,
     tabsMenuOpen,
     filterOpen,
     poke,
@@ -1016,9 +1015,7 @@ export default function Reader() {
             setTabsMenuOpen(false);
           } else if (overlayRef.current) {
             setTocOpen(false);
-            setSetOpen(false);
             setShortcutsOpen(false);
-            setMoreOpen(false);
           } else {
             nav("/");
           }
@@ -1027,9 +1024,7 @@ export default function Reader() {
           // P1:快捷键速查表(设置页同源数据)。
           e.preventDefault();
           setShortcutsOpen((v) => !v);
-          setMoreOpen(false);
           setTocOpen(false);
-          setSetOpen(false);
           break;
         case "Home":
           e.preventDefault();
@@ -1316,8 +1311,6 @@ export default function Reader() {
 
   const openToc = () => {
     setShortcutsOpen(false);
-    setSetOpen(false);
-    setMoreOpen(false);
     setTocShown(200);
     setTocQuery("");
     setJumpPage("");
@@ -1449,17 +1442,9 @@ export default function Reader() {
     };
   }, [healIdx]);
 
-  const toggleSettings = useCallback(() => {
-    setSetOpen((o) => !o);
-    setTocOpen(false);
-    setShortcutsOpen(false);
-    setMoreOpen(false);
-  }, []);
   const toggleShortcuts = useCallback(() => {
     setShortcutsOpen((v) => !v);
     setTocOpen(false);
-    setSetOpen(false);
-    setMoreOpen(false);
   }, []);
 
   const dirRtl = prefs.dir === "rtl";
@@ -1610,6 +1595,120 @@ export default function Reader() {
         minZoom={mode === "webtoon" ? WT_MIN_WIDTH / 100 : MIN_ZOOM}
         maxZoom={mode === "webtoon" ? WT_MAX_WIDTH / 100 : MAX_ZOOM}
         hidden={!uiVisible}
+        modeSlot={
+          <div className="flex min-w-0 items-center gap-1">
+            {/* 版式切换（唯一入口：单页 / 双页 / 条漫瀑布流）。 */}
+            <div
+              className="flex shrink-0 items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
+              role="group"
+              aria-label={t("reader.mode.group")}
+            >
+              {!webtoonAllowed && (
+                <span id="reader-webtoon-disabled-reason" className="sr-only">
+                  {webtoonReason}
+                </span>
+              )}
+              {MODE_OPTIONS.map(({ key, labelKey, shortKey }) => {
+                const disabled =
+                  (safeMode && key !== "single") ||
+                  (key === "webtoon" && !webtoonAllowed);
+                const label = t(labelKey);
+                const disabledReason = safeMode
+                  ? t("safeMode.readerLocked")
+                  : webtoonReason;
+                return (
+                  <Button
+                    key={key}
+                    type="button"
+                    variant={mode === key ? "pill-primary" : "pill-ghost"}
+                    size="pill-sm"
+                    onClick={() => {
+                      if (disabled) {
+                        toast(disabledReason);
+                        return;
+                      }
+                      setMode(key);
+                    }}
+                    aria-disabled={disabled}
+                    aria-describedby={
+                      disabled ? "reader-webtoon-disabled-reason" : undefined
+                    }
+                    aria-pressed={mode === key}
+                    title={
+                      disabled
+                        ? disabledReason
+                        : t("reader.mode.switch", { mode: label })
+                    }
+                    className={cn(
+                      "h-8 px-2 text-[11px] whitespace-nowrap",
+                      disabled &&
+                        "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground",
+                    )}
+                  >
+                    <span className="hidden lg:inline">{label}</span>
+                    <span className="lg:hidden">{t(shortKey)}</span>
+                  </Button>
+                );
+              })}
+            </div>
+
+            {/* 双页方向（RTL/LTR）：仅分页双页时显示，随模式动态显隐。 */}
+            {mode === "double" ? (
+              <div
+                className="flex shrink-0 items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
+                role="group"
+                aria-label={t("reader.direction.label")}
+              >
+                <Button
+                  type="button"
+                  variant={dirRtl ? "pill-primary" : "pill-ghost"}
+                  size="pill-sm"
+                  aria-pressed={dirRtl}
+                  title={t("reader.direction.rtl")}
+                  onClick={() => setPrefs((p) => ({ ...p, dir: "rtl" }))}
+                  className="h-8 px-2 text-[11px] whitespace-nowrap"
+                >
+                  <span className="hidden lg:inline">
+                    {t("reader.direction.rtl")}
+                  </span>
+                  <span className="lg:hidden">RTL</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant={!dirRtl ? "pill-primary" : "pill-ghost"}
+                  size="pill-sm"
+                  aria-pressed={!dirRtl}
+                  title={t("reader.direction.ltr")}
+                  onClick={() => setPrefs((p) => ({ ...p, dir: "ltr" }))}
+                  className="h-8 px-2 text-[11px] whitespace-nowrap"
+                >
+                  <span className="hidden lg:inline">
+                    {t("reader.direction.ltr")}
+                  </span>
+                  <span className="lg:hidden">LTR</span>
+                </Button>
+              </div>
+            ) : null}
+
+            {/* 首页封面单独成页：仅双页模式显示的唯一开关。 */}
+            {mode === "double" ? (
+              <Button
+                type="button"
+                variant={coverOffset ? "pill-primary" : "pill-ghost"}
+                size="pill-icon-sm"
+                onClick={() =>
+                  setPrefs((p) => ({ ...p, cover: !(p.cover ?? p.dir === "rtl") }))
+                }
+                aria-pressed={coverOffset}
+                aria-label={t("reader.cover.toggle")}
+                title={t("reader.cover.toggle")}
+                className="h-8 shrink-0"
+              >
+                <BookOpen className="size-4" />
+              </Button>
+            ) : null}
+          </div>
+        }
         tabsSlot={
           ws.tabsEnabled ? (
             <TabSwitcher open={tabsMenuOpen} onOpenChange={setTabsMenuOpen} />
@@ -1674,27 +1773,8 @@ export default function Reader() {
         canNext={canNext}
         onPrev={() => go(-1)}
         onNext={() => go(1)}
-        mode={mode}
-        webtoonAllowed={webtoonAllowed}
-        webtoonReason={webtoonReason}
-        modeLocked={safeMode}
-        onMode={setMode}
-        coverOffset={coverOffset}
-        onCoverOffset={(value) => setPrefs((p) => ({ ...p, cover: value }))}
         tocOpen={tocOpen}
         onToc={openToc}
-        moreOpen={moreOpen}
-        onMoreOpenChange={(open) => {
-          setMoreOpen(open);
-          if (open) {
-            setTocOpen(false);
-            setSetOpen(false);
-            setShortcutsOpen(false);
-          }
-          poke();
-        }}
-        settingsOpen={setOpen}
-        onSettings={toggleSettings}
         shortcutsOpen={shortcutsOpen}
         onShortcuts={toggleShortcuts}
         slider={
@@ -1868,222 +1948,6 @@ export default function Reader() {
           </div>
         </SheetContent>
       </Sheet>
-
-      {/* 阅读设置：shadcn Dialog + 胶囊分段控件 */}
-      <Dialog open={setOpen} onOpenChange={setSetOpen}>
-        <DialogContent
-          data-reader-hud
-          className="reader-portal max-w-[calc(100%-2rem)]! gap-0! overflow-hidden rounded-2xl! border! border-border! bg-card! p-0! text-card-foreground! shadow-hard! sm:max-w-[440px]!"
-        >
-          <DialogHeader className="border-b border-border/70 px-5 py-4">
-            <DialogTitle className="flex items-center gap-2 text-sm font-bold">
-              <SlidersHorizontal className="size-4 text-primary" />
-              {t("reader.settings.title")}
-            </DialogTitle>
-            <DialogDescription className="text-[11px] text-muted-foreground">
-              {t("reader.settings.description")}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 px-5 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t("reader.mode.group")}
-              </span>
-              <div
-                className="flex items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
-                role="group"
-                aria-label={t("reader.mode.group")}
-              >
-                {(
-                  [
-                    { key: "single", label: t("reader.mode.single") },
-                    { key: "double", label: t("reader.mode.double") },
-                    { key: "webtoon", label: t("reader.mode.webtoon") },
-                  ] as const
-                ).map(({ key, label }) => {
-                  const disabled =
-                    (safeMode && key !== "single") ||
-                    (key === "webtoon" && !webtoonAllowed);
-                  return (
-                    <Button
-                      key={key}
-                      type="button"
-                      variant={mode === key ? "pill-primary" : "pill-ghost"}
-                      size="pill-sm"
-                      aria-pressed={mode === key}
-                      disabled={disabled}
-                      title={
-                        disabled
-                          ? safeMode
-                            ? t("safeMode.readerLocked")
-                            : webtoonReason
-                          : t("reader.mode.switch", { mode: label })
-                      }
-                      onClick={() => setMode(key)}
-                      className="h-8 whitespace-nowrap px-2.5 text-[11px]"
-                    >
-                      {label}
-                    </Button>
-                  );
-                })
-              }
-              </div>
-              {safeMode ? (
-                <p className="mt-1.5 text-[10.5px] leading-relaxed text-warning">
-                  {t("safeMode.readerLocked")}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t("reader.direction.label")}
-              </span>
-              <div
-                className="flex items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
-                role="group"
-                aria-label={t("reader.direction.label")}
-              >
-                <Button
-                  type="button"
-                  variant={dirRtl ? "pill-primary" : "pill-ghost"}
-                  size="pill-sm"
-                  aria-pressed={dirRtl}
-                  onClick={() => setPrefs((p) => ({ ...p, dir: "rtl" }))}
-                  className="h-8 whitespace-nowrap px-2.5 text-[11px]"
-                >
-                  {t("reader.direction.rtl")}
-                </Button>
-                <Button
-                  type="button"
-                  variant={!dirRtl ? "pill-primary" : "pill-ghost"}
-                  size="pill-sm"
-                  aria-pressed={!dirRtl}
-                  onClick={() => setPrefs((p) => ({ ...p, dir: "ltr" }))}
-                  className="h-8 whitespace-nowrap px-2.5 text-[11px]"
-                >
-                  {t("reader.direction.ltr")}
-                </Button>
-              </div>
-            </div>
-
-            {mode === "double" ? (
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-medium text-muted-foreground">
-                  {t("reader.cover.label")}
-                </span>
-                <div
-                  className="flex items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
-                  role="group"
-                  aria-label={t("reader.cover.label")}
-                >
-                  <Button
-                    type="button"
-                    variant={!coverOffset ? "pill-primary" : "pill-ghost"}
-                    size="pill-sm"
-                    aria-pressed={!coverOffset}
-                    onClick={() => setPrefs((p) => ({ ...p, cover: false }))}
-                    className="h-8 whitespace-nowrap px-2.5 text-[11px]"
-                  >
-                    {t("reader.cover.off")}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={coverOffset ? "pill-primary" : "pill-ghost"}
-                    size="pill-sm"
-                    aria-pressed={coverOffset}
-                    onClick={() => setPrefs((p) => ({ ...p, cover: true }))}
-                    className="h-8 whitespace-nowrap px-2.5 text-[11px]"
-                  >
-                    {t("reader.cover.on")}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-
-            {mode === "webtoon" ? (
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    {t("reader.webtoon.widthLabel")}
-                  </span>
-                  <span className="mono text-xs tabular-nums text-foreground">
-                    {t("reader.webtoon.widthValue", { value: wtWidth })}
-                  </span>
-                </div>
-                <Slider
-                  value={[wtWidth]}
-                  min={WT_MIN_WIDTH}
-                  max={WT_MAX_WIDTH}
-                  step={1}
-                  aria-label={t("reader.webtoon.widthLabel")}
-                  getAriaLabel={() => t("reader.webtoon.widthLabel")}
-                  onValueChange={(v) => applyWtWidth(sliderNumber(v))}
-                  className="[&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-thumb]]:size-4"
-                />
-                <Button
-                  variant="pill"
-                  size="pill-sm"
-                  className="w-full"
-                  onClick={() => applyWtWidth(WT_DEFAULT_WIDTH)}
-                >
-                  <RotateCcw className="size-3.5" />
-                  {t("reader.webtoon.widthReset")}
-                </Button>
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  {t("reader.webtoon.widthHint")}
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    {t("reader.zoom.label")}
-                  </span>
-                  <span className="mono text-xs tabular-nums text-foreground">
-                    {Math.round(zoom * 100)}%
-                  </span>
-                </div>
-                <Slider
-                  value={[zoom]}
-                  min={MIN_ZOOM}
-                  max={MAX_ZOOM}
-                  step={0.1}
-                  aria-label={t("reader.zoom.label")}
-                  getAriaLabel={() => t("reader.zoom.label")}
-                  onValueChange={(v) =>
-                    setZoom(clampZoom(sliderNumber(v)))
-                  }
-                  className="[&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-thumb]]:size-4"
-                />
-                <Button
-                  variant="pill"
-                  size="pill-sm"
-                  className="w-full"
-                  onClick={resetView}
-                >
-                  <Maximize2 className="size-3.5" />
-                  {t("reader.zoom.fit")}
-                </Button>
-              </div>
-            )}
-
-            {!webtoonAllowed && (
-              <p className="flex items-start gap-2 rounded-xl border border-border/60 bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-                <Info className="mt-0.5 size-3.5 shrink-0 text-primary" />
-                {t("reader.webtoon.unsupportedNote")}
-              </p>
-            )}
-
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              {t("reader.settings.hintPageKeys")}
-              <br />
-              {t("reader.settings.hintKeys")}
-            </p>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* 快捷键速查表（? 呼出） */}
       <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>

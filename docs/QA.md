@@ -59,6 +59,10 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **Windows 路径归一（P2）**：导入/重定位先精确 id、再按平台身份键查找；
+  Windows 的 `/`、`\`、尾分隔符与大小写变体复用同一本书，Unix 反斜杠不归一。
+  回归 `path_identity_dedupes_platform_variants` 与
+  `import_dedupes_windows_path_variants`（Windows）。
 - **旧版备份夹具**：手工构造 0.16 形态库（无 `source_stats`、旧
   `reading_log(date,book_id)` 主键、全局 `book_id=''`）并打包恢复，
   断言书/进度保留且全局 10 页 + 书 5 页合计 15 页不丢。

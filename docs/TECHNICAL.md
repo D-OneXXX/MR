@@ -100,7 +100,11 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 | `online_filter_rules` | `id` | block/allow + URL 模板/精确 URL/SHA-256/DOM class/尺寸 |
 | `online_filter_events` | `id` | 脱敏 URL、原因、动作、尺寸、时间；最多 10000 条 |
 
-- `BookInfo.path` 对在线书就是规范化 URL，`id = sha256(path)`。
+- `BookInfo.path` 对在线书就是规范化 URL，`id = sha256(首次入库 path)`。
+- **路径身份归一**：本地书导入/重定位先按精确 `sha256(path)` 查找，再按
+  `normalize_path_identity` 兜底——Windows 统一 `/`→`\`、去尾部分隔符并忽略
+  大小写；Unix 只去尾部 `/`（反斜杠是合法文件名）。同一文件的不同写法复用
+  原 id 并刷新 path，不重复建书。在线 URL 不走该归一。
 - `BookInfo.missing` 不落库：`list_books` / `get_book` 对本地源做一次
   `symlink_metadata`，仅 `NotFound` 标记为 `true`（权限/网络盘错误不误判）；
   在线书恒为 `false`。

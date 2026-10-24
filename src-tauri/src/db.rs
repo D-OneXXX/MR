@@ -54,6 +54,51 @@ pub fn book_id_for_path(path: &str) -> String {
     hex::encode(h.finalize())
 }
 
+/// 路径身份键：Windows 统一分隔符、去掉尾部分隔符并忽略大小写；
+/// Unix 只去掉多余尾部 `/`（反斜杠是合法文件名字符）。
+pub fn normalize_path_identity(path: &str) -> String {
+    let mut value = path.trim().to_string();
+    #[cfg(windows)]
+    {
+        value = value.replace('/', "\\");
+        while value.len() > 3 && value.ends_with('\\') {
+            value.pop();
+        }
+        value = value.to_ascii_lowercase();
+    }
+    #[cfg(not(windows))]
+    {
+        while value.len() > 1 && value.ends_with('/') {
+            value.pop();
+        }
+    }
+    value
+}
+
+/// 按路径找已入库的 id：先走精确 sha256，再按平台身份键兜底。
+/// 只为本地书使用；在线 URL 仍走规范化 URL 的精确 id。
+pub fn find_book_id_by_path(
+    conn: &Connection,
+    path: &str,
+) -> Result<Option<String>, BackendError> {
+    let exact = book_id_for_path(path);
+    if get_book(conn, &exact)?.is_some() {
+        return Ok(Some(exact));
+    }
+    let identity = normalize_path_identity(path);
+    let mut stmt = conn.prepare("SELECT id, path FROM books")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (id, stored) = row?;
+        if normalize_path_identity(&stored) == identity {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
 /// 书库 schema 版本（`PRAGMA user_version`）。
 ///
 /// 1 = 0.17.0 起：reading_log 可空外键 + 表达式唯一索引 + source_stats。
@@ -1086,6 +1131,45 @@ mod tests {
             assert_eq!(fk, 1);
         }
         cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn path_identity_dedupes_platform_variants() {
+        let conn = mem();
+        upsert_book(&conn, "id", "C:/Books/A.cbz", "A", 1).unwrap();
+        // 精确路径永远命中。
+        assert_eq!(
+            find_book_id_by_path(&conn, "C:/Books/A.cbz").unwrap(),
+            Some("id".to_string())
+        );
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                find_book_id_by_path(&conn, r"c:\books\a.cbz").unwrap(),
+                Some("id".to_string()),
+                "Windows 分隔符/大小写变体必须复用同一本书"
+            );
+            assert_eq!(
+                find_book_id_by_path(&conn, r"C:\BOOKS\A.cbz\").unwrap(),
+                Some("id".to_string())
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(
+                find_book_id_by_path(&conn, r"C:\Books\A.cbz").unwrap(),
+                None,
+                "Unix 反斜杠是合法文件名字符，不能归一化"
+            );
+        }
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                find_book_id_by_path(&conn, "C:/Books/A.cbz/").unwrap(),
+                Some("id".to_string()),
+                "Unix 尾部分隔符应忽略"
+            );
+        }
     }
 
     #[test]

@@ -400,7 +400,9 @@ fn scan_single_book(conn: &rusqlite::Connection, path: &Path) -> Result<BookInfo
             BackendError::Msg("路径包含非 UTF-8 字符，当前版本暂不支持（non-utf8-path）".into())
         })?
         .to_string();
-    let id = db::book_id_for_path(&path_str);
+    // Windows 下同一路径的 `/`、`\` 与大小写写法必须落到同一本书。
+    let id = db::find_book_id_by_path(conn, &path_str)?
+        .unwrap_or_else(|| db::book_id_for_path(&path_str));
     let stamp = archive_stamp(path);
     if let (Some(stamp), Ok(Some(row))) = (stamp, db::get_book(conn, &id)) {
         if row.source_type == "local"
@@ -566,8 +568,10 @@ fn import_outcome(
 /// 软删的书同样恢复。读取失败进入 failed，而不是静默 skipped。
 fn import_one(conn: &rusqlite::Connection, p: &Path) -> ImportItemResult {
     let path = p.to_string_lossy().to_string();
-    let id = db::book_id_for_path(&path);
-    let existed = matches!(db::get_book(conn, &id), Ok(Some(_)));
+    let existed = db::find_book_id_by_path(conn, &path)
+        .ok()
+        .flatten()
+        .is_some();
     match scan_single_book(conn, p) {
         Ok(book) => {
             let (status, message) = if existed {
@@ -814,11 +818,12 @@ fn relocate_book_impl(
     if old.source_type != "local" {
         return Err(BackendError::Msg("只能重定位本地书籍".to_string()));
     }
-    let new_id = db::book_id_for_path(&dest);
+    let new_id = db::find_book_id_by_path(conn, &dest)?
+        .unwrap_or_else(|| db::book_id_for_path(&dest));
     if old.id == new_id && old.path == dest {
         return Ok(old);
     }
-    if db::get_book(conn, &new_id)?.is_some() {
+    if new_id != old.id && db::get_book(conn, &new_id)?.is_some() {
         return Err(BackendError::Msg("目标路径已在书库中".to_string()));
     }
     db::relocate_book(conn, old_id, &new_id, &dest, &title_for(&path), page_count)
@@ -3262,6 +3267,26 @@ mod tests {
         assert_eq!(db::source_stamp(&conn, &first.id).unwrap(), None);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn import_dedupes_windows_path_variants() {
+        let dir = test_temp_dir("win-path-dedupe");
+        let book = dir.join("CaseTest.cbz");
+        build_zip(&book);
+        let db = dir.join("lib.db");
+
+        let first = import_blocking(db.clone(), vec![book.to_string_lossy().into()]).unwrap();
+        assert_eq!(first[0].status, "added");
+        // 同一文件：正斜杠 + 全大写（Windows 大小写不敏感）。
+        let variant = book.to_string_lossy().replace('\\', "/").to_uppercase();
+        let second = import_blocking(db.clone(), vec![variant]).unwrap();
+        assert_eq!(second[0].status, "restored", "路径变体不得重复建书");
+        let conn = db::open(db).unwrap();
+        assert_eq!(db::list_books(&conn, None).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// 2026-10-06 事故回归：拖入"装了多本书的文件夹"必须像旧 scan_library

@@ -19,6 +19,7 @@ use crate::online::{normalize_url, truncate_chars, MAX_PAGES};
 use crate::source::BackendError;
 
 /// 解析单页 HTML 图集正文（离线/兼容入口；不做网络尺寸探测）。
+#[allow(dead_code)]
 pub fn parse_gallery(
     body: &[u8],
     base_url: &url::Url,
@@ -270,7 +271,7 @@ fn decode_html(body: &[u8]) -> String {
         .split("charset=")
         .nth(1)
         .map(|tail| {
-            tail.trim_start_matches(|c| c == '"' || c == '\'')
+            tail.trim_start_matches(['"', '\''])
                 .split(|c: char| c == '"' || c == '\'' || c == ';' || c == '>' || c.is_whitespace())
                 .next()
                 .unwrap_or("")

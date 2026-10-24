@@ -59,6 +59,12 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **CI 收口（P1.16）**：Linux 检查扩展到 `main`/PR，新增
+  `cargo clippy --all-targets -- -D warnings`（本机已清零 52 条告警）、
+  `xvfb-run` 下的 `e2e_stage1` 与 `memory_budget`、cargo/npm 审计报告；
+  新增 `ci-windows-check.yml`（tsc/build/cargo test/集成测试/静态 QA）与
+  Dependabot 周检。审计对已知 Vite/React Router advisory 先保持可见、
+  不阻断构建，发版评审时人工处理。
 - **Linux 运行时盲区（P1.15）**：watchdog 增加 `CLOCK_BOOTTIME` 唤醒判定
   （suspend 后旧心跳不再误弹恢复窗）；系统代理探测改 `spawn_blocking`，
   在线 transport 支持 `NO_PROXY`（域名/子域/端口/`*`，CIDR 忽略）；

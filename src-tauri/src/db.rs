@@ -567,7 +567,7 @@ pub fn set_progress(conn: &Connection, id: &str, page: u32, pct: Option<f64>) ->
 
 /// 窗口起点（含当天）：days=1 → 只看今天；days=7 → 近 7 天。
 fn cutoff_date(days: i64) -> String {
-    let d = (days.max(1) - 1) as i64;
+    let d = days.max(1) - 1;
     (Local::now() - chrono::Duration::days(d))
         .format("%Y-%m-%d")
         .to_string()
@@ -941,6 +941,7 @@ pub fn clear_filter_learning(conn: &Connection) -> Result<(), BackendError> {
 }
 
 /// 记录一次过滤/恢复事件；URL 必须是已脱敏的 host+path。
+#[allow(clippy::too_many_arguments)]
 pub fn record_filter_event(
     conn: &Connection,
     host: &str,

@@ -102,11 +102,14 @@ pub struct CandidateImage {
     /// 图片自身的 class/id 拼接，供负面词与用户规则使用。
     pub class_id: Option<String>,
     pub alt: Option<String>,
+    /// 候选来源：用于站点档案学习与诊断，部分入口不读取。
+    #[allow(dead_code)]
     pub source: CandidateSource,
     pub anchor: Option<PageAnchor>,
 }
 
 impl CandidateImage {
+    #[allow(dead_code)]
     pub fn new(url: impl Into<String>, order: usize) -> Self {
         Self {
             url: url.into(),
@@ -243,8 +246,11 @@ pub struct FilterOutcome {
     pub blocked: Vec<FilteredPage>,
     /// 学到的站点档案；调用方可按置信度落库。
     pub profile: SiteProfile,
+    /// 诊断用统计：不属于运行时决策输入。
+    #[allow(dead_code)]
     pub input_count: usize,
-    /// 保留比例（0..=1）。
+    /// 保留比例（0..=1），诊断用。
+    #[allow(dead_code)]
     pub kept_ratio: f32,
 }
 
@@ -321,7 +327,7 @@ pub fn median_width(widths: &[u32]) -> Option<u32> {
     }
     sorted.sort_unstable();
     let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 0 {
+    if sorted.len().is_multiple_of(2) {
         Some(((sorted[mid - 1] as u64 + sorted[mid] as u64) / 2) as u32)
     } else {
         Some(sorted[mid])

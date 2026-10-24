@@ -115,7 +115,7 @@ fn detect_system_proxy_blocking() -> Result<Option<String>, String> {
     #[cfg(windows)]
     {
         let (enable, server) = read_registry_proxy();
-        return Ok(proxy_from_system_settings(enable, server.as_deref()));
+        Ok(proxy_from_system_settings(enable, server.as_deref()))
     }
     #[cfg(target_os = "linux")]
     {
@@ -295,7 +295,7 @@ fn read_registry_sz(subkey: &str, name: &str) -> Option<String> {
     if status != ERROR_SUCCESS || size == 0 {
         return None;
     }
-    let mut buffer = vec![0u16; (size as usize + 1) / 2];
+    let mut buffer = vec![0u16; (size as usize).div_ceil(2)];
     let status = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,

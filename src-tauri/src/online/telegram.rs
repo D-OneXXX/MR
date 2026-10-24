@@ -14,7 +14,7 @@ use crate::online::direct::{make_filtered_meta, probe_image, MetaLinks, OnlineBo
 use crate::online::filter::{
     filter_candidates, CandidateImage, CandidateSource, FilterMemory, FilterThresholds,
 };
-use crate::online::http::{HttpTransport, HttpResponse};
+use crate::online::http::HttpTransport;
 use crate::online::{
     normalize_url, redact_url_for_log, title_from_url, truncate_chars, PageAnchor,
     MANIFEST_MAX_BYTES,
@@ -787,7 +787,6 @@ fn message_document(block: &str) -> Option<TelegramDocument> {
     }
     let text = decode_entities(&strip_tags(caps.get(2).map(|m| m.as_str()).unwrap_or("")));
     let filename = text
-        .trim()
         .split_whitespace()
         .next()
         .filter(|v| !v.is_empty())
@@ -797,7 +796,7 @@ fn message_document(block: &str) -> Option<TelegramDocument> {
                 .ok()
                 .and_then(|u| {
                     u.path_segments()
-                        .and_then(|s| s.filter(|x| !x.is_empty()).last())
+                        .and_then(|mut s| s.rfind(|x| !x.is_empty()))
                         .map(str::to_string)
                 })
         })
@@ -894,6 +893,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::online::http::HttpResponse;
     use crate::online::OnlineError;
 
     struct MapHttp {

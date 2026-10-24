@@ -73,7 +73,7 @@ fn sanitize_download_filename(raw: &str) -> String {
         .saturating_sub(suffix.chars().count())
         .max(1);
     let mut stem: String = stem.chars().take(max_stem).collect();
-    stem = stem.trim_end_matches(|c| c == ' ' || c == '.').to_string();
+    stem = stem.trim_end_matches([' ', '.']).to_string();
     if stem.is_empty() {
         stem = "download".into();
     }
@@ -103,9 +103,7 @@ fn unique_download_path(dir: &Path, filename: &str) -> PathBuf {
 
 fn url_download_name(url: &Url) -> Option<String> {
     let last = url
-        .path_segments()?
-        .filter(|segment| !segment.is_empty())
-        .last()?;
+        .path_segments()?.rfind(|segment| !segment.is_empty())?;
     Some(
         percent_encoding::percent_decode_str(last)
             .decode_utf8_lossy()
@@ -290,7 +288,7 @@ pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), Stri
             .title(BROWSER_TITLE)
             .inner_size(BROWSER_WIDTH, BROWSER_HEIGHT)
             .on_download(move |_webview, event| handle_download_event(&download_app, event))
-            .on_navigation(|target| navigation_allowed(&target))
+            .on_navigation(navigation_allowed)
             .build()
             .map(|_| ())
             .map_err(|e| e.to_string())

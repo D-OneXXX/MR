@@ -505,32 +505,33 @@ impl ImageSource for OnlineSource {
         let _guard = self.permits.acquire();
         let mut resp = self.get_page(&page, index)?;
         // Telegram CDN 直链过期：403/404 时按原消息坐标重新解析一次。
-        if matches!(resp.status, 403 | 404) && page.anchor.is_some() {
-            let anchor = page.anchor.as_ref().expect("checked anchor");
-            match crate::online::telegram::refresh_page_url(&*self.http, anchor) {
-                Ok(Some(fresh)) => {
-                    if let Ok(normalized) = crate::online::normalize_url(&fresh) {
-                        let fresh = normalized.to_string();
-                        if fresh != page.url {
-                            crate::logging::log_error(
-                                "online_page",
-                                &format!(
-                                    "第 {} 页直链失效，已按消息锚点刷新",
-                                    index + 1
-                                ),
-                            );
-                            self.replace_page_url(index, fresh.clone());
-                            page.url = fresh;
-                            resp = self.get_page(&page, index)?;
+        if matches!(resp.status, 403 | 404) {
+            if let Some(anchor) = page.anchor.as_ref() {
+                match crate::online::telegram::refresh_page_url(&*self.http, anchor) {
+                    Ok(Some(fresh)) => {
+                        if let Ok(normalized) = crate::online::normalize_url(&fresh) {
+                            let fresh = normalized.to_string();
+                            if fresh != page.url {
+                                crate::logging::log_error(
+                                    "online_page",
+                                    &format!(
+                                        "第 {} 页直链失效，已按消息锚点刷新",
+                                        index + 1
+                                    ),
+                                );
+                                self.replace_page_url(index, fresh.clone());
+                                page.url = fresh;
+                                resp = self.get_page(&page, index)?;
+                            }
                         }
                     }
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    crate::logging::log_error(
-                        "online_page",
-                        &format!("第 {} 页直链刷新失败：{e}", index + 1),
-                    );
+                    Ok(None) => {}
+                    Err(e) => {
+                        crate::logging::log_error(
+                            "online_page",
+                            &format!("第 {} 页直链刷新失败：{e}", index + 1),
+                        );
+                    }
                 }
             }
         }
@@ -770,11 +771,14 @@ mod tests {
 
     use super::{fixup_entry_name, ImageSource};
 
-    /// 固定响应的假传输：记录每次请求的 (url, referer, max_bytes, header_scope)。
+    /// 每次请求记录 (url, referer, max_bytes, header_scope)。
+    type RequestLog = Mutex<Vec<(String, Option<String>, usize, Option<String>)>>;
+
+    /// 固定响应的假传输。
     struct FakeHttp {
         status: u16,
         body: Vec<u8>,
-        requests: Mutex<Vec<(String, Option<String>, usize, Option<String>)>>,
+        requests: RequestLog,
     }
 
     impl FakeHttp {

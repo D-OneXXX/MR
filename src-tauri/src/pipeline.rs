@@ -16,7 +16,7 @@
 //!   宁可变小也不能把超限纹理交给前端。
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use image::{ImageError, ImageFormat};
+use image::ImageFormat;
 
 use crate::source::{BackendError, RawPage};
 
@@ -63,7 +63,7 @@ pub fn webtoon_tile_count(orig_w: u32, orig_h: u32, render_w: u32) -> u32 {
         return 1;
     }
     let disp_h = (orig_h as f64 * render_w as f64 / orig_w as f64).ceil() as u64;
-    ((disp_h + WEBTOON_TILE_H as u64 - 1) / WEBTOON_TILE_H as u64).max(1) as u32
+    disp_h.div_ceil(WEBTOON_TILE_H as u64).max(1) as u32
 }
 
 /// 解码后待缓存/待返回的成品图（已是最终输出尺寸）。
@@ -92,7 +92,7 @@ fn decoded_format(raw: &RawPage) -> Result<ImageFormat, BackendError> {
     if let Some(fmt) = by_ext {
         return Ok(fmt);
     }
-    Ok(image::guess_format(&raw.bytes).map_err(image::ImageError::from)?)
+    Ok(image::guess_format(&raw.bytes)?)
 }
 
 /// 按目标框计算等比缩放尺寸（任一边超限才缩小；不放大）。
@@ -210,7 +210,7 @@ pub fn render_raw(
         return render_tall_jpeg(raw, sw, sh, max_w, max_h);
     }
 
-    let img = image::load_from_memory_with_format(&raw.bytes, fmt).map_err(ImageError::from)?;
+    let img = image::load_from_memory_with_format(&raw.bytes, fmt)?;
     // 目标尺寸直接落到纹理安全线内：避免先缩放成超限大图再压扁（省一份峰值内存）。
     let (tw, th) = fit_size(sw, sh, max_w, max_h);
     let (fw, fh) = safe_fit(tw, th);
@@ -295,7 +295,7 @@ fn decode_tall_jpeg_raster(
         _ => {
             // CMYK 等罕见格式退回常规解码（长图 CMYK 极罕见；牺牲一次全分辨率）。
             let img =
-                image::load_from_memory_with_format(&raw.bytes, ImageFormat::Jpeg).map_err(ImageError::from)?;
+                image::load_from_memory_with_format(&raw.bytes, ImageFormat::Jpeg)?;
             Ok(into_rgb(img))
         }
     }
@@ -409,7 +409,7 @@ pub fn render_webtoon_tiles(
     let work: image::RgbImage = if sh > TALL_IMAGE_H && fmt == ImageFormat::Jpeg {
         decode_tall_jpeg_raster(raw, tw, tall_want_h(sw, sh, tw))?
     } else {
-        let img = image::load_from_memory_with_format(&raw.bytes, fmt).map_err(ImageError::from)?;
+        let img = image::load_from_memory_with_format(&raw.bytes, fmt)?;
         into_rgb(img)
     };
     let rh = work.height();
@@ -496,7 +496,7 @@ fn render_band_tile(
     // 多带：显示高与源行都按份切开，逐带缩放后拼进切片缓冲。
     // 正常情况下 n = ceil(src_h / MAX_SLICE_H)；极端比例（显示高远小于源行数）
     // 下 n 受显示高所限，带高可能超过 MAX_SLICE_H——宁可如此也不产生 0 高切片。
-    let mut n = ((src_h as u64 + MAX_SLICE_H as u64 - 1) / MAX_SLICE_H as u64) as usize;
+    let mut n = (src_h as u64).div_ceil(MAX_SLICE_H as u64) as usize;
     n = n.min(disp_h as usize).min(src_h as usize).max(1);
     let disp_parts = split_even(disp_h, n);
     let src_parts = split_even(src_h, n);

@@ -595,10 +595,16 @@ QA 覆盖：静态/版本红线、双主题六语种、阅读器导入与 125 �
 运行报告写入 `tests/qa/reports/latest.md`（生成物不提交）。
 
 Linux 专属代码（`#[cfg(target_os = "linux")]`）在 Windows 宿主上不参与编译，
-由 `.github/workflows/ci-linux-check.yml`（push/PR 到 `feat/linux-port` 触发，
-ubuntu-22.04）执行 `cargo check --all-targets` + `cargo test --lib` +
-前端 `tsc`/`vite build` 真实验证；纯逻辑（GBK 条目名修复、gsettings/kioslaverc
-解析、DMABUF 决策表）写成跨平台纯函数，Windows 宿主单测同样覆盖。
+由 `.github/workflows/ci-linux-check.yml`（push/PR 到 `main`、`feat/linux-port`，
+ubuntu-22.04）执行 `cargo check --all-targets`、`cargo clippy --all-targets
+-- -D warnings`、`cargo test --lib`、`xvfb-run cargo test --test e2e_stage1
+--test memory_budget`、前端 `tsc`/`vite build` 与 cargo/npm 审计报告；
+`.github/workflows/ci-windows-check.yml` 在 windows-latest 跑同一套单测/集成/
+静态 QA 门禁。纯逻辑（GBK 条目名修复、gsettings/kioslaverc 解析、DMABUF
+决策表）写成跨平台纯函数，Windows 宿主单测同样覆盖。Dependabot 每周检查
+npm / cargo / GitHub Actions 更新。已知 Vite 6.4.3 dev-server 与 React Router
+6.x 的 advisory 需要跨大版本升级，审计先作为可见报告（`continue-on-error`），
+不阻断打包产物构建。
 发版流水线（0.17.0 起）拆分为 `release-windows.yml`（`windows-latest`，NSIS）与
 `release-linux-critical.yml`（`ubuntu-22.04`，deb/rpm/AppImage，仅高危补丁标签），
 互不阻塞。

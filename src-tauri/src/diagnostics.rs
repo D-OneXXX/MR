@@ -174,13 +174,13 @@ fn bounded(mut text: String, max: usize) -> String {
         .find(|index| text.is_char_boundary(*index))
         .unwrap_or(0);
     text.truncate(boundary);
-    text.push_str("…");
+    text.push('…');
     text
 }
 
 fn normalize_kind(raw: &str) -> String {
     let trimmed = raw.trim();
-    if KNOWN_KINDS.iter().any(|kind| *kind == trimmed) {
+    if KNOWN_KINDS.contains(&trimmed) {
         trimmed.to_string()
     } else {
         "other".to_string()
@@ -189,7 +189,7 @@ fn normalize_kind(raw: &str) -> String {
 
 fn normalize_source(raw: &str) -> String {
     let trimmed = raw.trim();
-    if KNOWN_SOURCES.iter().any(|source| *source == trimmed) {
+    if KNOWN_SOURCES.contains(&trimmed) {
         trimmed.to_string()
     } else {
         "other".to_string()
@@ -692,7 +692,7 @@ fn known_private_terms(state: &AppState) -> Vec<(String, String)> {
             terms.push((trimmed.to_string(), replacement.clone()));
         }
     }
-    terms.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    terms.sort_by_key(|entry| std::cmp::Reverse(entry.0.len()));
     terms
 }
 

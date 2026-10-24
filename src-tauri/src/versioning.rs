@@ -266,10 +266,12 @@ mod tests {
     fn invalid_settings_are_repaired_without_touching_user_library() {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
-        let mut settings = Settings::default();
-        settings.theme = "BROKEN".to_string();
-        settings.cache_budget_mb = 4;
-        settings.online_concurrency = 99;
+        let mut settings = Settings {
+            theme: "BROKEN".to_string(),
+            cache_budget_mb: 4,
+            online_concurrency: 99,
+            ..Settings::default()
+        };
         let repaired = normalize_settings(&conn, &mut settings).unwrap();
         assert!(repaired.contains(&"theme".to_string()));
         assert_eq!(settings.theme, "system");

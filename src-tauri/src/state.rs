@@ -347,6 +347,7 @@ pub struct AppState {
     /// 切完所有片立即释放栅格（峰值内存 = 单张缩放后栅格）。
     pub tile_lock: Mutex<()>,
     /// 条漫布局缓存（book_id → 逐页源尺寸）：切换条漫免重新读全部页头。
+    #[allow(clippy::type_complexity)]
     pub webtoon_layouts: Mutex<HashMap<String, Arc<Vec<(u32, u32)>>>>,
     /// 磁盘渲染缓存（成品 JPEG，二次访问 ~1ms）。
     pub render: RenderCache,
@@ -365,6 +366,12 @@ pub struct AppState {
     /// 一次性消费。事件只是唤醒信号，重复事件不会重复打开同一本书。
     pending_open: Mutex<VecDeque<crate::open_with::OpenWithRequest>>,
     pub _version: u64,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppState {

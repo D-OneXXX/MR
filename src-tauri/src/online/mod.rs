@@ -150,11 +150,10 @@ pub(crate) fn validate_host_literal(
         }
         return Ok(());
     }
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
-        if !allow_loopback {
+    if (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"))
+        && !allow_loopback {
             return Err("目标地址指向 localhost，已拒绝（online-blocked-address）".to_string());
         }
-    }
     Ok(())
 }
 
@@ -220,7 +219,7 @@ pub fn normalize_page_urls(page_urls: &[String]) -> Result<Vec<PageRef>, Backend
 /// 从 URL 推导书名：优先倒数第一个非空路径段（解码），否则退回主机名。
 pub fn title_from_url(u: &url::Url) -> String {
     u.path_segments()
-        .and_then(|s| s.filter(|x| !x.is_empty()).last())
+        .and_then(|mut s| s.rfind(|x| !x.is_empty()))
         .map(|s| {
             percent_encoding::percent_decode_str(s)
                 .decode_utf8_lossy()
@@ -236,7 +235,7 @@ pub fn page_name(p: &PageRef, index: usize) -> String {
         .ok()
         .and_then(|u| {
             u.path_segments()
-                .and_then(|s| s.filter(|x| !x.is_empty()).last())
+                .and_then(|mut s| s.rfind(|x| !x.is_empty()))
                 .map(|s| {
                     percent_encoding::percent_decode_str(s)
                         .decode_utf8_lossy()
@@ -249,6 +248,9 @@ pub fn page_name(p: &PageRef, index: usize) -> String {
 
 /// 统一在线解析入口：Telegram/Telegraph 走专用 Provider；其余只拉取一次，
 /// 先按 JSON 清单解析，失败后尝试单页 HTML 图集。
+///
+/// 保留为离线测试/兼容入口；生产命令层走 [`resolve_with`]。
+#[allow(dead_code)]
 pub fn resolve(
     http: &dyn http::HttpTransport,
     raw_url: &str,
@@ -330,7 +332,7 @@ pub fn redact_url_for_log(raw: &str) -> String {
         u.set_fragment(None);
         return u.to_string();
     }
-    let cut = raw.find(|c| c == '?' || c == '#').unwrap_or(raw.len());
+    let cut = raw.find(['?', '#']).unwrap_or(raw.len());
     let s = &raw[..cut];
     if let Some(scheme_end) = s.find("://") {
         let authority_start = scheme_end + 3;

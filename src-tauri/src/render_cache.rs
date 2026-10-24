@@ -144,10 +144,10 @@ impl RenderCache {
                 let name = f.file_name();
                 let name = name.to_string_lossy();
                 // 文件名形如 `000000@240x240.jpg`：index 段为 000000 即首页。
-                if name.starts_with("000000@") {
-                    if std::fs::remove_file(f.path()).is_ok() {
-                        n += 1;
-                    }
+                if name.starts_with("000000@")
+                    && std::fs::remove_file(f.path()).is_ok()
+                {
+                    n += 1;
                 }
             }
             let _ = std::fs::remove_dir(&book_dir); // 空目录顺手清掉

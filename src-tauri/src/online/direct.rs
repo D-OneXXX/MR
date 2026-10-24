@@ -122,8 +122,11 @@ struct HashInput<'a> {
     pages: &'a [PageRef],
 }
 
+/// 兼容/测试入口；生产链路由 `parse_manifest_with` 直接解析。
+#[allow(dead_code)]
 pub struct DirectImageProvider;
 
+#[allow(dead_code)]
 impl DirectImageProvider {
     /// 仅接受 http/https URL。
     pub fn can_handle(&self, url: &url::Url) -> bool {
@@ -156,6 +159,7 @@ impl DirectImageProvider {
 ///
 /// 这是保留给离线测试/兼容调用的入口：不做网络尺寸探测，但仍执行 URL/尺寸
 /// 静态过滤。生产入口见 [`parse_manifest_with`]。
+#[allow(dead_code)]
 pub fn parse_manifest(body: &[u8], url: &url::Url) -> Result<OnlineBookMeta, BackendError> {
     let parsed = parse_raw_manifest(body, url)?;
     let mut memory = FilterMemory {

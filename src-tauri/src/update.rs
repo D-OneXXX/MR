@@ -162,7 +162,9 @@ struct Manifest {
     patch: Option<ArtifactEntry>,
     full: ArtifactEntry,
     /// 覆盖 version/artifacts 的清单签名（minisign 文本）。
+    /// 验签直接读原始正文；字段保留用于反序列化未知清单与诊断。
     #[serde(default)]
+    #[allow(dead_code)]
     signature: Option<String>,
 }
 
@@ -394,7 +396,7 @@ impl Version {
 
 impl PartialOrd for Version {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.compare(other))
+        Some(self.cmp(other))
     }
 }
 
@@ -557,12 +559,15 @@ pub fn signature_configured() -> bool {
 /// 是否配置了任一更新通道的签名公钥：
 /// - 补丁通道：编译期 `MR_UPDATE_PUBKEY`；
 /// - 原生 GitHub 通道：`tauri.conf.json plugins.updater.pubkey`。
+///
 /// 这是设置页「软件更新」卡片签名徽章的唯一事实源。
 pub fn any_update_signature_configured() -> bool {
     signature_configured() || native_updater_pubkey_present()
 }
 
 /// 最近一次校验的时间与状态（"verified" / "failed"）；安全面板使用。
+///
+/// 与上方签名配置分离：该状态只反映当前进程的校验结果。
 pub fn last_verification() -> Option<(String, String)> {
     let rt = runtime().lock();
     let at = rt.last_attempt_at.clone()?;
@@ -1875,7 +1880,7 @@ mod tests {
     use super::*;
 
     fn sha(ch: char) -> String {
-        std::iter::repeat(ch).take(64).collect()
+        std::iter::repeat_n(ch, 64).collect()
     }
 
     fn version(raw: &str) -> Version {
@@ -2376,8 +2381,10 @@ QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfN
             .decode(encoded)
             .unwrap();
         let units: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         let decoded = String::from_utf16(&units).unwrap();
         assert_eq!(decoded, script);

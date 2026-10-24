@@ -1456,7 +1456,7 @@ pub async fn get_webtoon_layout(
         for i in 0..count {
             // 先读 header（256KB 内通常含 SOF）；失败回退全读。
             let dims: Option<(u32, u32)> = handle
-                .read_partial(i as usize, 256 * 1024)
+                .read_partial(i, 256 * 1024)
                 .ok()
                 .and_then(|partial| {
                     image::ImageReader::new(std::io::Cursor::new(&partial.bytes))
@@ -1468,7 +1468,7 @@ pub async fn get_webtoon_layout(
             let (w, h) = match dims {
                 Some(d) => d,
                 None => {
-                    let raw = handle.read_raw(i as usize)?;
+                    let raw = handle.read_raw(i)?;
                     image::ImageReader::new(std::io::Cursor::new(&raw.bytes))
                         .with_guessed_format()?
                         .into_dimensions()?
@@ -3356,7 +3356,7 @@ mod tests {
     #[test]
     fn online_source_path_is_never_deleted() {
         let url = "https://example.com/gallery/1";
-        assert_eq!(delete_source_if_local(url, "generic_manga").unwrap(), false);
+        assert!(!delete_source_if_local(url, "generic_manga").unwrap());
     }
 
     // ---------- 清单入库/变化编排（离线：内存 SQLite，不发网络请求） ----------

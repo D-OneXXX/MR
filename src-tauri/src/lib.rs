@@ -287,6 +287,7 @@ pub(crate) fn data_dir() -> Result<PathBuf, String> {
 /// - 数据根：`MR_DATA_DIR` > Tauri `app_data_dir` > 旧 Local AppData；
 /// - 缓存根：`MR_DATA_DIR` 隔离模式下取 `<数据根>/cache`，否则 Tauri
 ///   `app_cache_dir`；两者都 `create_dir_all`。
+///
 /// 返回 `(data, cache, 是否 MR_DATA_DIR 隔离)`。
 fn install_app_paths<R: tauri::Runtime>(app: &tauri::App<R>) -> (PathBuf, PathBuf, bool) {
     let env_override = std::env::var("MR_DATA_DIR")

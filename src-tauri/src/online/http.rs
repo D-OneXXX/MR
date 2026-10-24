@@ -354,10 +354,10 @@ impl UreqTransport {
     /// 按 NO_PROXY 选择代理/直连 agent；两条路径都保留同一超时与重定向策略。
     fn agent_for(&self, target: &url::Url) -> &ureq::Agent {
         let host = target.host_str().unwrap_or_default();
-        if self.direct_agent.is_some()
-            && no_proxy_matches(host, target.port_or_known_default(), &self.no_proxy)
-        {
-            return self.direct_agent.as_ref().expect("direct agent");
+        if let Some(direct) = self.direct_agent.as_ref() {
+            if no_proxy_matches(host, target.port_or_known_default(), &self.no_proxy) {
+                return direct;
+            }
         }
         &self.agent
     }
@@ -471,8 +471,8 @@ impl UreqTransport {
         }
         if let Some(page) = referer {
             if let Ok(u) = url::Url::parse(page) {
-                if matches!(u.scheme(), "http" | "https") {
-                    if u.host_str().is_some() {
+                if matches!(u.scheme(), "http" | "https")
+                    && u.host_str().is_some() {
                         // 跨 origin 时用户头已被丢弃，必须使用派生值；
                         // 同 origin 时显式配置的同名头优先。
                         if !within_scope || !self.headers.has("referer") {
@@ -483,7 +483,6 @@ impl UreqTransport {
                             req = req.set("Origin", &origin);
                         }
                     }
-                }
             }
         }
         match req.call() {

@@ -3,8 +3,8 @@
 > 适用版本：`0.17.0` 起。官方更新通道使用 Tauri 2 Updater + GitHub Releases；
 > **双通道拆分**：Windows 常规通道走 `latest.json`，Linux 长期稳定分支只接收
 > 高危安全/崩溃补丁，走 `latest-linux-critical.json`（平台专属配置
-> `src-tauri/tauri.linux.conf.json` 覆盖端点）。原有自定义补丁通道继续保留，
-> 两者互不绕过签名校验。
+> `src-tauri/tauri.linux.conf.json` 覆盖端点）。旧自定义补丁通道的 IPC 已下线，
+> 仅保留历史校验代码与回归测试；官方通道互不绕过签名校验。
 
 ## 1. 已配置内容
 
@@ -140,8 +140,11 @@
 - 资产名/平台键与 `latest.json` 不一致（保留 `--bundles nsis` 与
   `updaterJsonPreferNsis: true` 可避免大多数问题）。
 
-## 6. 自定义补丁通道
+## 6. 旧自定义补丁通道（已下线）
 
-`src-tauri/src/update.rs` 的清单/补丁通道仍使用构建期 `MR_UPDATE_PUBKEY`。
-如果同时维护两条通道，必须保证各自的公钥/私钥对应关系独立且可追溯；
-官方通道的私钥不能提交到仓库，也不能写入前端或日志。
+旧 `check_update` / `download_update` / `install_update` / `cancel_update` /
+`get_update_snapshot` IPC 已从 `lib.rs` 移除，前端无调用；`update.rs` 的清单/签名
+代码仅作为历史回归资产保留，不构成可用更新通道。未配置 `MR_UPDATE_PUBKEY` 时
+只有回环清单允许无签名，远程清单一律拒绝。若未来重新启用，必须重新注册命令、
+注入公钥、统一清单格式并补前端接线。官方 GitHub 通道的私钥不能提交到仓库，
+也不能写入前端或日志。

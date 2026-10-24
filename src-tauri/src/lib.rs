@@ -565,13 +565,11 @@ pub fn run() {
             browser::navigate_browser,
             browser::list_browser_downloads,
             browser::import_browser_download,
+            // 旧自定义补丁通道（check/download/install/cancel/snapshot）已下线：
+            // 前端零调用，且与官方 latest.json 通道不兼容。仅保留应用信息与
+            // 用户点击后的 restart_app；旧校验代码/负向测试仍可作为回归资产。
             update::get_app_info,
-            update::check_update,
-            update::download_update,
-            update::install_update,
             update::restart_app,
-            update::cancel_update,
-            update::get_update_snapshot,
             security::security_audit,
             security::clear_online_traces,
             diagnostics::diagnostics_record_frontend_error,

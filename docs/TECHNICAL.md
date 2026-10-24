@@ -299,18 +299,24 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 
 ## 8. 更新与版本
 
-### 8.1 自定义补丁通道（后端保留，无设置页入口）
+### 8.1 旧自定义补丁通道（已下线 IPC）
 
+- **不再注册** `check_update` / `download_update` / `install_update` /
+  `cancel_update` / `get_update_snapshot`；前端零调用。旧 `update.rs` 的清单
+  格式与官方 `latest.json` 不兼容，继续暴露只会扩大攻击面。
+- 保留 `get_app_info`（关于页/签名徽章）与用户点击的 `restart_app`；旧签名
+  校验函数与负向测试作为回归资产保留，但无网络入口。
 - SemVer 严格 `MAJOR.MINOR.PATCH`，拒绝 `1.2`、`01.2.3`、四段版本。
-- PATCH 优先补丁；MINOR 可补丁；跨多个 MINOR / MAJOR 回退全量。
-- 更新清单签名覆盖 version、URL、sha256、size、notes 等字段；构建期 `MR_UPDATE_PUBKEY`。
+- 未配置 `MR_UPDATE_PUBKEY` 时只有回环清单允许无签名；远程清单/重定向一律拒绝。
 - 安装包按 sha256 + minisign 校验；下载连接超时 20s，分块空闲超时，总上限 60 分钟。
 - 安装使用 PowerShell `-EncodedCommand`（UTF-16LE），支持中文/emoji 路径；不写 UTF-8 `.cmd`。
+- 若未来重新启用自定义通道，必须重新注册命令、注入公钥、统一清单格式并补前端
+  接线；不得直接复用当前未注册状态。
 - 0.17.0 起设置页**不再暴露更新清单地址输入框**：端点在构建配置中锁死
-  （Windows: GitHub Releases `latest.json`，Linux: `latest-linux-critical.json`），
-  前端 `check_update` / `download_update` 包装与启动期静默自检已移除；
-  Rust 命令保留（回归测试与未来程序化接入），历史遗留的本机清单地址
-  （`mr-update-prefs`）仅供「隐私与安全」审计评估回环策略。
+  （Windows: GitHub Releases `latest.json`，Linux: `latest-linux-critical.json`）。
+  旧 `check_update` / `download_update` / `install_update` / `cancel_update` /
+  `get_update_snapshot` 已不再注册；历史遗留的本机清单地址（`mr-update-prefs`）
+  仅供「隐私与安全」审计评估回环策略，不构成可用更新通道。
 
 ### 8.2 官方 Tauri Updater / GitHub Releases（0.16.0）
 
@@ -490,8 +496,8 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   循环消费 `take_pending_open`，有书则 `nav('/reader/:id')`，安全模式下只回书库。
 - 设置 → 存储与数据新增 `DataBackupPanel`：导出/恢复胶囊按钮、保存/打开对话框、
   覆盖确认、偏好白名单应用、关闭旧页签并广播书库/设置刷新。
-- 设置 → 关于与维护保留原有自定义补丁通道，并新增 GitHub 官方更新区；
-  所有文案六语齐全，不自动检查、不自动重启。
+- 设置 → 关于与维护只有 GitHub 官方更新卡；所有文案六语齐全，不自动检查、
+  不自动重启。旧自定义补丁通道不再有 UI 或 IPC 入口。
 
 ## 11. 命令契约
 

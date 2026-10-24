@@ -20,8 +20,8 @@ export interface AppInfo {
 }
 
 /**
- * 补丁通道的本机遗留偏好。设置页不再暴露清单地址编辑；该值仅供隐私
- * 安全审计评估「自定义补丁源」的回环/HTTPS 策略。
+ * 旧补丁通道的本机遗留偏好。设置页与 IPC 均已下线；该值仅供隐私安全
+ * 审计评估历史「自定义补丁源」的回环/HTTPS 策略，不参与任何更新请求。
  */
 export interface UpdatePrefs {
   manifestUrl: string;

@@ -125,12 +125,15 @@
 ### 4.1 防杀软误报与安全事务更新
 
 - 严禁直接内存覆写正在运行的二进制。
-- 自定义补丁通道的签名校验以构建期注入的 `MR_UPDATE_PUBKEY` 为准：注入了公钥时
-  minisign 校验强制生效；未注入公钥时只接受回环（loopback）制品，不允许任何远程包落地。
+- 旧自定义补丁通道的 5 个 IPC 已下线（check/download/install/cancel/snapshot），
+  前端零调用；`update.rs` 的历史签名校验代码只作为回归资产保留。若重新启用，
+  必须以构建期注入的 `MR_UPDATE_PUBKEY` 为准，未注入公钥时只接受回环制品，
+  不允许任何远程包落地。
 - 官方 GitHub Updater 通道以 `tauri.conf.json` 的 `plugins.updater.pubkey` 为准，
   只信任 GitHub Releases `latest.json`；CI 必须通过
   `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 注入私钥，
-  **私钥与密码绝不入库**。两条通道可以并存，但不得互相绕过校验。
+  **私钥与密码绝不入库**。官方通道是唯一活跃更新通道；旧自定义补丁通道不得
+  重新暴露 IPC，除非按 §4.1 重新完成公钥注入、清单统一与前端接线。
 - Windows 只发布 NSIS，`bundle.targets` 锁定为
   `["nsis", "deb", "rpm", "appimage"]`，不得加入 `msi`；NSIS 使用
   `installMode: "both"`、`compression: "lzma"`、语言选择器与六种内置语言。

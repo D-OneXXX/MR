@@ -138,6 +138,9 @@ const zhCN = {
   "settings.stats.unitBooks": "本",
   "settings.stats.note":
     "只统计本机阅读记录中实际翻过的页面；未打开的书与未记录进度不计入。",
+  "settings.stats.title": "书库与阅读统计",
+  "settings.stats.description":
+    "本机阅读记录总览；书库目录与扫描也统一收在这里。",
 
   "settings.cache.budgetTitle": "内存缓存预算",
   "settings.cache.budgetDescription":
@@ -182,6 +185,14 @@ const zhCN = {
   "settings.cache.clearingTemp": "正在清空…",
   "settings.cache.clearTempHint":
     "清除内存页缓存、渲染成品与在线原图；封面会按需重建，书库和阅读进度不受影响。",
+  "settings.cache.manageTitle": "缓存管理与 LRU 配额",
+  "settings.cache.manageDescription":
+    "渲染缓存与在线图片缓存共用同一份 LRU 软上限（500 MB – 10 GB）；一键清空临时缓存。",
+  "settings.online.proxyMode.system": "跟随系统代理",
+  "settings.online.proxyMode.manual": "手动代理",
+  "settings.online.proxyMode.direct": "直连",
+  "settings.online.browserHint":
+    "解析漫画网址或 Telegram 频道请前往「浏览器」页，在顶部唯一的地址栏输入即可。",
 
   "settings.status.loading": "正在加载设置…",
   "settings.status.loadFailed": "设置未加载",
@@ -378,6 +389,9 @@ const zhTW: SettingsMessages = {
   "settings.stats.unitBooks": "本",
   "settings.stats.note":
     "只統計本機閱讀記錄中實際翻過的頁面；未開啟的書與未記錄進度不計入。",
+  "settings.stats.title": "書庫與閱讀統計",
+  "settings.stats.description":
+    "本機閱讀記錄總覽；書庫目錄與掃描也統一收在這裡。",
 
   "settings.cache.budgetTitle": "記憶體快取預算",
   "settings.cache.budgetDescription":
@@ -422,6 +436,14 @@ const zhTW: SettingsMessages = {
   "settings.cache.clearingTemp": "正在清空…",
   "settings.cache.clearTempHint":
     "清除記憶體頁面快取、渲染成品與線上原圖；封面會按需重建，書庫與閱讀進度不受影響。",
+  "settings.cache.manageTitle": "快取管理與 LRU 配額",
+  "settings.cache.manageDescription":
+    "渲染快取與線上圖片快取共用同一份 LRU 軟上限（500 MB – 10 GB）；一鍵清空臨時快取。",
+  "settings.online.proxyMode.system": "跟隨系統代理",
+  "settings.online.proxyMode.manual": "手動代理",
+  "settings.online.proxyMode.direct": "直連",
+  "settings.online.browserHint":
+    "解析漫畫網址或 Telegram 頻道請前往「瀏覽器」頁，在頂部唯一的網址列輸入即可。",
 
   "settings.status.loading": "正在載入設定…",
   "settings.status.loadFailed": "設定未載入",
@@ -616,6 +638,9 @@ const en: SettingsMessages = {
   "settings.stats.unitBooks": "books",
   "settings.stats.note":
     "Only pages actually turned in local reading history are counted; unopened books and unrecorded progress are excluded.",
+  "settings.stats.title": "Library & reading stats",
+  "settings.stats.description":
+    "Overview of local reading history; the library folder and scan live here too.",
 
   "settings.cache.budgetTitle": "Memory cache budget",
   "settings.cache.budgetDescription":
@@ -661,6 +686,14 @@ const en: SettingsMessages = {
   "settings.cache.clearingTemp": "Clearing…",
   "settings.cache.clearTempHint":
     "Clears in-memory pages, rendered files and online originals; covers rebuild as needed, while the library and reading progress are unaffected.",
+  "settings.cache.manageTitle": "Cache & LRU quota",
+  "settings.cache.manageDescription":
+    "Render and online image caches share one soft LRU limit (500 MB – 10 GB); one click clears temporary caches.",
+  "settings.online.proxyMode.system": "Follow system proxy",
+  "settings.online.proxyMode.manual": "Manual proxy",
+  "settings.online.proxyMode.direct": "Direct",
+  "settings.online.browserHint":
+    "To resolve a manga URL or a Telegram channel, open the Browser page and type it into the single address bar at the top.",
 
   "settings.status.loading": "Loading settings…",
   "settings.status.loadFailed": "Settings not loaded",
@@ -859,6 +892,9 @@ const es: SettingsMessages = {
   "settings.stats.unitBooks": "libros",
   "settings.stats.note":
     "Solo se cuentan las páginas realmente pasadas en el historial local; los libros sin abrir y el progreso no registrado no cuentan.",
+  "settings.stats.title": "Biblioteca y estadísticas",
+  "settings.stats.description":
+    "Resumen del historial de lectura local; la carpeta y el escaneo de la biblioteca también viven aquí.",
 
   "settings.cache.budgetTitle": "Presupuesto de caché en memoria",
   "settings.cache.budgetDescription":
@@ -905,6 +941,14 @@ const es: SettingsMessages = {
   "settings.cache.clearingTemp": "Vaciando…",
   "settings.cache.clearTempHint":
     "Borra las páginas en memoria, los archivos renderizados y los originales en línea; las portadas se reconstruyen cuando haga falta y la biblioteca y el progreso no se ven afectados.",
+  "settings.cache.manageTitle": "Caché y cuota LRU",
+  "settings.cache.manageDescription":
+    "La caché de renderizado y las imágenes en línea comparten un límite LRU blando (500 MB – 10 GB); un clic borra la caché temporal.",
+  "settings.online.proxyMode.system": "Proxy del sistema",
+  "settings.online.proxyMode.manual": "Proxy manual",
+  "settings.online.proxyMode.direct": "Directo",
+  "settings.online.browserHint":
+    "Para resolver una URL de manga o un canal de Telegram, abre la página del navegador y escríbela en la única barra de direcciones.",
 
   "settings.status.loading": "Cargando ajustes…",
   "settings.status.loadFailed": "Ajustes no cargados",
@@ -1110,6 +1154,9 @@ const ja: SettingsMessages = {
   "settings.stats.unitBooks": "冊",
   "settings.stats.note":
     "ローカルの読書履歴で実際にめくったページのみを集計します。未開封の本や記録されていない進捗は含みません。",
+  "settings.stats.title": "ライブラリと読書統計",
+  "settings.stats.description":
+    "端末内の読書記録の概要。ライブラリーフォルダーとスキャンもここに統合されています。",
 
   "settings.cache.budgetTitle": "メモリキャッシュ予算",
   "settings.cache.budgetDescription":
@@ -1156,6 +1203,14 @@ const ja: SettingsMessages = {
   "settings.cache.clearingTemp": "削除中…",
   "settings.cache.clearTempHint":
     "メモリ上のページ、レンダリング済みファイル、オンライン原画を削除します。表紙は必要に応じて再生成され、ライブラリと読書進捗には影響しません。",
+  "settings.cache.manageTitle": "キャッシュと LRU 上限",
+  "settings.cache.manageDescription":
+    "レンダーキャッシュとオンライン画像キャッシュは同じ LRU 上限（500 MB ～ 10 GB）を共有。ワンクリックで一時キャッシュを削除できます。",
+  "settings.online.proxyMode.system": "システムプロキシに従う",
+  "settings.online.proxyMode.manual": "手動プロキシ",
+  "settings.online.proxyMode.direct": "直接接続",
+  "settings.online.browserHint":
+    "漫画 URL や Telegram チャンネルの解析は「ブラウザー」ページ上部の唯一のアドレスバーから行ってください。",
 
   "settings.status.loading": "設定を読み込み中…",
   "settings.status.loadFailed": "設定が未読み込み",
@@ -1362,6 +1417,9 @@ const ko: SettingsMessages = {
   "settings.stats.unitBooks": "권",
   "settings.stats.note":
     "로컬 읽기 기록에서 실제로 넘긴 페이지만 집계합니다. 열지 않은 책과 기록되지 않은 진행률은 제외됩니다.",
+  "settings.stats.title": "서재와 읽기 통계",
+  "settings.stats.description":
+    "로컬 읽기 기록 요약. 서재 폴더와 스캔도 여기에 함께 있습니다.",
 
   "settings.cache.budgetTitle": "메모리 캐시 예산",
   "settings.cache.budgetDescription":
@@ -1407,6 +1465,14 @@ const ko: SettingsMessages = {
   "settings.cache.clearingTemp": "지우는 중…",
   "settings.cache.clearTempHint":
     "메모리 페이지, 렌더링된 파일, 온라인 원본을 지웁니다. 표지는 필요할 때 다시 생성되며 서재와 읽기 진행률에는 영향을 주지 않습니다.",
+  "settings.cache.manageTitle": "캐시 및 LRU 할당량",
+  "settings.cache.manageDescription":
+    "렌더 캐시와 온라인 이미지 캐시는 하나의 LRU 상한(500 MB – 10 GB)을 공유합니다. 원클릭으로 임시 캐시를 비웁니다.",
+  "settings.online.proxyMode.system": "시스템 프록시 따르기",
+  "settings.online.proxyMode.manual": "수동 프록시",
+  "settings.online.proxyMode.direct": "직접 연결",
+  "settings.online.browserHint":
+    "만화 URL이나 Telegram 채널은 '브라우저' 페이지 상단의 유일한 주소창에서 입력하세요.",
 
   "settings.status.loading": "설정 불러오는 중…",
   "settings.status.loadFailed": "설정이 로드되지 않음",

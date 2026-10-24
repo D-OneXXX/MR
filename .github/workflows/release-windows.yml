@@ -49,6 +49,23 @@ jobs:
           fi
           echo "Releasing v${VERSION} on Windows (NSIS)"
 
+      # 发布门禁：任何一项失败都不得进入签名/发布步骤。
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Rust unit tests
+        run: cargo test --lib --manifest-path src-tauri/Cargo.toml
+
+      - name: Frontend production build
+        run: npm run build
+
+      - name: Build QA debug binary
+        run: cargo build --manifest-path src-tauri/Cargo.toml
+
+      - name: Full QA regression (Windows/WebView2)
+        run: node tests/qa/run-qa.mjs
+        timeout-minutes: 30
+
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v1
         env:

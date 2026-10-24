@@ -79,6 +79,20 @@ jobs:
             exit 1
           fi
 
+      # 发布门禁：Linux runner 只执行跨平台静态 QA；全量 E2E 使用
+      # WebView2/CDP 与 Windows 专属窗口路径，由 Windows 发布通道执行。
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Rust unit tests
+        run: cargo test --lib --manifest-path src-tauri/Cargo.toml
+
+      - name: Frontend production build
+        run: npm run build
+
+      - name: Static QA regression (platform-independent)
+        run: node tests/qa/run-qa.mjs --suite=static
+
       - name: Build Tauri bundles (deb / rpm / AppImage)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

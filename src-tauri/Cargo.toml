@@ -36,7 +36,7 @@ sha2 = "0.10"
 hex = "0.4"
 chrono = "0.4"
 sysinfo = "0.31"
-dirs = "5"
+dirs = "7"
 thiserror = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # 更新包签名校验（minisign / Ed25519，Tauri 更新器同款格式）。

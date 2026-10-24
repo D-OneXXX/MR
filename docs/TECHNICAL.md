@@ -262,6 +262,12 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - **更新残留清理**：启动时删除系统临时目录 `mangareader-updates/` 内超过
   24 小时的文件；AppImage 运行态下同时删除已验证成功运行后的
   `.old-appimage` 回滚备份。只处理普通文件，不跟随符号链接、不创建目录。
+- **构建基线与发布门禁**：`build.rs` 监听 `.git/HEAD`、`.git/index`、分支
+  refs、前后端源码与依赖清单，工作区脏改会重算 `MR_BUILD_BASELINE`；发布
+  与常规 CI 的静态守卫按 YAML steps 解析，测试/签名/审计标记不能靠注释蒙混。
+  更新清单拉取有回环 mock server 单测（200 解析、503 拒绝）。
+- **Webtoon 坏图失败态**：预解码失败或超时返回 false 并进入 `failed`，
+  `<img>` 运行时 onError 同样置失败，切片显示可点按重试按钮，不再永久空白。
 - **原子导出**：`.mrbackup` 先写到目标同目录唯一隐藏临时文件，zip 完成后
   `flush + sync_all`，再直接 `rename` 覆盖旧备份并 fsync 父目录；不再先删旧文件，
   崩溃时最多留下临时文件，上一份可用备份始终存在。

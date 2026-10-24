@@ -1,4 +1,4 @@
-# 真机冒烟清单（v0.16.0）
+# 真机冒烟清单（v0.17.0，Windows + Linux）
 
 按顺序执行；异常时记录步骤、界面原文、`<数据目录>/logs/app.log` 最后若干行。
 
@@ -10,13 +10,13 @@
 - [ ] 准备一本本地 cbz/文件夹（20–60 页）和一本 100+ 页长条漫。
 - [ ] 准备一个字典序写入的 20 页 CBZ（`1.png … 20.png`，无前导零）。
 - [ ] 设置 → 实验性功能，按需开启「条漫模式」「在线直读」。
-- [ ] 记录当前版本：`package.json` 与窗口标题均为 `0.16.0`。
+- [ ] 记录当前版本：`package.json` 与窗口标题均为 `0.17.0`。
 
 ## 1. 启动与版本
 
 - [ ] `npm run tauri dev` 打开主窗口，无白屏。
-- [ ] 任务管理器无 `python` / `python3` / `:8500` 伴随进程；应用启动不拉起 sidecar。
-- [ ] 设置 → 关于显示 `v0.16.0` 与构建提交。
+- [ ] 任务管理器 / `ps` 无 `python` / `python3` / `:8500` 伴随进程；应用启动不拉起 sidecar。
+- [ ] 设置 → 关于显示 `v0.17.0` 与构建提交。
 - [ ] 故意把 `tauri.conf.json` 版本改错，`npm run build` 应报告精确文件:行；改回后通过。
 
 ## 2. 外壳与书库
@@ -82,7 +82,7 @@
 - [ ] 连续 6 次无效点击唤起独立恢复窗口；继续等待不关闭。
 - [ ] 主线程卡死 6s 后恢复窗口出现；「仅重载当前视图」真实重建主窗。
 - [ ] 安全模式文件损坏时在线功能被阻断；用户退出安全模式后恢复。
-- [ ] Windows 睡眠/唤醒不误弹恢复窗口。
+- [ ] Windows/Linux 睡眠/唤醒不误弹恢复窗口（Linux watchdog 读取 CLOCK_BOOTTIME）。
 
 ## 7.1 架构宪法回归（0.15.0 新增）
 
@@ -109,11 +109,14 @@
       原生标题随语言变化；主窗再切回浅色/中文时恢复窗同步。
 - [ ] 导入 800×21000 单页超长图：条漫总页数为 1，切片 > 1；拖动进度/滚动后重启，
       阅读进度仍以逻辑页 1 保存，不因切片数虚增。
-- [ ] 打开 zip/cbz 后只读当前页；任务管理器无临时解压目录膨胀；中文/空格/`[ ] # %`
+- [ ] 打开 zip/cbz 后只读当前页；任务管理器 / `ps` 无临时解压目录膨胀；中文/空格/`[ ] # %`
       路径与在线 query 图片不裂图。
-- [ ] `%APPDATA%\com.local.manga-reader\library.db` 为数据根，缓存位于
+- [ ] Windows：数据根 `%APPDATA%\com.local.manga-reader\library.db`，缓存位于
       `%LOCALAPPDATA%\com.local.manga-reader\render_cache|online_cache`；
       首次启动可从旧 `%LOCALAPPDATA%` 库自动接续，旧缓存不删。
+- [ ] Linux：数据根 `~/.local/share/com.local.manga-reader/library.db`，缓存位于
+      `~/.cache/com.local.manga-reader/render_cache|online_cache`；目录权限 0700，
+      `library.db`/WAL/SHM 为 0600。
 - [ ] SQLite 为 WAL：应用运行中第二个连接写入不立即报 `database is locked`。
 - [ ] 拔掉副屏后重启/重载主窗或打开恢复窗：窗口回到主屏居中，不跑到屏幕外。
 
@@ -177,18 +180,18 @@
 - [ ] 未点击检查时不自动联网；点击后显示当前版本/可用版本/日期/更新说明；
 - [ ] 更新说明按纯文本渲染，不执行 HTML；
 - [ ] 安装完成后只有用户点击「立即重启」才重启（Windows 安装器自动重启属点击安装后的预期行为）；
-- [ ] 推送 `v0.16.0` 标签后，Release 中存在带 `.sig` 的 NSIS 更新包与 `latest.json`；
+- [ ] 推送 `v0.17.0` 标签后，Release 中存在带 `.sig` 的 NSIS 更新包与 `latest.json`；
 - [ ] `latest.json` endpoint 可访问，上一版本客户端能一键更新；
 - [ ] `capabilities/updater.json` 仅覆盖主窗；无 `process:*` 权限。
 
 ## 8. 自动回归
 
-- [ ] `cd src-tauri && cargo test --lib` 全绿（当前 274 项）。
+- [ ] `cd src-tauri && cargo test --lib` 全绿（Windows 318 项；Linux 另加 2 个 unix 用例）。
 - [ ] `npx tsc --noEmit` 零错误。
 - [ ] `npm run test:version` 全绿。
-- [ ] `npm run version:check` 为 0.16.0。
-- [ ] `node tests\qa\run-qa.mjs` 无 P0/P1；全量 222 项通过，报告与静态 backlog（6 条 P3）与
-      `docs/QA.md` 一致。
+- [ ] `npm run version:check` 为 0.17.0。
+- [ ] `node tests\qa\run-qa.mjs` 无 P0/P1；全量 224 项通过、静态 backlog 0 条，
+      与 `docs/QA.md` 一致。
 - [ ] `npm run build` 产出 `dist/index.html` 与 `dist/recovery.html`；`cargo check` 通过。
 
 ## 常见问题

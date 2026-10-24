@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-24T01:45:26.865Z",
+  "updatedAt": "2026-10-24T18:34:29.697Z",
   "regressions": [
     {
       "id": "REG-WT-ANCHOR",
@@ -590,7 +590,7 @@
       "rootCause": "测试基础设施或应用崩溃",
       "fix": "修复异常后重跑；如应用泄漏则按 P0 处理",
       "firstSeen": "2026-10-23T19-40-29-978Z",
-      "lastSeen": "2026-10-23T19-40-29-978Z"
+      "lastSeen": "2026-10-24T18-28-16-519Z"
     },
     {
       "id": "online:filter-drawer-ui",
@@ -744,24 +744,28 @@
     {
       "id": "audit:webtoon-broken-image",
       "severity": "P3",
-      "status": "open",
-      "location": "src/components/Reader/Webtoon.tsx:143-148,867-872",
+      "status": "fixed",
+      "location": "src/components/Reader/Webtoon.tsx:190-220,400-440,1110-1145",
       "title": "坏图永久空白，无重试入口",
       "expected": "解码失败显示重试/失败态",
       "actual": "predecode onerror 仍 resolve；img 无 onError；空白 tile 不会进入 failed",
-      "fix": "predecode reject 或 img onError 置 failed；复用 retryTile",
-      "evidence": "static-review"
+      "fix": "predecode 失败/超时返回 false 并进入失败态；<img> 增加 onError 置 failed，失败切片可点按 retryTile",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-25T02:30:00.000Z",
+      "lastSeen": "2026-10-25T02:30:00.000Z"
     },
     {
       "id": "audit:rage-click-signature",
       "severity": "P3",
-      "status": "open",
-      "location": "src/features/resilience/rageClick.ts:25-33,161-169",
+      "status": "fixed",
+      "location": "src/features/resilience/rageClick.ts:25-65",
       "title": "暴躁点击按标签而非元素身份聚合，不同按钮可被当成同一元素",
       "expected": "同一元素 1.5s 内 6 次才触发",
       "actual": "所有 button 签名都是 button||；快速点不同按钮可能误报",
-      "fix": "签名加入 aria-label/文本/Element 引用；保留可配置阈值",
-      "evidence": "static-review"
+      "fix": "signature 加入 testid/id/aria-label/title/textContent，缺失时用 4 层 DOM 路径兜底；不同按钮不再因同为 button 被聚合",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-25T02:35:00.000Z",
+      "lastSeen": "2026-10-25T02:35:00.000Z"
     },
     {
       "id": "audit:safe-mode-fail-open",
@@ -870,13 +874,15 @@
     {
       "id": "audit:version-buildhash-drift",
       "severity": "P3",
-      "status": "open",
-      "location": "src-tauri/build.rs:30-31",
+      "status": "fixed",
+      "location": "src-tauri/build.rs:30-42",
       "title": "后端 Git hash 可能滞后于脏工作区",
       "expected": "前后端同一构建基线",
       "actual": "build.rs 缓存；源码脏改不一定重跑，前端 Vite 每次算出 -dirty",
-      "fix": "构建时强制重算或运行时探测；诊断中同时显示两者并校验",
-      "evidence": "static-review"
+      "fix": "build.rs 监听 .git/HEAD、.git/index、refs/heads、前后端源码与 package/Cargo 清单，工作区变化会重算 MR_BUILD_BASELINE",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-25T02:30:00.000Z",
+      "lastSeen": "2026-10-25T02:30:00.000Z"
     },
     {
       "id": "audit:online-html-encoding",
@@ -907,13 +913,15 @@
     {
       "id": "audit:online-ssrf-link-local",
       "severity": "P3",
-      "status": "open",
-      "location": "src-tauri/src/online/http.rs:317-324",
+      "status": "fixed",
+      "location": "src-tauri/src/online/mod.rs:108-180; src-tauri/src/online/http.rs:268-300",
       "title": "在线请求只校验 scheme，未拦 link-local/云元数据地址",
       "expected": "解析 DNS 后拒绝 169.254.0.0/16、::1、内网段（回环 fixture 仅测试放行）",
       "actual": "任意 http/https 主机均可请求",
-      "fix": "DNS 解析后校验 IP；默认拒绝私有/link-local，测试用显式开关",
-      "evidence": "static-review"
+      "fix": "normalize_url/HTTP transport 每跳校验字面 IP 与 DNS 解析地址；私网、link-local、云元数据、IPv6 ULA 全部拒绝，QA 回环仅 debug 显式放行",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-25T02:30:00.000Z",
+      "lastSeen": "2026-10-25T02:30:00.000Z"
     },
     {
       "id": "audit:status-pill-online-tab",
@@ -931,24 +939,28 @@
     {
       "id": "audit:i18n-plurals-number",
       "severity": "P3",
-      "status": "open",
-      "location": "src/i18n/messages/library.ts:219,326; src/pages/Settings.tsx:167",
+      "status": "fixed",
+      "location": "src/i18n/messages/library.ts; src/pages/Library.tsx; src/pages/Settings.tsx",
       "title": "英文/西语单复数与 MB 小数分隔未本地化",
       "expected": "1 book / 1 libro；1,5 MB（西语）",
       "actual": "1 books / 1 libros；toFixed 固定点号",
-      "fix": "Intl.PluralRules + Intl.NumberFormat；补单数键",
-      "evidence": "static-review"
+      "fix": "书库计数补单数键，章节排序用当前 locale，MB 统一 Intl.NumberFormat（西语小数逗号）",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-25T02:30:00.000Z",
+      "lastSeen": "2026-10-25T02:30:00.000Z"
     },
     {
       "id": "audit:brand-residue",
       "severity": "P3",
-      "status": "open",
-      "location": "index.html:2,5,8; recovery.html:2,7; src/index.css:49-54",
+      "status": "fixed",
+      "location": "index.html:8; src/i18n/index.tsx:108-113; public/favicon.svg",
       "title": "外壳仍有固定 zh-CN、Vite favicon、--mi-* 旧 token",
       "expected": "语言由 locale 决定；自有 favicon；--mr-* token",
       "actual": "固定中文标题/语言、Vite 图标、MeetingIQ 前缀 token",
-      "fix": "按 locale 设置 lang/title；替换 favicon；重命名 token",
-      "evidence": "static-review"
+      "fix": "index.html 初始标题改中性 MangaReader，语言/标题运行时按 locale 设置；favicon 为自有图标；--mi-* 仅保留 AGENTS 允许的历史兼容别名",
+      "evidence": "static-review",
+      "fixedAt": "2026-10-25T02:30:00.000Z",
+      "lastSeen": "2026-10-25T02:30:00.000Z"
     },
     {
       "id": "audit:docs-removed-routes",

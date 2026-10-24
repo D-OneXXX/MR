@@ -59,6 +59,12 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **P2/P3 静态清零**：构建基线监听 `.git/index`/refs/前后端源码；Webtoon
+  预解码失败/超时进入失败态且 `<img>` onError 可重试；暴躁点击签名加入
+  testid/id/aria-label/title/text 与 DOM 路径兜底；发布工作流改为按 YAML
+  steps 解析断言，CI 覆盖版本门禁、clippy、e2e/memory_budget 与审计；
+  `fetch_manifest` 增加回环 mock server 单测（200 解析 + 503 拒绝）。
+  静态审计 backlog 归零；Rust 单测 318（Windows），Linux +2。
 - **UI/i18n 长尾（P2）**：书库计数单数键（1 book / 1 libro）、章节排序
   改用当前 locale、设置 MB 走 `Intl.NumberFormat`；Toast 上限 3 条并在
   批量操作条打开时上移；`index.html` 标题改中性 `MangaReader`（运行时

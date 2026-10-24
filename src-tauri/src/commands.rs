@@ -1668,6 +1668,17 @@ fn upsert_resolved_meta(
             .ok()
             .map(|m| m.manifest_hash)
     });
+    // 页数骤降通常意味着站点改版/反爬误判/图片被过滤；直接覆盖会把
+    // current_page 钳到末页，用户看起来像“进度被吞”。保留旧清单并要求
+    // 用户显式删除后重新导入。
+    if let Some(old) = old.as_ref() {
+        if old.page_count > 0 && (meta.page_count as u32) < old.page_count {
+            return Err(BackendError::Msg(format!(
+                "在线清单页数从 {} 降到 {}，已拒绝覆盖以保护阅读进度（online-page-count-drop）",
+                old.page_count, meta.page_count
+            )));
+        }
+    }
     let changed = old_hash.as_deref() != Some(new_hash.as_str());
     db::upsert_online_book(
         conn,
@@ -3448,7 +3459,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_resolved_meta_clamps_progress_on_hash_change() {
+    fn apply_resolved_meta_keeps_progress_and_rejects_page_drop() {
         let st = online_state();
         let old = online_meta("https://example.com/gallery/4", "旧", "h1", pages(5));
         let (row, _) = apply_resolved_meta(&st, &old).expect("首次入库");
@@ -3466,12 +3477,17 @@ mod tests {
         assert_eq!(row.title, "新");
         assert_eq!(row.current_page, 4, "页数未缩小时进度应保留");
 
-        // 页数缩小的变化：进度钳制到新末页。
+        // 页数缩小：拒绝覆盖，旧清单与进度原样保留。
         let shorter = online_meta("https://example.com/gallery/4", "新", "h3", pages(2));
-        let (row, changed) = apply_resolved_meta(&st, &shorter).expect("再次变化应更新");
-        assert!(changed);
-        assert_eq!(row.page_count, 2);
-        assert_eq!(row.current_page, 1, "进度应钳制到新末页");
+        let err = apply_resolved_meta(&st, &shorter).expect_err("页数骤降应拒绝");
+        assert!(err.to_string().contains("online-page-count-drop"), "{err}");
+        let preserved = st
+            .db
+            .with(|conn| db::get_book(conn, &id).map_err(|e| e.to_string()))
+            .unwrap()
+            .expect("旧书仍在");
+        assert_eq!(preserved.page_count, 5);
+        assert_eq!(preserved.current_page, 4, "拒绝覆盖时进度不得被钳制");
     }
 
     #[test]

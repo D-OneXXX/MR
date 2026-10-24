@@ -124,6 +124,11 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   `remove_books`（软删/硬删）与 `relocate_book` 同样在单事务内完成。`relocate_book`
   改 `books.id` 前执行 `PRAGMA defer_foreign_keys=ON`，子行迁移完成后再统一校验外键。
 - 页数缩小用 `MIN(current_page, page_count-1)` 钳制。
+- **在线页数护栏**：同一 URL 重新解析出的清单页数少于现有 `books.page_count`
+  时，`upsert_resolved_meta` 直接拒绝覆盖并返回稳定码
+  `online-page-count-drop`，旧清单、`current_page` 与 `scroll_pct` 原样保留；
+  站点确实删页时由用户显式删除该书后重新导入。避免反爬误判/站点改版把
+  用户进度钳到末页。
 - **书库列表性能**：`books(removed, updated_at DESC)` 索引 `idx_books_list` 支撑
   默认倒序列表；`list_books` / `scan_library` 只把 SQL 放在 `DbSlot` 锁内，
   逐本 `symlink_metadata`、`meta_json` 解析与 `missing` 判定全部移到锁外，

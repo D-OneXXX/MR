@@ -59,6 +59,11 @@
   临时覆盖层构建后自动删除且被 gitignore。
 - **备份前向兼容**：schema 高版本的 `.mrbackup` 可恢复核心数据并提示
   `forwardSchema`；schema=0 拒绝。
+- **在线页数护栏（P2）**：同一 URL 的新清单页数少于现有记录时拒绝覆盖，
+  保留旧清单与进度，六语提示 `error.onlinePageCountDrop`；用户确认真删页时
+  删除后重导。回归 `apply_resolved_meta_clamps_progress_on_hash_change`
+  （`apply_resolved_meta_keeps_progress_and_rejects_page_drop`）改为断言
+  页数骤降被拒且 `currentPage` 不变。
 - **CI 收口（P1.16）**：Linux 检查扩展到 `main`/PR，新增
   `cargo clippy --all-targets -- -D warnings`（本机已清零 52 条告警）、
   `xvfb-run` 下的 `e2e_stage1` 与 `memory_budget`、cargo/npm 审计报告；

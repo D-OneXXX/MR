@@ -125,6 +125,7 @@ const zhCN = {
   "error.onlineFetchFailed": "在线请求失败，请检查网络或稍后重试",
   "error.updateUnsupportedFormat": "更新包格式不受支持，请从发行页手动下载",
   "error.nonUtf8Path": "路径包含非 UTF-8 字符，当前版本暂不支持",
+  "error.onlinePageCountDrop": "在线清单页数少于现有记录，已保留当前进度；如网页确实变短，请先删除该书再重新导入",
 } as const;
 
 type CommonMessages = { [K in keyof typeof zhCN]: string };
@@ -256,6 +257,7 @@ const zhTW: CommonMessages = {
   "error.onlineFetchFailed": "線上請求失敗，請檢查網路或稍後再試",
   "error.updateUnsupportedFormat": "更新包格式不受支援，請從發行頁手動下載",
   "error.nonUtf8Path": "路徑包含非 UTF-8 字元，目前版本暫不支援",
+  "error.onlinePageCountDrop": "線上清單頁數少於現有紀錄，已保留目前進度；若網頁確實變短，請先刪除該書再重新匯入",
 };
 
 const en: CommonMessages = {
@@ -388,6 +390,7 @@ const en: CommonMessages = {
   "error.onlineFetchFailed": "The online request failed. Check your network or try again later.",
   "error.updateUnsupportedFormat": "This update package format is not supported. Download it manually from the release page.",
   "error.nonUtf8Path": "The path contains non-UTF-8 characters and is not supported by this version.",
+  "error.onlinePageCountDrop": "The online manifest has fewer pages than the existing record, so your progress was kept. If the page really got shorter, delete the book and import it again.",
 };
 
 const es: CommonMessages = {
@@ -522,6 +525,7 @@ const es: CommonMessages = {
   "error.onlineFetchFailed": "La solicitud en línea falló. Revisa la red o inténtalo más tarde.",
   "error.updateUnsupportedFormat": "Este formato de actualización no es compatible. Descárgalo manualmente desde la página de versiones.",
   "error.nonUtf8Path": "La ruta contiene caracteres que no son UTF-8 y esta versión no la admite.",
+  "error.onlinePageCountDrop": "El manifiesto en línea tiene menos páginas que el registro actual, así que se conservó tu progreso. Si la página realmente se acortó, elimina el libro y vuelve a importarlo.",
 };
 
 const ja: CommonMessages = {
@@ -656,6 +660,7 @@ const ja: CommonMessages = {
   "error.onlineFetchFailed": "オンラインリクエストに失敗しました。ネットワークを確認するか、後でもう一度お試しください。",
   "error.updateUnsupportedFormat": "この更新パッケージ形式は未対応です。リリースページから手動でダウンロードしてください。",
   "error.nonUtf8Path": "パスに UTF-8 以外の文字が含まれているため、このバージョンでは対応していません。",
+  "error.onlinePageCountDrop": "オンラインリストのページ数が既存の記録より少ないため、現在の進捗を保持しました。実際にページが減った場合は、この本を削除して再読み込みしてください。",
 };
 
 const ko: CommonMessages = {
@@ -790,6 +795,7 @@ const ko: CommonMessages = {
   "error.onlineFetchFailed": "온라인 요청에 실패했습니다. 네트워크를 확인하거나 나중에 다시 시도하세요.",
   "error.updateUnsupportedFormat": "지원하지 않는 업데이트 패키지 형식입니다. 릴리스 페이지에서 직접 내려받으세요.",
   "error.nonUtf8Path": "경로에 UTF-8이 아닌 문자가 있어 이 버전에서는 지원하지 않습니다.",
+  "error.onlinePageCountDrop": "온라인 목록의 페이지 수가 기존 기록보다 적어 현재 진행 상황을 유지했습니다. 페이지가 실제로 줄었다면 이 책을 삭제한 뒤 다시 가져오세요.",
 };
 
 export const commonMessages = {

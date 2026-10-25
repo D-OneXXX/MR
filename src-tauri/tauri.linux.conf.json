@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["deb", "rpm", "appimage"]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/D-OneXXX/MR/releases/latest/download/latest-linux-critical.json"
+      ]
+    }
+  }
+}

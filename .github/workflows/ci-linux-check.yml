@@ -1,0 +1,94 @@
+name: Linux check
+
+# Windows 宿主上 `cargo check` 会跳过所有 `#[cfg(target_os = "linux")]` 块，
+# Linux 专属代码的真实编译验证只能在这里完成。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  linux-check:
+    name: cargo check + frontend build (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install WebKitGTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xvfb
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Version gate
+        run: |
+          npm run version:check
+          npm run test:version
+
+      - name: Typecheck and build frontend
+        run: |
+          npx tsc --noEmit
+          npm run build
+
+      - name: cargo check (compiles linux cfg blocks)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Backend unit tests
+        run: cargo test --lib --manifest-path src-tauri/Cargo.toml
+
+      # 集成测试本身不需要窗口，但 WebKitGTK 初始化仍要有 X server；
+      # xvfb 保证在无桌面的 runner 上与开发机行为一致。
+      - name: Backend integration tests (e2e + memory budget)
+        run: |
+          xvfb-run -a cargo test --manifest-path src-tauri/Cargo.toml \
+            --test e2e_stage1 --test memory_budget
+
+      - name: RustSec audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # 审计先作为可见报告，不阻断构建：Cargo 依赖含 Tauri/WebKit 生态，
+      # 上游 advisory 需要人工判断可利用性；阻断项在发版评审时处理。
+      - name: Cargo audit report
+        continue-on-error: true
+        run: cargo audit --file src-tauri/Cargo.lock
+
+      # 已知 Vite 6.4.3 dev-server advisory 与 React Router 6.x open-redirect
+      # 需要跨大版本升级；打包产物不使用 dev server，本轮先保持可见。
+      - name: NPM audit report (production dependencies)
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high

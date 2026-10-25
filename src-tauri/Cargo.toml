@@ -1,0 +1,76 @@
+[package]
+name = "manga-reader-tauri"
+version = "0.17.1"
+description = "Local-first manga reader (Tauri 2 + React)"
+authors = ["manga-reader"]
+edition = "2021"
+rust-version = "1.90"
+
+[lib]
+name = "manga_reader_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+# 双击文件关联/二次启动：单实例唤醒并转发命令行路径。
+tauri-plugin-single-instance = "2"
+# 官方 Updater：GitHub Releases latest.json + minisign 签名校验。
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+zip = "2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+# 条漫长图：IDCT 缩放解码（>8000px 高的 JPEG 按显示宽度解码，全分辨率栅格不进内存）
+jpeg-decoder = "0.3"
+lru = "0.12"
+parking_lot = "0.12"
+base64 = "0.22"
+sha2 = "0.10"
+hex = "0.4"
+chrono = "0.4"
+sysinfo = "0.31"
+dirs = "5"
+thiserror = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# 更新包签名校验（minisign / Ed25519，Tauri 更新器同款格式）。
+minisign-verify = "0.2"
+# 在线源：同步阻塞 HTTP + URL 规范化 + 文件名解码
+url = "2"
+percent-encoding = "2"
+ureq = { version = "2", features = ["json", "socks-proxy"] }
+# 在线源：单页 HTML 图集解析
+regex = "1"
+# 在线 HTML 图集：按 charset 正确解码（GBK/Shift_JIS 等）。
+encoding_rs = "0.8"
+
+# Linux 专用：CLOCK_BOOTTIME（含 suspend 的单调时钟，唤醒恢复判定）。
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+# Windows 专用：系统代理注册表读取与配对桥接签名校验。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_Registry",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+# 体积预算：关闭开发构建的增量缓存，避免 target/debug/incremental 反复膨胀。
+# 代价是 Rust 改动后的重编译稍慢；前端 HMR 不受影响。
+[profile.dev]
+incremental = false

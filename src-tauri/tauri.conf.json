@@ -1,0 +1,83 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MangaReader",
+  "version": "0.17.1",
+  "identifier": "com.local.manga-reader",
+  "mainBinaryName": "manga-reader-tauri",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "MangaReader",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": false,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost http://tauri.localhost https://tauri.localhost; style-src 'self' 'unsafe-inline'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:1420 http://127.0.0.1:1420; img-src 'self' data:; connect-src ipc: http://ipc.localhost http://tauri.localhost https://tauri.localhost http://localhost:1420 http://127.0.0.1:1420 ws://localhost:1420 ws://127.0.0.1:1420; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "deb", "rpm", "appimage"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "compression": "lzma",
+        "displayLanguageSelector": true,
+        "languages": [
+          "SimpChinese",
+          "TradChinese",
+          "English",
+          "Spanish",
+          "Japanese",
+          "Korean"
+        ]
+      }
+    },
+    "createUpdaterArtifacts": true,
+    "fileAssociations": [
+      {
+        "ext": ["cbz"],
+        "name": "MangaReader Comic Archive",
+        "description": "MangaReader Comic Archive",
+        "role": "Viewer",
+        "mimeType": "application/vnd.comicbook+zip"
+      },
+      {
+        "ext": ["zip"],
+        "name": "MangaReader ZIP Archive",
+        "description": "MangaReader ZIP Archive",
+        "role": "Viewer",
+        "mimeType": "application/zip"
+      }
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY3Q0IzMDQ0NjBFMDhFNEEKUldSS2p1QmdSRERMWjBNTEpWb2E3N1l6MFFJYzRVMHl6L3BEZWM3NUNKOGcxY2hoNHVYZDVRdnEK",
+      "endpoints": [
+        "https://github.com/D-OneXXX/MR/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

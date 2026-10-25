@@ -1,0 +1,61 @@
+name: Windows check
+
+# 主力平台门禁：类型检查、Rust 单测、集成测试、静态 QA 与构建。
+# 全量 E2E（WebView2 + CDP）仍由发版工作流在标签构建前执行。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows-check:
+    name: tsc + cargo test + static QA (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Version gate
+        run: |
+          npm run version:check
+          npm run test:version
+
+      - name: Typecheck frontend
+        run: npx tsc --noEmit
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Backend unit tests
+        run: cargo test --lib --manifest-path src-tauri/Cargo.toml
+
+      - name: Backend integration tests (e2e + memory budget)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test e2e_stage1 --test memory_budget
+
+      - name: Static and version guards
+        run: node tests/qa/run-qa.mjs --suite=static
+
+      # 已知 Vite dev-server / React Router 6.x advisory 需跨大版本升级，
+      # 先保持可见报告，不阻断主力构建。
+      - name: NPM audit report (production dependencies)
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high

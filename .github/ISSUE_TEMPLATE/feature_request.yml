@@ -1,0 +1,42 @@
+name: Feature request
+description: Suggest an improvement that fits MangaReader’s local-first scope.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        MangaReader is local-first and does not bundle manga sources. Describe the user
+        problem first, then the proposed behavior. Do not include private library data.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what makes it difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: MangaReader version
+      placeholder: 0.17.1
+    validations:
+      required: false
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This request does not require bundling a manga source, bypassing access controls, or uploading my library.
+          required: true

@@ -1,0 +1,4 @@
+# 项目体积预算：关闭开发构建的增量缓存，避免 target/debug/incremental 反复膨胀。
+# 代价是 Rust 改动后的重编译稍慢；前端 HMR 不受影响。
+[build]
+incremental = false

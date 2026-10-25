@@ -1,0 +1,204 @@
+/* Reader — dark immersive canvas.
+   Structural layout only; all chrome lives in Tailwind/shadcn components.
+   `.reader-root` (and `.reader-portal` layers) pin the dark token set so
+   utilities resolve dark even while the app theme is light. */
+
+.reader-root,
+.reader-portal {
+  --sh-background: #09090b;
+  --sh-foreground: #f8fafc;
+  --sh-card: #151f32;
+  --sh-card-foreground: #f8fafc;
+  --sh-popover: #151f32;
+  --sh-popover-foreground: #f8fafc;
+  --sh-primary: #38a8f8;
+  --sh-primary-foreground: #09090b;
+  --sh-secondary: #1b2a42;
+  --sh-secondary-foreground: #e8f3ff;
+  --sh-muted: #1a263a;
+  --sh-muted-foreground: #94a3b8;
+  --sh-accent: #1e3350;
+  --sh-accent-foreground: #f8fafc;
+  --sh-border: #334155;
+  --sh-input: #334155;
+  --sh-ring: #38a8f8;
+  --sh-destructive: #f87171;
+  --sh-destructive-foreground: #09090b;
+  --sh-warning: #fbbf24;
+  --sh-success: #34d399;
+  --mi-hard-shadow: #020617;
+  --mi-ring-offset: #09090b;
+  --v3-reader: #09090b;
+  color-scheme: dark;
+}
+
+.reader-root {
+  position: fixed;
+  inset: 0;
+  /* .view-fade 的结束帧 transform 会成为 fixed 的包含块（高度 0）；
+     显式铺满视口，保证画布始终与窗口一致。 */
+  width: 100vw;
+  height: 100vh;
+  /* 阅读态始终不透明深色画布（亮色主题同样适用）。 */
+  background: #09090b;
+  color: #f8fafc;
+  overflow: hidden;
+  z-index: 20;
+}
+/* 注意：不能用 .hidden —— 与 Tailwind 的 display:none 工具类冲突。 */
+.reader-root.chrome-hidden { cursor: none; }
+
+.reader-canvas {
+  position: absolute;
+  inset: 0;
+  background: #09090b;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.reader-pages {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  /* 无 transform 过渡：缩放/平移/翻页必须 0ms 跟手（P0 阅读手感）。
+     不常驻 will-change；平移使用 translate3d 由浏览器按需提层。 */
+}
+
+.reader-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 10px 96px;
+}
+.reader-cell.solo-one { flex: 1 1 0; }
+.reader-double { gap: 10px; padding-left: 16px; padding-right: 16px; }
+.reader-double.solo { justify-content: flex-end; }
+.reader-double.solo .reader-cell { flex: 0 1 calc(50% - 6px); }
+/* 居中独占：LTR 封面单页 + 横向跨页大图（宽 > 高×1.1）独占一屏。 */
+.reader-double.solo-center { justify-content: center; }
+.reader-double.solo-center .reader-cell { flex: 1 1 100%; }
+
+.reader-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+  border-radius: 2px;
+  box-shadow: 0 8px 48px rgba(0, 0, 0, 0.55);
+}
+
+.reader-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 60px;
+}
+.reader-center .pet-bubble {
+  background: #151f32;
+  border-color: #334155;
+  color: #94a3b8;
+}
+
+.reader-err {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+/* 页面淡入（仅透明度，不触碰平移/缩放的 transform）。 */
+.reader-root .fade-in {
+  animation: reader-fade-in 160ms ease both;
+}
+@keyframes reader-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 下一话加载指示（保持旋转动画独立于 Tailwind JIT）。 */
+.reader-spin { animation: reader-rot 0.9s linear infinite; }
+@keyframes reader-rot { to { transform: rotate(360deg); } }
+
+/* ============ 条漫模式 ============ */
+/* 纵向滚动容器：深色画布 + 滚动锚定。切片高度在布局阶段就固定，
+   图片加载/解码不会改变 total height，浏览器锚定只作兜底。 */
+.webtoon-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: #09090b;
+  scrollbar-gutter: stable;
+  overflow-anchor: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+/* 内容宽 = 视口宽 × 宽度偏好；用 flex 居中，>100% 时两侧对称溢出并裁切。 */
+.webtoon-stage {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  overflow-anchor: auto;
+}
+.webtoon-strip {
+  position: relative;
+  flex: 0 0 auto;
+  overflow-anchor: auto;
+}
+.webtoon-tile {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  /* 绝对定位 + 精确 top/height，无 margin/border/line-height 缝隙 */
+  margin: 0;
+  padding: 0;
+  border: 0;
+  line-height: 0;
+  /* 透明底：未加载区域与画布同色，不出现"断块" */
+  background: transparent;
+  overflow: hidden;
+  overflow-anchor: none;
+}
+.webtoon-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  vertical-align: bottom;
+  object-fit: fill;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.webtoon-tile-fail {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #94a3b8;
+  background: #151f32;
+  border: none;
+  cursor: pointer;
+}
+
+/* 条漫容器内允许触控纵滑（画布默认 touch-action:none） */
+.reader-canvas.reader-canvas-webtoon {
+  touch-action: pan-y;
+}

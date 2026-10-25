@@ -1,5 +1,6 @@
 import { connectRecovery, connectMain, waitForTarget } from "../lib/cdp.mjs";
 import { invoke } from "../lib/app.mjs";
+import { classifyRecoveryClose, isCdpTimeoutError } from "../lib/reliability.mjs";
 import { fail, note, ok } from "../lib/report.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -8,25 +9,54 @@ async function targetsOnPort(ctx) {
   return ctx.targets();
 }
 
-async function closeRecovery(ctx) {
-  const targets = await targetsOnPort(ctx);
-  const recovery = targets.find((target) => target.url.includes("recovery.html"));
-  if (!recovery) return false;
-  const page = await connectRecovery(ctx.cdpPort);
-  // 窗口销毁/重建后 WebView2 拆链偶发拖慢命令回包：与套内其它 resilience
-  // 命令一致走超时重试（invokeResilient），重试后仍失败照常判失败。
-  await invokeResilient(page, "resilience_close_recovery");
-  await page.close().catch(() => {});
-  // 等旧 target 真正消失，避免后续测试连到已关闭/冻结的恢复窗。
-  const deadline = Date.now() + 6000;
+async function recoveryTargetStillPresentAfter(ctx, timeout = 8000) {
+  const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const still = (await targetsOnPort(ctx)).some((target) =>
       target.url.includes("recovery.html"),
     );
-    if (!still) return true;
+    if (!still) return false;
     await sleep(200);
   }
-  return false;
+  return true;
+}
+
+async function closeRecovery(ctx, existingPage = null) {
+  const targets = await targetsOnPort(ctx);
+  const recovery = targets.find((target) => target.url.includes("recovery.html"));
+  if (!recovery) return true;
+
+  let page = existingPage;
+  if (!page) {
+    try {
+      page = await connectRecovery(ctx.cdpPort);
+    } catch (error) {
+      // 窗口正在关闭时，CDP 连接可能先失败；以 target 是否消失为准。
+      if (isCdpTimeoutError(error) && !(await recoveryTargetStillPresentAfter(ctx, 2500))) {
+        return true;
+      }
+      throw error;
+    }
+  }
+
+  let commandTimedOut = false;
+  try {
+    await invokeResilient(page, "resilience_close_recovery");
+  } catch (error) {
+    // 关闭命令可能先销毁窗口再回包；只有 target 仍存在时才算失败。
+    if (!isCdpTimeoutError(error)) throw error;
+    commandTimedOut = true;
+  }
+  await page.close().catch(() => {});
+
+  const targetPresent = await recoveryTargetStillPresentAfter(ctx);
+  const outcome = classifyRecoveryClose({ targetPresent, commandTimedOut });
+  if (outcome === "closed") return true;
+  throw new Error(
+    outcome === "timeout-and-open"
+      ? "恢复窗口关闭命令超时且 target 仍存在"
+      : "恢复窗口关闭命令完成但 target 仍存在",
+  );
 }
 
 async function freezeMain(page) {
@@ -243,8 +273,7 @@ export async function runChaosSuite(ctx, report) {
           });
         }
       }
-      await recovery.page.close().catch(() => {});
-      await closeRecovery(ctx);
+      await closeRecovery(ctx, recovery.page);
     }
   }
 
@@ -326,8 +355,7 @@ export async function runChaosSuite(ctx, report) {
       });
     }
     freezeStage = "close-recovery";
-    await recovery.page.close().catch(() => {});
-    await closeRecovery(ctx);
+    await closeRecovery(ctx, recovery.page);
     freezeStage = "reconnect-after-reload";
     await ctx.reconnectMain();
   } catch (error) {
@@ -509,7 +537,7 @@ export async function runChaosSuite(ctx, report) {
         title: "一键退出安全模式并恢复",
       });
     }
-    await closeRecovery(ctx);
+    await closeRecovery(ctx, recovery.page);
   } catch (error) {
     fail(report, {
       id: "chaos:safe-mode-suite",

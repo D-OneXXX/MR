@@ -67,14 +67,20 @@ The harness starts the application with isolated directories:
 It refuses to continue if the isolated database already contains books. **Never point the
 harness at a real library or share a database path with the normal application profile.**
 
-## Known flake: chaos/CDP
+## Chaos/CDP flake status
 
-Full QA can intermittently fail in the chaos safe-mode/freeze stages with a
-`CDP Runtime.enable/evaluate timeout` after the heavy suites. The same commit can pass
-the chaos suite alone and pass a complete rerun. This is tracked in #23.
+Full QA previously failed intermittently in the chaos safe-mode/freeze stages with a
+`CDP Runtime.enable/evaluate timeout` after the heavy suites. This was tracked in #23 and is
+now mitigated:
 
-Do not skip the chaos suite or weaken assertions. The release workflow retries the complete
-QA once; Phase 3 must stabilize the harness before repeated full-QA evidence is required.
+- `reconnectMain` retries only CDP timeouts, up to 3 attempts.
+- Recovery-window cleanup treats a timed-out close command as success only when the recovery
+  target has actually disappeared.
+- The fixes were verified with 3 consecutive chaos runs (31/31 each) and 3 consecutive
+  complete QA runs (228/228 each, P0–P3=0).
+
+Do not skip the chaos suite or weaken assertions. If the timeout recurs, reopen #23 with the
+QA artifact; the release workflow still retries the complete QA once as a coarse fallback.
 
 ## What to include in a failure report
 

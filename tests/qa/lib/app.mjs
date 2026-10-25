@@ -11,6 +11,20 @@ import {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** dev server 探测地址：Vite 实际监听 127.0.0.1，而 debug 应用按 devUrl 访问
+ * localhost；CI runner 上 localhost 可能解析到 ::1，两个地址都要探。 */
+const DEV_URLS = ["http://127.0.0.1:1420/", "http://localhost:1420/"];
+
+/** 读取日志文件尾部若干行，用于把失败原因直接写进 CI 日志。 */
+function tailFile(file, lines = 20) {
+  try {
+    const content = fs.readFileSync(file, "utf8");
+    return content.split(/\r?\n/).slice(-lines).join("\n").trim();
+  } catch {
+    return "(日志不可读)";
+  }
+}
+
 async function portOpen(url) {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(1200) });
@@ -20,25 +34,60 @@ async function portOpen(url) {
   }
 }
 
-async function ensureVite(root) {
-  if (await portOpen("http://127.0.0.1:1420/")) return null;
+async function anyDevServerUp() {
+  for (const url of DEV_URLS) {
+    if (await portOpen(url)) return true;
+  }
+  return false;
+}
+
+async function ensureVite(root, artifactDir) {
+  if (await anyDevServerUp()) return null;
+  fs.mkdirSync(artifactDir, { recursive: true });
+  const logPath = path.join(artifactDir, "vite.log");
+  const logFd = fs.openSync(logPath, "a");
   const child = spawn(
     process.platform === "win32" ? "npm.cmd" : "npm",
     ["run", "dev", "--", "--host", "127.0.0.1", "--port", "1420", "--strictPort"],
     {
       cwd: root,
       env: process.env,
-      stdio: "ignore",
+      stdio: ["ignore", logFd, logFd],
       detached: process.platform !== "win32",
       shell: process.platform === "win32",
     },
   );
-  const deadline = Date.now() + 30_000;
+  // 冷启动 runner 上 npm + Vite 首启可能明显慢于开发机，给足余量；
+  // 超时或提前退出时把 Vite 日志尾部带进错误信息，便于直接定位。
+  const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
-    if (await portOpen("http://127.0.0.1:1420/")) return child;
+    if (child.exitCode !== null) {
+      try {
+        fs.closeSync(logFd);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(
+        `Vite 开发服务器提前退出（code ${child.exitCode}）：\n${tailFile(logPath)}`,
+      );
+    }
+    if (await anyDevServerUp()) {
+      try {
+        fs.closeSync(logFd);
+      } catch {
+        /* ignore */
+      }
+      return child;
+    }
     await sleep(250);
   }
-  throw new Error("Vite 开发服务器启动超时");
+  try {
+    fs.closeSync(logFd);
+  } catch {
+    /* ignore */
+  }
+  killTree(child);
+  throw new Error(`Vite 开发服务器启动超时：\n${tailFile(logPath)}`);
 }
 
 function binaryPath(root) {
@@ -111,11 +160,41 @@ export async function invokeSafe(page, command, args = {}) {
   })()`);
 }
 
-export async function waitForApp(page) {
+export async function waitForApp(page, timeout = 30_000) {
   await page.waitFor(
     "document.readyState === 'complete' && !!window.__TAURI_INTERNALS__",
-    { timeout: 30_000, label: "main window ready" },
+    { timeout, label: "main window ready" },
   );
+}
+
+/** 连接主窗并等到 Tauri IPC 就绪。
+ *
+ * debug 构建从 `devUrl`（http://localhost:1420）加载前端，Vite 只监听
+ * 127.0.0.1；CI runner 上 localhost 可能解析到 ::1，页面会空白、
+ * `__TAURI_INTERNALS__` 永不注入。这里在初次等待失败后逐个回退候选地址，
+ * 避免把「地址解析差异」误判成「应用起不来」。
+ */
+async function connectReadyApp(cdpPort) {
+  let page = await connectMain(cdpPort);
+  try {
+    await waitForApp(page, 60_000);
+    return page;
+  } catch (firstError) {
+    for (const url of DEV_URLS) {
+      await page
+        .eval(`setTimeout(() => { location.href = ${JSON.stringify(url)}; }, 60); true`)
+        .catch(() => {});
+      await sleep(1500);
+      page = await connectMain(cdpPort);
+      try {
+        await waitForApp(page, 30_000);
+        return page;
+      } catch {
+        /* 继续尝试下一个候选地址 */
+      }
+    }
+    throw firstError;
+  }
 }
 
 export async function startQaApp({
@@ -126,7 +205,7 @@ export async function startQaApp({
   cdpPort = 9334,
   telegramTestOrigin = null,
 }) {
-  const vite = await ensureVite(root);
+  const vite = await ensureVite(root, artifactDir);
   if (await portOpen(`http://127.0.0.1:${cdpPort}/json/version`)) {
     throw new Error(
       `CDP 端口 ${cdpPort} 已被占用；拒绝连接未知实例，请先结束旧 QA 进程或指定 QA_CDP_PORT`,
@@ -160,9 +239,49 @@ export async function startQaApp({
     windowsHide: false,
   });
 
-  await waitForTarget(cdpPort, () => true, { timeout: 45_000 });
-  let page = await connectMain(cdpPort);
-  await waitForApp(page);
+  try {
+    return await runQaSession({
+      app,
+      out,
+      appBin,
+      vite,
+      root,
+      artifactDir,
+      dataDir,
+      fixtures,
+      cdpPort,
+    });
+  } catch (error) {
+    // 启动失败必须回收子进程：残留的 app / Vite 句柄会让 node 永不退出，
+    // CI 上表现为整个 step 挂到超时，重试也永远不会执行。
+    killTree(app);
+    if (vite) killTree(vite);
+    try {
+      fs.closeSync(out);
+    } catch {
+      /* ignore */
+    }
+    const detail =
+      `隔离应用启动失败：${error.message}\n` +
+      `--- 应用日志尾部 ---\n${tailFile(path.join(artifactDir, "qa-app.log"))}`;
+    console.error(`[qa] ${detail}`);
+    throw new Error(detail, { cause: error });
+  }
+}
+
+async function runQaSession({
+  app,
+  out,
+  appBin,
+  vite,
+  root,
+  artifactDir,
+  dataDir,
+  fixtures,
+  cdpPort,
+}) {
+  await waitForTarget(cdpPort, () => true, { timeout: 90_000 });
+  let page = await connectReadyApp(cdpPort);
 
   // Prevent the first-run privacy dialog from covering the deterministic
   // test surface. This mirrors the product's own acknowledgement token.

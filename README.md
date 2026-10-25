@@ -1,81 +1,225 @@
-# MangaReader
+<p align="center">
+  <img src="docs/assets/logo.png" width="96" height="96" alt="MangaReader icon">
+</p>
 
-本地优先的 Windows 桌面漫画阅读器：Tauri 2 + React 19 + TypeScript 5.8 + Rust + SQLite。
-当前版本 **0.16.0**。不登录、不上传书库、不内置漫画源订阅。
+<h1 align="center">MangaReader</h1>
 
-## 功能
+<p align="center">
+  <strong>A local-first manga reader for Windows and Linux.</strong><br>
+  Your library stays on your disk. No account, no cloud library, no bundled manga sources.
+</p>
 
-- **书库**：文件夹 / zip / cbz 导入与递归扫描；合集按系列聚合；宽屏三栏（导航轨 + 封面 + Inspector），
-  窄屏 Sheet；搜索、来源筛选、软删与彻底删除。
-- **文件关联与直开**：注册 `.cbz` / `.zip`；双击或拖到快捷方式直接入库并进入阅读器；
-  单实例保护，第二次双击唤醒已有窗口并切换书籍。
-- **失效路径重定位**：文件被移动/改名后书卡显示「文件位置已变更」，重新指定位置即可
-  100% 保留阅读进度、条漫偏移与阅读统计；也可从书库移除而不删源文件。
-- **阅读器**：单页 / 双页 / 条漫；RTL / LTR；缩放、平移、双击重置；多页签；下一话无缝连看；
-  条漫虚拟切片、滚动锚定和请求合流。
-- **自然排序**：文件夹、zip/cbz 条目与章节列表按数字段排序；混合扩展名、前导零、
-  多级子目录均按页号/话数展开，不再出现 `1, 10, 2`。
-- **在线直读**：JSON 清单、单页 HTML 图集、多话合集；系列 / 下一话链路；代理与会话级请求头
-  （仅内存，不落库）。
-- **防盗链代理与缓存**：在线图片只经 Rust 后端通道取回，自动附带源自章节/清单 URL 的
-  Referer/Origin 与标准桌面浏览器 UA；渲染成品与在线原图共用磁盘 LRU 缓存。
-- **在线图片提纯**：URL / DOM / 尺寸 / 主序列聚类多阶段过滤；站点档案与用户规则本地学习；
-  阅读器内可标记非正文、在过滤抽屉恢复并自动放宽阈值。
-- **Telegram 公开频道**：免登录解析相册、Telegraph 章节、zip/cbz 附件；历史分页；
-  CDN 临时链接过期后按消息锚点自愈。
-- **缓存管理**：设置中可查看磁盘占用/上限/分项，500 MB–10 GB 可调；一键清空临时缓存，
-  只删除可再生成的派生数据，书库、进度与设置保留。数据库位于 Tauri `app_data_dir`
-  （`%APPDATA%\com.local.manga-reader`），缓存位于 `app_cache_dir`
-  （`%LOCALAPPDATA%\com.local.manga-reader`）。
-- **设置信息架构**：5 个高内聚分区（常规与外观 / 网络与在线源 / 存储与数据 /
-  隐私与安全 / 关于与维护），旧深链自动映射；SQLite 使用 WAL + 5s busy timeout。
-- **内嵌浏览器**：独立无 IPC 权限 WebView；下载 zip/cbz 自动导入并设为只读。
-- **本地备份与恢复**：设置 → 存储与数据导出 `.mrbackup`（书库索引、进度、统计、主题/
-  语言/阅读器偏好、自学习过滤规则），换机/重装后一键恢复；不包含图片缓存、Cookie、
-  会话请求头或过滤事件。
-- **更新与版本**：SemVer 单一事实源；PATCH 优先补丁、MINOR 可补丁、MAJOR 仅全量；
-  清单与安装包签名校验；非 ASCII 路径兼容。GitHub Releases 官方更新通道
-  （`latest.json` + minisign）与原有自定义补丁通道并存，客户端手动检查、用户确认后重启。
-- **隐私与韧性**：诊断包 / Prompt 会脱敏路径与凭据；心跳看门狗、独立恢复窗口、安全模式；
-  不静默重启、不后台上传。应用启动不拉起 Python / 8500 端口 sidecar。
+<p align="center">
+  <a href="https://github.com/D-OneXXX/MR/releases">Download</a>
+  ·
+  <a href="README.zh-CN.md">简体中文</a>
+  ·
+  <a href="docs/ARCHITECTURE.md">Architecture</a>
+  ·
+  <a href="https://github.com/D-OneXXX/MR/issues">Support</a>
+</p>
 
-## 文档
+<p align="center">
+  <img alt="Windows and Linux" src="https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-38A8F8">
+  <img alt="PolyForm Noncommercial 1.0.0" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-09090B">
+</p>
 
-- [架构宪法 AGENTS.md](AGENTS.md)（全局红线：UI 形态 / i18n / 脱敏 / 用户主权 / 交付防线）
-- [技术文档](docs/TECHNICAL.md)
-- [QA 报告摘要](docs/QA.md)
-- [发布与更新签名](docs/RELEASE.md)
-- [真机冒烟清单](docs/smoke-test.md)
+## Product preview
 
-## 开发
+<p align="center">
+  <img src="docs/assets/screenshots/library.png" width="49%" alt="MangaReader library with three synthetic demo books">
+  <img src="docs/assets/screenshots/settings.png" width="49%" alt="MangaReader appearance and language settings">
+</p>
+<p align="center">
+  <img src="docs/assets/screenshots/reader.png" width="82%" alt="MangaReader reader showing an original synthetic comic page">
+</p>
+<p align="center">
+  <sub>Screenshots are from the real application, captured with an isolated demo library and original synthetic sample pages. No personal library data is shown.</sub>
+</p>
 
-```bat
+## What it does
+
+- **Library on your disk.** Import folders, ZIP archives, or CBZ files; scan recursively, group
+  chapters into series, and search or filter without sending your library anywhere.
+- **Read the way you want.** Single-page, double-page, and continuous webtoon modes; RTL/LTR
+  direction; zoom and pan; multiple tabs; seamless next-chapter reading.
+- **Pick up where you left off.** Reading progress and webtoon scroll position are remembered.
+  When a source file moves, relocate it and keep the progress you already made.
+- **Natural ordering.** Pages and chapter titles are sorted by number, not by raw filename
+  order, so `1, 2, 10` stays in the right order across folders and archive entries.
+- **Online reading on your terms.** Open supported JSON manifest or HTML gallery URLs, or
+  browse public Telegram channels. Session request headers can be kept in memory only and are
+  never written to the library database or logs.
+- **A reader built for large images.** Very tall webtoon pages are sliced before rendering so
+  they remain usable in a desktop WebView.
+- **Local cache and backup.** A configurable disk cache keeps derived images bounded; export a
+  `.mrbackup` file to move library metadata, progress, statistics, and preferences to another machine.
+- **Six UI languages and two themes.** English, Simplified Chinese, Traditional Chinese,
+  Spanish, Japanese, and Korean; light, dark, or follow-system appearance.
+
+## Supported platforms
+
+| Platform | Package | Notes |
+|---|---|---|
+| **Windows x64** | NSIS installer | Primary platform. `.cbz` / `.zip` file associations and single-instance activation are supported. |
+| **Linux x86_64** | `.deb`, `.rpm`, `.AppImage` | Long-term-stability channel for critical security and crash fixes. System package installs do not self-update; the AppImage build can use the in-app updater. |
+
+macOS and ARM64 builds are not part of the current release scope.
+
+## Download
+
+Official builds are distributed through GitHub Releases:
+
+**[Browse releases →](https://github.com/D-OneXXX/MR/releases)**
+
+A release normally provides:
+
+- Windows: an NSIS installer.
+- Linux: `.deb`, `.rpm`, and `.AppImage` packages.
+- Tauri updater manifests and signatures alongside the packages.
+
+If no public build is listed yet, use the development instructions below to build from source.
+
+## Installation
+
+### Windows
+
+1. Download the NSIS installer from the latest release.
+2. Run the installer and choose the installation scope and language.
+3. Launch **MangaReader**, add a folder or archive, and select a book.
+
+The Windows installer is **not Authenticode-signed**. Windows SmartScreen may show a warning;
+verify that the installer came from this repository’s Releases page before running it. Update
+packages use a separate Tauri updater signature.
+
+### Linux
+
+- Install the `.deb` or `.rpm` with your distribution’s package manager.
+- For the AppImage, make it executable (`chmod +x MangaReader*.AppImage`) and run it.
+- System package installs are not replaced in place by the application. Use your package
+  manager to install updates; the AppImage build can use the in-app updater.
+
+On Windows, library data lives under `%APPDATA%\com.local.manga-reader` and cache data under
+`%LOCALAPPDATA%\com.local.manga-reader`. The exact data and cache locations are shown in
+**Settings → Storage & data**. Uninstall through Windows **Settings → Apps** or your Linux
+package manager; remove the data directory manually if you also want to delete local library
+metadata and progress.
+
+## Quick start
+
+1. Choose **Add folder** or **Add books** and select a folder, ZIP, or CBZ.
+2. Open a cover to view details, then double-click or press **Shift+Enter** to start reading.
+3. Switch between single-page, double-page, and webtoon layouts from the reader.
+4. Use **Settings → General & appearance** to change the theme, interface language, and
+   reading preferences.
+5. For online reading, use the browser/online entry with a URL you are authorized to access.
+   MangaReader does not bundle manga sources or subscriptions.
+
+## Configuration
+
+- **Appearance & language** — light, dark, or system theme; six interface languages.
+- **Storage & data** — cache usage and budget, backup/export, and cleanup.
+- **Network & sources** — proxy mode, online reading controls, and request-header scope.
+- **Privacy & security** — local data policy, diagnostics, and safety controls.
+- **About & maintenance** — version, build origin, updates, and support links.
+
+Online session headers can be restricted to memory only. They are not written to SQLite, logs,
+backup files, or diagnostics.
+
+## FAQ
+
+**Does MangaReader upload my library?**
+
+No. The library database, progress, cache, and reading statistics stay on the local machine.
+There is no account or cloud sync.
+
+**Which formats are supported?**
+
+Image folders, ZIP, and CBZ. Other archive formats are not part of the current scope.
+
+**Can I move my books after importing them?**
+
+Yes. Use the missing-file relocation flow. Existing progress, webtoon position, and reading
+statistics are preserved.
+
+**Where is my data stored?**
+
+On Windows: `%APPDATA%\com.local.manga-reader` for library data and
+`%LOCALAPPDATA%\com.local.manga-reader` for cache. The app’s **Storage & data** settings show
+the active locations.
+
+**How do updates work?**
+
+Open **Settings → About & maintenance** and check for updates manually. The app does not
+silently restart or switch reading modes. Windows follows the regular release channel; Linux
+follows the critical-fix channel.
+
+**Why does Windows SmartScreen warn me?**
+
+The Windows installer is not Authenticode-signed. This is separate from the updater signature,
+which is verified by the application.
+
+**Does MangaReader include manga sources?**
+
+No. You provide local files or URLs you are authorized to access. The project does not bundle
+publishers’ catalogs or scanlation feeds.
+
+**How do I uninstall it?**
+
+Use Windows **Settings → Apps** or your Linux package manager. Local data is not removed
+automatically; remove the data directory if you want a full cleanup.
+
+## Support
+
+- Bugs and feature requests: [GitHub Issues](https://github.com/D-OneXXX/MR/issues)
+- Security reports: [GitHub Security Advisories](https://github.com/D-OneXXX/MR/security/advisories/new)
+
+When reporting a problem, include the app version, operating system, build origin shown in
+**About & maintenance**, and the steps to reproduce. Remove personal paths, book titles,
+cookies, tokens, and full URLs before posting logs or screenshots.
+
+## License
+
+MangaReader is **source-available under the PolyForm Noncommercial License 1.0.0**. It is not
+an OSI open-source project. Commercial use is not granted by this license.
+
+- [LICENSE](LICENSE)
+- [NOTICE.md](NOTICE.md) — required notice, build-origin fingerprint, and update channels
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — bundled font, icon, and dependency notices
+
+## Languages
+
+- English (this file, canonical)
+- [简体中文](README.zh-CN.md)
+
+The application UI also includes Traditional Chinese, Spanish, Japanese, and Korean.
+
+## Development
+
+Requirements: Node.js 20+, a stable Rust toolchain, WebView2 on Windows, and the usual
+Tauri 2 Linux build dependencies.
+
+```bash
 npm install
-npm run tauri dev       :: 前端 :1420 + Tauri 桌面窗口
-npm run build           :: 版本门禁 + tsc + Vite 构建
+npm run tauri dev     # Vite on :1420 + the desktop window
+npm run build         # version gate + TypeScript + production frontend build
 ```
 
-版本号只改 `package.json`，然后运行：
-
-```bat
-npm run version:sync -- 0.16.0
-npm run version:check
-```
-
-## 测试
-
-```bat
-cd src-tauri && cargo test --lib
+```bash
 npx tsc --noEmit
-node tests\qa\run-qa.mjs
+cargo test --lib --manifest-path src-tauri/Cargo.toml
+node tests/qa/run-qa.mjs --suite=static
 ```
 
-QA 使用隔离数据目录与本地 stub，不触碰真实用户书库。
+The QA harness starts the application with isolated data and cache directories. Never point it
+at a real library. See [docs/TESTING.md](docs/TESTING.md) for the full verification workflow and
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the runtime architecture. Detailed module notes
+(Chinese) are in [docs/TECHNICAL.md](docs/TECHNICAL.md).
 
-## 冻结功能池
+Bug reports and release feedback are welcome in the issue tracker. Security issues should
+follow `SECURITY.md`.
 
-以下能力不在当前范围：
+---
 
-- 标签系统、跨设备同步、阅读统计分享
-- 漫画源订阅 / RSS / 站点插件（手动 URL 与 Telegram 公开预览不在此列）
-- 云端 OCR / 翻译 / 图像处理
+MangaReader is not affiliated with any manga publisher, scanlation group, or online source.
+You are responsible for the content you import or access.

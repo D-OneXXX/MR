@@ -924,7 +924,7 @@ export function checkReleaseSurface(root, report) {
         "文件关联 .cbz/.zip、createUpdaterArtifacts、plugins.updater、签名 CI、主窗 updater 权限、五个命令与三个用户入口齐全",
       actual: errors.join(" | "),
       rootCause: "新增发行能力时漏改配置、命令注册或权限文件",
-      fix: "按 docs/RELEASE.md 与 docs/TECHNICAL.md 补齐缺失项",
+      fix: "按 docs/dev/RELEASE.md 与 docs/TECHNICAL.md 补齐缺失项",
     });
   } else {
     ok(report, {

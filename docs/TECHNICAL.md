@@ -1,16 +1,18 @@
 # MangaReader 技术文档
 
-> 应用版本：`0.16.0`。`package.json` 是版本单一事实源，`npm run version:sync` 同步
+> 应用版本：`0.17.0`。`package.json` 是版本单一事实源，`npm run version:sync` 同步
 > `tauri.conf.json`、`Cargo.toml`、`Cargo.lock`、`package-lock.json`；前端版本由 Vite 注入。
 
 - [README](../README.md)
-- [QA 摘要](QA.md)
-- [冒烟清单](smoke-test.md)
+- [English architecture overview](ARCHITECTURE.md)
+- [测试说明](TESTING.md)
+- [冒烟清单](dev/smoke-test.md)
 - [架构宪法 AGENTS.md](../AGENTS.md)
 
 ## 1. 定位与边界
 
-本地优先的 Windows 漫画阅读器。书库、缓存、阅读进度、在线学习规则全部落在本机；
+本地优先的 Windows / Linux 桌面漫画阅读器（Windows 为主力平台，Linux 为长期稳定分支）。
+书库、缓存、阅读进度、在线学习规则全部落在本机；
 不提供账号体系、云同步、漫画源订阅、云端 OCR/翻译。网络请求只发生在用户主动解析 /
 阅读在线书 / 检查更新时。
 
@@ -22,7 +24,7 @@
 - 前端：React 19、TypeScript 5.8、Vite 6、Tailwind v4、Base UI / shadcn 风格组件、lucide-react。
 - 后端：Rust 2021、Tauri 2、SQLite（rusqlite bundled）、image、zip、ureq、reqwest、tokio。
 - 字体：Plus Jakarta Sans（SIL OFL），本地打包。
-- 平台：Windows WebView2；恢复窗口为独立 Tauri WebView。
+- 平台：Windows WebView2 / Linux WebKitGTK；恢复窗口为独立 Tauri WebView。
 
 ## 3. 运行架构
 
@@ -688,7 +690,7 @@ npm / cargo / GitHub Actions 更新。已知 Vite 6.4.3 dev-server 与 React Rou
 - `.gitattributes` 固化 `* text=auto eol=lf` + 二进制类型标记，防止
   CRLF 污染 Linux 构建脚本与配置。
 
-## 13. 已知限制
+## 14. 已知限制
 
 - Telegram 真实站点 HTML 变体仍需用实际频道做联网冒烟；QA 使用确定性本地预览 stub。
 - 文档附件下载在内存缓冲后落盘，不是边下边写流。

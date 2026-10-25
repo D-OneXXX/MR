@@ -125,7 +125,7 @@ jobs:
               break
             fi
           done
-          NOTES="Linux 长期稳定分支高危安全/崩溃修复补丁。仅含安全与崩溃级修复，不含日常功能更新。"
+          NOTES="Linux long-term-stability channel: high-severity security and crash fixes only. Routine feature updates are not included."
           gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" \
             --title "MangaReader $RELEASE_TAG (Linux critical)" \
             --notes "$NOTES" || echo "release already exists"

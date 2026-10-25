@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-25T03:10:00.000Z",
+  "updatedAt": "2026-10-25T00:43:01.705Z",
   "regressions": [
     {
       "id": "REG-WT-ANCHOR",
@@ -230,7 +230,7 @@
       "id": "REG-chaos:safe-mode-suite",
       "testId": "chaos:safe-mode-suite",
       "area": "chaos",
-      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (<repo>/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
       "addedAt": "2026-10-23T04:25:11.749Z",
       "source": "qa-run"
     },
@@ -346,7 +346,7 @@
       "id": "REG-chaos:freeze-suite",
       "testId": "chaos:freeze-suite",
       "area": "chaos",
-      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (<repo>/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
       "addedAt": "2026-10-23T17:44:23.632Z",
       "source": "qa-run"
     },
@@ -354,7 +354,7 @@
       "id": "REG-chaos:crashed",
       "testId": "chaos:crashed",
       "area": "chaos",
-      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (<repo>/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
       "addedAt": "2026-10-23T19:42:55.283Z",
       "source": "qa-run"
     },
@@ -364,6 +364,14 @@
       "area": "architecture",
       "trigger": "{\n  \"problems\": [\n    \"条漫只加载了 1 张切片，巨图未被切成多片渲染\"\n  ],\n  \"evidence\": {\n    \"bookId\": \"9f73f8d0b6b5d2b6581b1535fc2b78be09c437d4b0cbe08676ad57f94bf64ad8\",\n    \"title\": \"QA Ultra Tall Webtoon\",\n    \"layout\": [\n      {\n        \"index\": 0,\n        \"width\": 800,\n        \"height\": 21000\n      }\n    ],\n    \"layoutFirst\": {\n      \"index\": 0,\n      \"width\": 800,\n      \"height\": 21000\n    },\n    \"single\": {\n      \"width\": 312,\n      \"height\": 8192,\n      \"origWidth\": 800,\n      \"origHeight\": 21000\n    },\n    \"tiles\": [\n      {\n        \"tile\": 0,\n        \"ok\": true,\n        \"height\": 1909,\n        \"width\": 800,\n        \"error\": null\n      },\n      {\n        \"tile\": 1,\n        \"ok\": true,\n        \"height\": 1909,\n        \"width\": 800,\n        \"error\": null\n      }\n    ],\n    \"outOfRange\": \"rejected\",\n    \"ui\": {\n      \"maxTilesInDom\": 2,\n      \"distinctTileImages\": 1,\n      \"brokenImages\": 0\n    }\n  }\n}",
       "addedAt": "2026-10-24T18:42:00.273Z",
+      "source": "qa-run"
+    },
+    {
+      "id": "REG-qa:app-bootstrap",
+      "testId": "qa:app-bootstrap",
+      "area": "infrastructure",
+      "trigger": "Error: 隔离应用启动失败：等待 CDP target 超时（90000ms）：fetch failed\n--- 应用日志尾部 ---\n<host>\n    at startQaApp (file:///<repo>/tests/qa/lib/app.mjs:268:11)\n    at async main (file:///<repo>/tests/qa/run-qa.mjs:181:11)",
+      "addedAt": "2026-10-25T00:40:45.250Z",
       "source": "qa-run"
     }
   ],
@@ -497,7 +505,7 @@
       "severity": "P1",
       "status": "fixed",
       "location": "src-tauri/src/diagnostics.rs; src/components/diagnostics/DiagnosticPanel.tsx",
-      "trigger": "复现描述粘贴 C:\\Users\\RealName\\...\\第02话.cbz token=SECRET_DESC_TOKEN",
+      "trigger": "复现描述粘贴 C:\\Users\\<user>\\...\\第02话.cbz token=SECRET_DESC_TOKEN",
       "expected": "描述与诊断包一样经过 sanitize_text",
       "actual": "路径、书名、token 原样出现在 Prompt 预览/复制/导出",
       "rootCause": "buildDiagnosticPrompt 直接拼接 description；脱敏仅在后端 bundle",
@@ -531,7 +539,7 @@
       "severity": "P0",
       "status": "fixed",
       "location": "src/recovery/RecoveryApp.tsx / src/features/safeMode",
-      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (<repo>/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
       "expected": "",
       "actual": "",
       "rootCause": "",
@@ -561,7 +569,7 @@
       "severity": "P0",
       "status": "fixed",
       "location": "src-tauri/src/resilience.rs / src/recovery/RecoveryApp.tsx",
-      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (<repo>/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
       "expected": "",
       "actual": "",
       "rootCause": "窗口重建后 CDP 短时无响应（时序抖动），非产品自动恢复失效",
@@ -592,7 +600,7 @@
       "severity": "P0",
       "status": "open",
       "location": "tests/qa/suites/chaos.mjs",
-      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+      "trigger": "Error: CDP Runtime.evaluate 超时\n    at Timeout._onTimeout (<repo>/tests/qa/lib/cdp.mjs:147:16)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
       "expected": "",
       "actual": "",
       "rootCause": "测试基础设施或应用崩溃",
@@ -607,7 +615,7 @@
       "severity": "P1",
       "status": "open",
       "location": "src/pages/Reader.tsx / FilteredPagesSheet.tsx",
-      "trigger": "Error: 点击目标不可见：[data-testid=reader-filter-count]\n    at CdpPage.click (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/lib/cdp.mjs:242:22)\n    at async Object.runOnlineSuite [as run] (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/suites/online.mjs:604:5)\n    at async runOne (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/run-qa.mjs:134:5)\n    at async main (file:///C:/Users/Administrator/Desktop/manga-reader-tauri/tests/qa/run-qa.mjs:205:7)",
+      "trigger": "Error: 点击目标不可见：[data-testid=reader-filter-count]\n    at CdpPage.click (<repo>/tests/qa/lib/cdp.mjs:242:22)\n    at async Object.runOnlineSuite [as run] (<repo>/tests/qa/suites/online.mjs:604:5)\n    at async runOne (<repo>/tests/qa/run-qa.mjs:134:5)\n    at async main (<repo>/tests/qa/run-qa.mjs:205:7)",
       "expected": "",
       "actual": "",
       "rootCause": "",
@@ -645,6 +653,21 @@
       "firstSeen": "2026-10-24T18-39-20-556Z",
       "lastSeen": "2026-10-25T03:10:00.000Z",
       "fixedAt": "2026-10-25T03:10:00.000Z"
+    },
+    {
+      "id": "qa:app-bootstrap",
+      "testId": "qa:app-bootstrap",
+      "title": "QA 隔离应用启动失败",
+      "severity": "P0",
+      "status": "open",
+      "location": "tests/qa/lib/app.mjs",
+      "trigger": "Error: 隔离应用启动失败：等待 CDP target 超时（90000ms）：fetch failed\n--- 应用日志尾部 ---\n<host>\n    at startQaApp (file:///<repo>/tests/qa/lib/app.mjs:268:11)\n    at async main (file:///<repo>/tests/qa/run-qa.mjs:181:11)",
+      "expected": "",
+      "actual": "",
+      "rootCause": "二进制缺失、Vite/CDP 不可用或夹具导入失败",
+      "fix": "确保 cargo build 与 Vite 正常后重试",
+      "firstSeen": "2026-10-25T00-39-12-601Z",
+      "lastSeen": "2026-10-25T00-39-12-601Z"
     }
   ],
   "backlog": [
@@ -990,7 +1013,7 @@
       "id": "audit:docs-removed-routes",
       "severity": "P3",
       "status": "fixed",
-      "location": "README.md:20; docs/TECHNICAL.md:39,444-449; docs/smoke-test.md:84-85",
+      "location": "README.md; docs/TECHNICAL.md; docs/dev/smoke-test.md",
       "title": "文档仍描述已删除的 workbench/glossary/status/data 入口",
       "expected": "文档只列当前四路由与保留功能",
       "actual": "旧入口、翻译工作台和旧版本仍在文档中",

@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a reproducible problem with MangaReader.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve MangaReader. Do not post personal library paths,
+        book titles, cookies, tokens, session headers, or private URLs. For security
+        issues, use the private advisory link instead of a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: MangaReader version
+      description: Shown in Settings → About & maintenance.
+      placeholder: 0.17.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - Other / unsure
+    validations:
+      required: true
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package type
+      options:
+        - Windows NSIS installer
+        - Linux deb
+        - Linux rpm
+        - Linux AppImage
+        - Built from source
+        - Unsure
+    validations:
+      required: true
+  - type: input
+    id: build-origin
+    attributes:
+      label: Build origin
+      description: "Settings → About & maintenance shows either Official Release or Community Modified Build."
+      placeholder: Official Release
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: A minimal sequence that reliably shows the problem.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the visible error text or a screenshot with personal data removed.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or diagnostics
+      description: Optional. Remove local paths, titles, cookies, tokens, and private URLs first.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed personal paths, book titles, credentials, and private URLs from this report.
+          required: true

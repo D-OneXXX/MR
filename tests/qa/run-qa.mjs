@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -269,11 +270,33 @@ async function main() {
   finalize(report);
 }
 
+function redactLocalPaths(value) {
+  if (typeof value === "string") {
+    const hostname = os.hostname();
+    return value
+      .split(ROOT.replace(/\\/g, "/"))
+      .join("<repo>")
+      .split(ROOT)
+      .join("<repo>")
+      .split(hostname)
+      .join("<host>")
+      .replace(/file:\/\/\/[A-Za-z]:\/Users\/[^/\s]+\//g, "file:///<user>/")
+      .replace(/[A-Za-z]:\\Users\\[^\\\s]+\\/g, "C:\\Users\\<user>\\");
+  }
+  if (Array.isArray(value)) return value.map((item) => redactLocalPaths(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactLocalPaths(item)]),
+    );
+  }
+  return value;
+}
+
 function finalize(report) {
   report.finishedAt = new Date().toISOString();
   const kb = loadKnowledgeBase(KB_PATH);
   updateKnowledgeBase(kb, report);
-  fs.writeFileSync(KB_PATH, JSON.stringify(kb, null, 2), "utf8");
+  fs.writeFileSync(KB_PATH, JSON.stringify(redactLocalPaths(kb), null, 2), "utf8");
   report.staticAudit = (kb.backlog || []).filter((entry) => entry.status === "open");
   const jsonPath = path.join(REPORTS_DIR, "latest.json");
   const mdPath = path.join(REPORTS_DIR, "latest.md");

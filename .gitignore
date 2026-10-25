@@ -21,6 +21,19 @@ dist-ssr
 *.sln
 *.sw?
 
+# Local agent tooling (kept on disk, not published)
+.zcode/
+
+# Local environment and signing material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.mangareader-updater/
+
 # Isolated worktrees
 .worktrees/
 

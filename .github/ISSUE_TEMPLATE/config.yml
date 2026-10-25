@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/D-OneXXX/MR/security/advisories/new
+    about: Report vulnerabilities privately; do not open a public issue.
+  - name: Testing and build documentation
+    url: https://github.com/D-OneXXX/MR/blob/main/docs/TESTING.md
+    about: Run the verification workflow or find the QA harness details.

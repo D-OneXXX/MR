@@ -75,6 +75,19 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
+      - name: Upload QA diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-diagnostics-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            tests/qa/reports/latest.md
+            tests/qa/reports/latest.json
+            tests/qa/artifacts/current/qa-app.log
+            tests/qa/artifacts/current/data/logs/
+
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -86,7 +99,17 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "MangaReader ${{ github.ref_name }}"
-          releaseBody: "See the assets to download and install this version."
+          releaseBody: |
+            ## MangaReader ${{ github.ref_name }}
+
+            Windows x64 build.
+
+            - **Installer:** download the NSIS asset below.
+            - **Updater:** `latest.json` and its signature are published with this release.
+            - **Source diff:** https://github.com/D-OneXXX/MR/commits/${{ github.ref_name }}
+
+            Installation and verification notes are in the repository README. Linux assets follow
+            the separate critical-fix channel.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

@@ -41,7 +41,7 @@
   - `.github/workflows/ci-linux-check.yml`：PR/推送时 Linux cfg 块编译检查。
 - **社区构建**：`npm run build:community`（无 `TAURI_SIGNING_PRIVATE_KEY` 时自动
   覆盖 `createUpdaterArtifacts=false` 并标记 `MR_BUILD_ORIGIN=community`），
-  见 `NOTICE.md` 与 `docs/TECHNICAL.md`。
+  见 `../../NOTICE.md` 与 `../TECHNICAL.md`。
 - 客户端入口：「设置 → 关于与维护 → GitHub 自动更新」。手动检查，
   不自动轮询、不自动重启。Linux 端面板常驻提示「长期稳定分支，仅推送高危
   安全与崩溃修复补丁」。
@@ -78,7 +78,7 @@
 1. 修改版本（单一事实源为 `package.json`）：
 
    ```bat
-   npm run version:sync -- 0.16.0
+   npm run version:sync -- 0.17.0
    npm run version:check
    npm run test:version
    ```
@@ -138,7 +138,10 @@
 - GitHub Secrets 缺失/私钥口令错误，签名产物缺失；
 - 客户端 `pubkey` 与 CI 私钥不匹配；
 - 资产名/平台键与 `latest.json` 不一致（保留 `--bundles nsis` 与
-  `updaterJsonPreferNsis: true` 可避免大多数问题）。
+  `updaterJsonPreferNsis: true` 可避免大多数问题）；
+- 发布前全量 QA 失败时，工作流会保留 `qa-diagnostics-<attempt>` artifact
+  （QA 报告、`qa-app.log` 与隔离数据日志）；先按 `qa:app-bootstrap` / suite id
+  定位原因，再决定是否重跑，不要通过跳过 suite 放行发布。
 
 ## 6. 旧自定义补丁通道（已下线）
 

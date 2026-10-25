@@ -265,7 +265,7 @@ node tests\qa\run-qa.mjs
 ```
 
 - 提交信息遵循 Conventional Commits 中文说明（`feat:` / `fix:` / `refactor!:` + 3–6 条中文要点）。
-- 涉及 UI 的改动必须同步：6 语字典、QA 回归、`docs/QA.md`、`docs/TECHNICAL.md`。
+- 涉及 UI 的改动必须同步：6 语字典、QA 回归、`docs/TESTING.md`、`docs/TECHNICAL.md`。
 - 涉及后端数据结构/命令的改动必须同步：`docs/TECHNICAL.md` 的数据模型与命令契约小节。
 - 子代理协作：按**文件所有权**切分，同一文件同一时间只允许一个代理写；主代理负责集成与验收。
 

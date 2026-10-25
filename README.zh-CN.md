@@ -183,7 +183,7 @@ MangaReader 采用 **PolyForm Noncommercial License 1.0.0**，属于**源码可�
 
 ## 开发
 
-要求：Node.js 20+、稳定版 Rust 工具链、Windows WebView2，以及 Tauri 2 在 Linux 上常用的
+要求：Node.js 22+、稳定版 Rust 工具链、Windows WebView2，以及 Tauri 2 在 Linux 上常用的
 构建依赖。
 
 ```bash

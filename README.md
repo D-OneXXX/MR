@@ -196,7 +196,7 @@ The application UI also includes Traditional Chinese, Spanish, Japanese, and Kor
 
 ## Development
 
-Requirements: Node.js 20+, a stable Rust toolchain, WebView2 on Windows, and the usual
+Requirements: Node.js 22+, a stable Rust toolchain, WebView2 on Windows, and the usual
 Tauri 2 Linux build dependencies.
 
 ```bash

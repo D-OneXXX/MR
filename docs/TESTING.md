@@ -2,6 +2,9 @@
 
 MangaReader uses layered checks so a release is validated without touching a real library.
 
+The CDP harness uses Node’s global `WebSocket`, so run the QA suite with **Node.js 22+**.
+The CI workflows pin Node 22 for this reason.
+
 ## Quick verification
 
 ```bash

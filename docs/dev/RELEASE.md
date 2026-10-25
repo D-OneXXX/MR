@@ -37,6 +37,8 @@
     WebView2（>=133）存在 DevTools/CDP 端口回归，会卡在 `qa:app-bootstrap`
     （参考 actions/runner-images#14738）。主 CI 的 Windows 构建检查仍用
     `windows-latest`，不启动 WebView2。
+  - 发布 QA 固定 **Node.js 22+**：CDP harness 使用 Node 全局 `WebSocket`；
+    Node 20 会在 `qa:app-bootstrap` 直接报错。
   - `.github/workflows/release-linux-critical.yml`：`v*-linux-sec*` 标签或手动
     `workflow_dispatch` → `ubuntu-22.04` 构建 deb/rpm/AppImage，
     `scripts/make-linux-critical-manifest.mjs` 生成

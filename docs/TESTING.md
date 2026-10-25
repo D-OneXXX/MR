@@ -82,6 +82,9 @@ Remove personal paths, book titles, cookies, tokens, and full private URLs befor
   Rust unit and integration tests, governance tests, and static QA.
 - `.github/workflows/ci-linux-check.yml` — Linux `cfg` compilation, clippy, Rust tests,
   xvfb-backed integration tests, governance tests, and visible dependency-audit reports.
+- `.github/workflows/ci-pr-governance.yml` — required PR metadata gate: linked issue,
+  branch issue number, verification/data/release sections, and main-only base. Dependabot
+  and Renovate PRs are skipped.
 - `.github/workflows/release-windows.yml` — full QA before signing/publishing NSIS artifacts.
 - `.github/workflows/release-linux-critical.yml` — critical-fix Linux channel.
 

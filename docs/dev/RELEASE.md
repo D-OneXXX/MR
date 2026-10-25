@@ -113,6 +113,15 @@
      `latest.json` 与安装包；
    - 接力携带上一版 Release 的 `latest-linux-critical.json`。
 
+   > **本地全量 QA 证明发布（例外）**：当 GitHub-hosted Windows runner 因已知
+   > WebView2 131 环境问题阻塞全量 QA，且本机已运行 `node tests/qa/run-qa.mjs`
+   > 得到 224/224、P0–P3=0，可由维护者手动触发：
+   > ```bat
+   > gh workflow run release-windows.yml --ref v0.17.0 -f skip_full_qa=true
+   > ```
+   > 发布说明必须写明“本地全量 QA 已通过、CI 全量 QA 因环境原因跳过”；
+   > 这是例外，不是默认发布流程。
+
 5. **Linux 高危补丁发布**（仅安全/崩溃级修复，先同步 `package.json` 到补丁版本）。
    deb/rpm 系统安装不会在应用内自我替换：更新面板只提供下载页/发行说明，
    由用户用包管理器安装；AppImage 运行态才允许自动替换。

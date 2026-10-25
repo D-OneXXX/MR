@@ -139,6 +139,15 @@
    deb/rpm/AppImage，生成并上传 `latest-linux-critical.json`（也接力携带
    `latest.json`）。也可在 Actions 页面手动 `workflow_dispatch` 指定标签。
 
+   > **平台 overlay 必须显式生效**：Linux 构建命令带
+   > `--config src-tauri/tauri.linux.conf.json`，它把打包目标固定为
+   > deb/rpm/appimage，并把 updater 端点覆盖为 `latest-linux-critical.json`。
+   > 少了这个 `--config`，产物会带着 Windows 的 `latest.json` 端点，
+   > Linux 客户端永远看不到更新。`static:release-surface` 会守住这条。
+   > 手动 `workflow_dispatch` 必须按 `inputs.tag` 检出（Checkout 的 `ref`），
+   > Release 目标提交取构建时的 `git rev-parse HEAD`；早期版本误用
+   > `$GITHUB_SHA`，在 dispatch 下会指向默认分支而不是标签。
+
 6. 验证：
    - Windows Release 资源中存在 `latest.json` 与 `.nsis.zip` / `.sig`；
    - Linux 补丁 Release 资源中存在 `latest-linux-critical.json` 与

@@ -868,6 +868,28 @@ export function checkReleaseSurface(root, report) {
     }
   }
 
+  // Linux 发布链必须真的应用平台 overlay：overlay 文件存在不等于被使用。
+  // 少了 --config，Linux 产物会带着 Windows 的 latest.json 端点，
+  // 更新功能对 Linux 客户端形同虚设。
+  if (linuxStepText && !linuxStepText.includes("--config src-tauri/tauri.linux.conf.json")) {
+    errors.push(
+      "release-linux-critical.yml 的 tauri build 必须带 --config src-tauri/tauri.linux.conf.json",
+    );
+  }
+  // 手动 dispatch 必须按 inputs.tag 检出：默认分支 HEAD 会让构建产物与标签指向不一致。
+  const linuxCheckout = linuxSteps?.find((step) => step.includes("actions/checkout"));
+  if (!linuxCheckout || !/ref:\s*\$\{\{[^}]*inputs\.tag/.test(linuxCheckout)) {
+    errors.push(
+      "release-linux-critical.yml 的 Checkout 必须用 inputs.tag 指定 ref（手动 dispatch 不得检出默认分支）",
+    );
+  }
+  // Release 目标提交必须是本次构建的提交，不能是 $GITHUB_SHA（dispatch 时指向默认分支）。
+  if (linuxStepText && /--target\s+"\$GITHUB_SHA"/.test(linuxStepText)) {
+    errors.push(
+      "release-linux-critical.yml 不得用 $GITHUB_SHA 作为 release 目标提交（dispatch 时它指向默认分支）",
+    );
+  }
+
   // 常规 CI 必须覆盖 main 与 PR，且门禁步骤真实存在于 steps 内。
   for (const [file, markers] of [
     [

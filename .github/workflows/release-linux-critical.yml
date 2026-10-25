@@ -25,6 +25,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # 手动 dispatch 时真实发布标签来自 inputs.tag；push 事件回落到触发 ref。
+          # 不带 ref 会检出默认分支 HEAD，构建产物与标签指向的提交会对不上。
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Resolve tag
         id: tag
@@ -99,7 +103,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # 官方构建指纹：关于页/诊断快照显示 Official Release。
           MR_BUILD_ORIGIN: official
-        run: npm run tauri -- build --bundles deb,rpm,appimage
+        # --config 应用 Linux 平台 overlay：打包目标固定为 deb/rpm/appimage，
+        # 并把 updater 端点覆盖为 latest-linux-critical.json。
+        # 少了它，Linux 产物会带着 Windows 的 latest.json 端点，更新功能形同虚设。
+        run: npm run tauri -- build --config src-tauri/tauri.linux.conf.json --bundles deb,rpm,appimage
 
       - name: Generate latest-linux-critical.json
         env:
@@ -125,8 +132,12 @@ jobs:
               break
             fi
           done
-          NOTES="Linux long-term-stability channel: high-severity security and crash fixes only. Routine feature updates are not included."
-          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" \
+          NOTES="Linux channel: high-severity security and crash fixes only; the initial publication of a version line ships the complete build for that version. Routine feature updates are not included."
+          # 目标提交必须是本次真正构建的提交（checkout 之后的 HEAD），
+          # 不能用 $GITHUB_SHA：手动 dispatch 时它是默认分支 HEAD，与标签不符。
+          BUILT_SHA="$(git rev-parse HEAD)"
+          echo "Publishing ${RELEASE_TAG} from built commit ${BUILT_SHA}"
+          gh release create "$RELEASE_TAG" --target "$BUILT_SHA" \
             --title "MangaReader $RELEASE_TAG (Linux critical)" \
             --notes "$NOTES" || echo "release already exists"
           gh release upload "$RELEASE_TAG" \

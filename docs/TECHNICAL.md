@@ -472,6 +472,11 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - **通道拆分**：`tauri.linux.conf.json` 把 Linux 的 updater 端点覆盖为
   `latest-linux-critical.json`（Windows 保持 `latest.json`）。Linux 客户端
   更新面板常驻六语提示：长期稳定分支，官方仅推送高危安全/崩溃补丁。
+  **overlay 必须由构建命令显式应用**：`release-linux-critical.yml` 的
+  `tauri build` 带 `--config src-tauri/tauri.linux.conf.json`；只存在
+  overlay 文件是不够的，缺 `--config` 时 Linux 产物仍会带 Windows 端点，
+  更新功能对 Linux 客户端形同虚设。`static:release-surface` 守卫该参数、
+  Checkout 的 `inputs.tag` 检出与 Release 目标提交（不得用 `$GITHUB_SHA`）。
 - **CI 拆分**：`release-windows.yml`（`v*` 且非 `-linux*`，仅 windows-latest）
   与 `release-linux-critical.yml`（`v*-linux-sec*` 或手动 dispatch，
   ubuntu-22.04，`scripts/make-linux-critical-manifest.mjs` 生成清单）互不

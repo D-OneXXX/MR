@@ -774,8 +774,10 @@ export function checkReleaseSurface(root, report) {
       errors.push(`release-windows.yml 的 steps 缺少 ${marker}`);
     }
   }
-  if (!windowsWorkflow.includes("windows-latest")) {
-    errors.push("release-windows.yml 缺少 windows-latest runner");
+  if (!windowsWorkflow.includes("windows-2022")) {
+    errors.push(
+      "release-windows.yml 缺少 windows-2022 runner（真实 WebView2 QA 需规避 Server 2025 CDP 回归）",
+    );
   }
   // Windows 常规通道绝不被 -linux 标签触发。
   if (!windowsWorkflow.includes("contains(github.ref_name, '-linux')")) {

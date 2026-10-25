@@ -30,9 +30,13 @@
   重启走自研 `restart_app`，**没有** `process:*` 权限。
 - **CI 双流水线（互不阻塞）**：
   - `.github/workflows/release-windows.yml`：`v*` 标签（排除 `-linux*`）→
-    仅 `windows-latest` 构建 NSIS + 签名 + 上传 `latest.json`（tauri-action），
+    仅 `windows-2022` 构建 NSIS + 签名 + 上传 `latest.json`（tauri-action），
     并把上一版 Release 里的 `latest-linux-critical.json` 接力携带到新 Release
     （保证 `releases/latest/download/...` 双通道 URL 永远可用）。
+    发布 QA 需要真实 WebView2，固定 `windows-2022`：`windows-2025` 的 Evergreen
+    WebView2（>=133）存在 DevTools/CDP 端口回归，会卡在 `qa:app-bootstrap`
+    （参考 actions/runner-images#14738）。主 CI 的 Windows 构建检查仍用
+    `windows-latest`，不启动 WebView2。
   - `.github/workflows/release-linux-critical.yml`：`v*-linux-sec*` 标签或手动
     `workflow_dispatch` → `ubuntu-22.04` 构建 deb/rpm/AppImage，
     `scripts/make-linux-critical-manifest.mjs` 生成

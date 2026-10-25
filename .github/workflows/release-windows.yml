@@ -1,7 +1,7 @@
 name: Release (Windows)
 
 # Windows 主力发版通道：推送常规 v* 标签（不含 -linux 后缀）时触发，
-# 仅 windows-latest 节点编译 NSIS 安装包并发布 latest.json 更新清单，
+# 仅 Windows 节点编译 NSIS 安装包并发布 latest.json 更新清单，
 # 绝不被 Linux 构建拖慢或阻塞（Linux 走 release-linux-critical.yml）。
 on:
   push:
@@ -16,7 +16,10 @@ jobs:
     name: Build signed Windows release (NSIS)
     # Linux 高危补丁标签（v*-linux-sec* 等）不属于本通道。
     if: ${{ !contains(github.ref_name, '-linux') }}
-    runs-on: windows-latest
+    # 发布 QA 需要真实 WebView2。Windows Server 2025 的 Evergreen WebView2
+    # （>=133）存在 DevTools/CDP 端口回归，会让 QA 卡在 qa:app-bootstrap；
+    # 固定 windows-2022 直到上游修复。参考 actions/runner-images#14738。
+    runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,6 +65,16 @@ jobs:
       - name: Build QA debug binary
         run: cargo build --manifest-path src-tauri/Cargo.toml
 
+      - name: Record WebView2 runtime
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          if (Test-Path $key) {
+            Write-Host "WebView2 runtime: $((Get-ItemProperty $key).pv)"
+          } else {
+            Write-Host "WebView2 runtime: not found"
+          }
+
       - name: Full QA regression (Windows/WebView2)
         shell: pwsh
         timeout-minutes: 45
@@ -86,6 +99,7 @@ jobs:
             tests/qa/reports/latest.md
             tests/qa/reports/latest.json
             tests/qa/artifacts/current/qa-app.log
+            tests/qa/artifacts/current/vite.log
             tests/qa/artifacts/current/data/logs/
 
       - name: Build and publish Tauri release

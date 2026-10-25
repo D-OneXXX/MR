@@ -889,6 +889,11 @@ export function checkReleaseSurface(root, report) {
       "release-linux-critical.yml 不得用 $GITHUB_SHA 作为 release 目标提交（dispatch 时它指向默认分支）",
     );
   }
+  // 建 Release 必须用 --verify-tag：不传 target_commitish，就不会触发对标签引用的写入尝试。
+  // 本仓库的 tag ruleset 没有任何豁免者，集成令牌一旦尝试写标签引用就会被拒。
+  if (linuxStepText && !/gh release create[^\n]*--verify-tag/.test(linuxStepText)) {
+    errors.push("release-linux-critical.yml 必须用 gh release create --verify-tag（不传 target_commitish）");
+  }
 
   // 常规 CI 必须覆盖 main 与 PR，且门禁步骤真实存在于 steps 内。
   for (const [file, markers] of [

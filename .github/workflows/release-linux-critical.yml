@@ -151,11 +151,13 @@ jobs:
             fi
           done
           NOTES="Linux channel: high-severity security and crash fixes only; the initial publication of a version line ships the complete build for that version. Routine feature updates are not included."
-          # 目标提交必须是本次真正构建的提交（checkout 之后的 HEAD），
-          # 不能用 $GITHUB_SHA：手动 dispatch 时它是默认分支 HEAD，与标签不符。
-          BUILT_SHA="$(git rev-parse HEAD)"
-          echo "Publishing ${RELEASE_TAG} from built commit ${BUILT_SHA}"
-          gh release create "$RELEASE_TAG" --target "$BUILT_SHA" \
+          # --verify-tag：只允许为已存在的标签建 Release，绝不传 target_commitish。
+          # 传了 target_commitish 就可能触发对标签引用的写入尝试，
+          # 而本仓库的 tag ruleset（Protect release tags）没有任何豁免者，
+          # 集成令牌会被判为「Resource not accessible by integration」。
+          # Release 指向的就是被检出的那个标签提交，等价且不会碰标签引用。
+          echo "Publishing ${RELEASE_TAG} from built commit $(git rev-parse HEAD)"
+          gh release create "$RELEASE_TAG" --verify-tag \
             --title "MangaReader $RELEASE_TAG (Linux critical)" \
             --notes "$NOTES" || echo "release already exists"
           gh release upload "$RELEASE_TAG" \

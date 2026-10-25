@@ -712,4 +712,9 @@ React Router 7.18.4、lru 0.16.4；`npm audit --omit=dev` 为 0。依赖审计�
 - Telegram 真实站点 HTML 变体仍需用实际频道做联网冒烟；QA 使用确定性本地预览 stub。
 - 文档附件下载在内存缓冲后落盘，不是边下边写流。
 - Vite 主包仍 >500 kB（警告，不阻塞）。
+- Linux 侧 Tauri 2.12.1 → gtk 0.18.2 → glib 0.18.5 间接依赖存在
+  RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g（`VariantStrIter` unsoundness，medium）。
+  glib 0.20 修复需要 gtk-rs/Tauri 整栈升级，当前不能单点升级；MangaReader 未直接调用
+  该 API，按 tolerated risk 记录，复审触发为 Tauri/gtk-rs 0.20 升级或 0.18.0 发布前
+  （#18）。Windows 运行时不受该 Linux 间接依赖影响。
 - 历史 P3 审计项（更新构建哈希、SSRF link-local、状态胶囊 tab、品牌残留等）保留 backlog。

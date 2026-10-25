@@ -163,11 +163,42 @@
 - tag 版本与 `package.json` 不一致，工作流在构建前失败；
 - GitHub Secrets 缺失/私钥口令错误，签名产物缺失；
 - 客户端 `pubkey` 与 CI 私钥不匹配；
-- 资产名/平台键与 `latest.json` 不一致（保留 `--bundles nsis` 与
-  `updaterJsonPreferNsis: true` 可避免大多数问题）；
+- 资产名/平台键与 `latest.json` 不一致（保留 `--bundles nsis` 与  `updaterJsonPreferNsis: true` 可避免大多数问题）；
 - 发布前全量 QA 失败时，工作流会保留 `qa-diagnostics-<attempt>` artifact
   （QA 报告、`qa-app.log` 与隔离数据日志）；先按 `qa:app-bootstrap` / suite id
   定位原因，再决定是否重跑，不要通过跳过 suite 放行发布。
+
+### 5.1 建 Release 被拒（`Resource not accessible by integration`）
+
+**症状**：工作流在「Build and publish」或 `gh release create` 处报
+`Resource not accessible by integration - .../releases#create-a-release`，
+`POST /releases` 被拒；构建产物（安装包 + 签名）已生成但没上传。
+
+**已排除的原因**（2026-10-25 在 v0.17.1 上逐一验证）：
+
+| 假设 | 验证方式 | 结论 |
+|---|---|---|
+| 标签是附注标签（annotated）导致 GitHub 试图改写标签引用 | 分别用附注标签与轻量标签各建一次 Release | 两者都成功，排除 |
+| `Protect release tags` ruleset 拦住了建 Release | 用管理员令牌对 `refs/tags/v*` 标签建 Release | 成功，排除 |
+| 工作流的 `permissions: contents: write` 没写对 | 与当天成功发布 v0.17.0 的文件逐行 diff | 完全一致，排除 |
+| 旧式 tag 保护规则 | `GET /tags/protection` | 仓库没有此类规则，排除 |
+
+**观察到的边界**：同一个 `GITHUB_TOKEN` 能 `PATCH` 既有 Release、能上传资产，
+只有「创建 Release」被拒；管理员 OAuth 令牌则完全正常。
+
+**处置办法**：在触发发布前，用管理员令牌先把 Release 建好，工作流就只剩上传资产：
+
+```bat
+gh release create <tag> --verify-tag --title "<标题>" --notes "<说明>"
+```
+
+工作流检测到 Release 已存在会跳过创建（Linux 通道是 `|| echo "release already exists"`，
+tauri-action 是 `updateRelease`），随后正常上传资产与清单。
+Windows 通道用同样的预建方式验证通过。
+
+**不要**为此把仓库的默认 workflow 权限（`default_workflow_permissions`）改成
+read-write —— 那是全仓库、所有第三方 action 的令牌权限面，属于安全降级；
+工作流内的 `permissions:` 声明保持现状即可。
 
 ## 6. 旧自定义补丁通道（已下线）
 

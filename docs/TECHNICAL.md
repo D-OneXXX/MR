@@ -658,9 +658,10 @@ ubuntu-22.04）执行 `cargo check --all-targets`、`cargo clippy --all-targets
 `.github/workflows/ci-windows-check.yml` 在 windows-latest 跑同一套单测/集成/
 静态 QA 门禁。纯逻辑（GBK 条目名修复、gsettings/kioslaverc 解析、DMABUF
 决策表）写成跨平台纯函数，Windows 宿主单测同样覆盖。Dependabot 每周检查
-npm / cargo / GitHub Actions 更新。已知 Vite 6.4.3 dev-server 与 React Router
-6.x 的 advisory 需要跨大版本升级，审计先作为可见报告（`continue-on-error`），
-不阻断打包产物构建。
+npm / cargo / GitHub Actions 更新。2026-10-25 已将 Vite 升级到 6.4.4、
+React Router 7.18.4、lru 0.16.4；`npm audit --omit=dev` 为 0。依赖审计仍保持
+可见报告（`continue-on-error`），新的 high/critical 公告需在发布评审前处置，
+不得静默忽略。
 发版流水线（0.17.0 起）拆分为 `release-windows.yml`（`windows-latest`，NSIS）与
 `release-linux-critical.yml`（`ubuntu-22.04`，deb/rpm/AppImage，仅高危补丁标签），
 互不阻塞。

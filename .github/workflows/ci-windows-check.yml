@@ -57,8 +57,7 @@ jobs:
       - name: Static and version guards
         run: node tests/qa/run-qa.mjs --suite=static
 
-      # 已知 Vite dev-server / React Router 6.x advisory 需跨大版本升级，
-      # 先保持可见报告，不阻断主力构建。
+      # 依赖审计保持可见报告；新的 high/critical 公告需在发布评审前处置。
       - name: NPM audit report (production dependencies)
         continue-on-error: true
         run: npm audit --omit=dev --audit-level=high

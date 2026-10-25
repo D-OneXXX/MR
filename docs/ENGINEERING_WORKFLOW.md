@@ -297,12 +297,12 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 | 0 | 只读审计 | 已完成，用户已确认 |
 | 1 | 治理骨架：Issue/分支/Worktree/状态/PR 模板 | 已完成（PR #14） |
 | 2 | Bug 生命周期与自动修复流程 | 已完成门禁与单 Bug 演练（PR #20/#22、#21） |
-| 3 | 质量门禁与安全扫描 | 下一阶段（#18 glib、#23 chaos/CDP） |
+| 3 | 质量门禁与安全扫描 | 下一阶段（#18/#23 已处置） |
 | 4 | RC / Draft / 审批 / 双通道发布 | 待开始 |
 | 5 | 发布后验证、Hotfix 与回滚 | 待开始 |
 | 6 | 隔离演练，不触发真实发布 | 待开始 |
 
-Phase 2 收尾于 2026-10-26：PR 元数据 required check 已生效；下一步先处理 #18（glib 风险接受/升级）与 #23（QA flake），再进入 Phase 3 的完整质量门禁。
+Phase 2 收尾于 2026-10-26：PR 元数据 required check 已生效；#18（glib 风险接受）与 #23（chaos/CDP flake）已处置，下一步进入 Phase 3。
 
 Phase 1 验收：
 

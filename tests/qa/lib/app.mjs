@@ -8,6 +8,7 @@ import {
   listTargets,
   waitForTarget,
 } from "./cdp.mjs";
+import { shouldRetryCdp } from "./reliability.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -340,12 +341,22 @@ async function runQaSession({
     page,
     imported,
     books,
-    async reconnectMain() {
-      await page.close().catch(() => {});
-      page = await connectResponsiveMain(cdpPort);
-      await waitForApp(page);
-      context.page = page;
-      return page;
+    async reconnectMain(maxAttempts = 3) {
+      let lastError = null;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        await page.close().catch(() => {});
+        try {
+          page = await connectResponsiveMain(cdpPort);
+          await waitForApp(page);
+          context.page = page;
+          return page;
+        } catch (error) {
+          lastError = error;
+          if (!shouldRetryCdp({ attempt, maxAttempts, error })) throw error;
+          await sleep(1500 * attempt);
+        }
+      }
+      throw lastError ?? new Error("主窗口重连失败");
     },
     async goto(hash) {
       await page.navigateHash(hash);

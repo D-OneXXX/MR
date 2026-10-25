@@ -9,6 +9,7 @@ export interface SecurityAudit {
     status: SecurityStatus;
     manifestConfigured: boolean;
     manifestHttps: boolean;
+    manifestLoopback: boolean;
     signatureConfigured: boolean;
     sha256Enforced: boolean;
     keySource: string;
@@ -44,14 +45,11 @@ export interface ClearTracesResult {
   timestamp: string;
 }
 
-export interface SecurityAuditInput {
-  manifestUrl: string;
-}
-
 export const privacyApi = {
-  securityAudit: (input: SecurityAuditInput) =>
-    invoke<SecurityAudit>("security_audit", {
-      manifestUrl: input.manifestUrl,
-    }),
+  /**
+   * 本机安全自检。更新通道的结论完全来自 Rust 侧读取的构建期配置
+   * （`tauri.conf.json plugins.updater`），前端不再提供任何更新源地址。
+   */
+  securityAudit: () => invoke<SecurityAudit>("security_audit"),
   clearOnlineTraces: () => invoke<ClearTracesResult>("clear_online_traces"),
 };

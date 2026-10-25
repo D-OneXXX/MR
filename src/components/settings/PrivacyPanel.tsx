@@ -32,8 +32,6 @@ import { cn } from "@/lib/utils";
 import { recordBreadcrumb } from "@/features/resilience";
 import { useSafeMode } from "@/features/safeMode/SafeModeContext";
 import { enterSafeMode } from "@/features/safeMode/api";
-import { useUpdater } from "@/features/update/UpdateProvider";
-import { resolveManifestUrl } from "@/features/update/types";
 import {
   privacyApi,
   type ClearTracesResult,
@@ -87,20 +85,6 @@ function formatMb(bytes: number, locale: string): string {
   return `${new Intl.NumberFormat(locale, {
     maximumFractionDigits: 1,
   }).format(bytes / 1048576)} MB`;
-}
-
-function isLoopbackManifest(raw: string): boolean {
-  if (!raw.trim()) return false;
-  try {
-    const url = new URL(raw.trim());
-    const host = url.hostname.replace(/^\[|\]$/g, "");
-    return (
-      url.protocol === "http:" &&
-      (host === "localhost" || host === "127.0.0.1" || host === "::1")
-    );
-  } catch {
-    return false;
-  }
 }
 
 function AuditCard({
@@ -242,7 +226,6 @@ function PathCapsule({ path }: { path: string }) {
  */
 export default function PrivacyPanel() {
   const { t, locale, formatDateTime } = useI18n();
-  const { prefs } = useUpdater();
   const { active: safeModeActive, refresh: refreshSafeMode } = useSafeMode();
   const [enteringSafeMode, setEnteringSafeMode] = useState(false);
   const [audit, setAudit] = useState<SecurityAudit | null>(null);
@@ -251,15 +234,20 @@ export default function PrivacyPanel() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
   const seqRef = useRef(0);
-  const loopbackManifest = isLoopbackManifest(resolveManifestUrl(prefs));
+
+  /** 公钥来源标记：Rust 侧返回 config / build / none，统一走 i18n，不直出英文。 */
+  const keySourceLabel = (source: string): string => {
+    if (source === "config") return t("privacy.audit.keySource.config");
+    if (source === "build") return t("privacy.audit.keySource.build");
+    return t("privacy.audit.keySource.none");
+  };
 
   const runAudit = useCallback(async () => {
     const seq = ++seqRef.current;
     setLoading(true);
     setError(null);
     try {
-      const manifestUrl = resolveManifestUrl(prefs);
-      const next = await privacyApi.securityAudit({ manifestUrl });
+      const next = await privacyApi.securityAudit();
       if (seq !== seqRef.current) return;
       setAudit(next);
     } catch (e) {
@@ -272,7 +260,7 @@ export default function PrivacyPanel() {
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
-  }, [prefs, t]);
+  }, [t]);
 
   const runAuditRef = useRef(runAudit);
   runAuditRef.current = runAudit;
@@ -283,14 +271,6 @@ export default function PrivacyPanel() {
       seqRef.current += 1;
     };
   }, []);
-
-  // The update source participates in the audit; re-check when it changes.
-  const manifestUrl = resolveManifestUrl(prefs);
-  useEffect(() => {
-    if (!audit) return;
-    void runAuditRef.current();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifestUrl]);
 
   const clearTraces = async () => {
     setConfirmClear(false);
@@ -538,7 +518,7 @@ export default function PrivacyPanel() {
                     {t("privacy.audit.evidence.https", {
                       value: !audit.update.manifestConfigured
                         ? t("privacy.audit.disabled")
-                        : loopbackManifest
+                        : audit.update.manifestLoopback
                           ? t("privacy.audit.loopback")
                           : audit.update.manifestHttps
                             ? t("privacy.audit.enabled")
@@ -547,7 +527,7 @@ export default function PrivacyPanel() {
                   </div>
                   <div>
                     {t("privacy.audit.evidence.keySource", {
-                      value: audit.update.keySource,
+                      value: keySourceLabel(audit.update.keySource),
                     })}
                   </div>
                 </>

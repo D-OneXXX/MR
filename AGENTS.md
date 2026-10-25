@@ -93,7 +93,7 @@
   - 枚举值非法（`mr-theme`、`mr-locale`、`mr-exp-*`、`mr-reader-mode/dir` 等）→ 修正或删除；
   - JSON 类键解析失败 → 删除该键并回落默认值；
   - 废弃前缀（`mr-translator`、`mr-translation`、`mr-ocr`、`mr-glossary`、`mr-batch`、
-    `mr-sidecar`、`mr-status`、`mr-data`、`mr-pretranslate`）→ 一律删除；
+    `mr-sidecar`、`mr-status`、`mr-data`、`mr-pretranslate`、`mr-update-prefs`）→ 一律删除；
   - 未知键 → 删除；动态前缀（`mr-reader-`、`mr-wt-`）保留但校验值。
 - 清洗必须幂等、try/catch 包裹，localStorage 不可用时静默跳过，**绝不让脏状态导致白屏**。
 - SQLite 侧由 `src-tauri/src/versioning.rs::normalize_settings` 负责修复越界设置，
@@ -137,6 +137,12 @@
   `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 注入私钥，
   **私钥与密码绝不入库**。官方通道是唯一活跃更新通道；旧自定义补丁通道不得
   重新暴露 IPC，除非按 §4.1 重新完成公钥注入、清单统一与前端接线。
+- **更新通道的唯一事实源**：端点与公钥只存在于构建期写进二进制的
+  `tauri.conf.json plugins.updater`。设置页签名徽章（`get_app_info`）与隐私安全
+  自检的「更新包签名与完整性」卡（`security_audit`）都必须经
+  `update::NativeUpdaterConfig::from_tauri_config` 读取同一份配置，
+  **严禁**任何一处改读已下线的旧补丁通道（本机遗留清单地址 / 编译期
+  `MR_UPDATE_PUBKEY` 单点判定），否则正式版会出现「未配置 / 未签名」的假告警。
 - Windows 只发布 NSIS，`bundle.targets` 锁定为
   `["nsis", "deb", "rpm", "appimage"]`，不得加入 `msi`；NSIS 使用
   `installMode: "both"`、`compression: "lzma"`、语言选择器与六种内置语言。

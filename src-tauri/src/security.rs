@@ -14,6 +14,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use url::{Host, Url};
 
+use crate::update::{signature_configured, NativeUpdaterConfig};
 use crate::AppState;
 
 /// Capability files embedded at compile time (same sources as the generated ACL).
@@ -65,12 +66,17 @@ impl SecurityStatus {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAudit {
     pub status: SecurityStatus,
+    /// 构建期是否配置了更新清单端点（官方 GitHub 通道）。
     pub manifest_configured: bool,
+    /// 所有端点是否都走安全传输（HTTPS；本机回环 HTTP 视为安全）。
     pub manifest_https: bool,
+    /// 端点是否全部指向本机回环。
+    pub manifest_loopback: bool,
     pub signature_configured: bool,
     /// The updater module always verifies SHA-256 of downloaded artifacts.
     pub sha256_enforced: bool,
-    /// `build` (compile-time MR_UPDATE_PUBKEY) or `none`.
+    /// `config` (tauri.conf.json plugins.updater.pubkey) / `build`
+    /// (compile-time MR_UPDATE_PUBKEY) / `none`.
     pub key_source: String,
 }
 
@@ -127,15 +133,18 @@ pub struct ClearTracesResult {
     pub timestamp: String,
 }
 
-/// Real local security audit. `manifest_url` comes from the update preferences
-/// resolved by the frontend and may be empty.
+/// Real local security audit.
+///
+/// The update section is derived from the compiled-in updater configuration
+/// (`tauri.conf.json plugins.updater`), i.e. the same source of truth the
+/// official GitHub updater channel uses at runtime.
 #[tauri::command]
 pub async fn security_audit(
     app: tauri::AppHandle,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
-    manifest_url: String,
 ) -> Result<SecurityAudit, String> {
-    let update = audit_update(&manifest_url);
+    let channel = NativeUpdaterConfig::from_tauri_config(app.config());
+    let update = audit_update(&channel);
     let isolation = audit_isolation(&app);
     let proxy = state.settings.lock().online_proxy.clone();
     let network = audit_network(&proxy);
@@ -211,49 +220,69 @@ pub async fn clear_online_traces(
 
 // ---------- Update ----------
 
-fn audit_update(manifest_url: &str) -> UpdateAudit {
-    audit_update_with(manifest_url, update_key_configured())
+/// 审计官方 GitHub 更新通道（`tauri.conf.json plugins.updater`）。
+///
+/// 事实源与设置页签名徽章完全一致：端点与公钥都来自构建期写进二进制的
+/// Tauri 配置。旧自定义补丁通道的 IPC 已下线，不再作为审计对象——继续按
+/// 已停用的通道判定只会让正式版出现「未配置 / 未签名」的假告警。
+fn audit_update(channel: &NativeUpdaterConfig) -> UpdateAudit {
+    audit_update_with(channel, signature_configured())
 }
 
-fn update_key_configured() -> bool {
-    option_env!("MR_UPDATE_PUBKEY")
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-}
-
-fn audit_update_with(manifest_url: &str, signature_configured: bool) -> UpdateAudit {
-    let trimmed = manifest_url.trim();
-    let manifest_configured = !trimmed.is_empty();
-    let mut manifest_https = false;
+/// `build_key_present` 是编译期 `MR_UPDATE_PUBKEY` 的存在性；测试可显式注入，
+/// 避免依赖构建环境变量导致结论漂移。
+fn audit_update_with(channel: &NativeUpdaterConfig, build_key_present: bool) -> UpdateAudit {
+    let mut secure_transport = true;
+    let mut all_loopback = !channel.endpoints.is_empty();
     let mut invalid = false;
 
-    if manifest_configured {
-        match Url::parse(trimmed) {
+    for endpoint in &channel.endpoints {
+        match Url::parse(endpoint.trim()) {
             Ok(url) => {
                 // Reject any userinfo so credentials never reach update logs.
                 if !url.username().is_empty() || url.password().is_some() {
                     invalid = true;
+                    secure_transport = false;
+                    all_loopback = false;
+                    continue;
                 }
                 match url.scheme() {
-                    "https" => manifest_https = true,
+                    "https" => all_loopback = false,
+                    // Plaintext is acceptable on loopback (no network hop).
+                    "http" if host_is_loopback(url.host()) => {}
                     "http" => {
-                        if host_is_loopback(url.host()) {
-                            // Plaintext is acceptable on loopback (no network hop).
-                            manifest_https = true;
-                        } else {
-                            invalid = true;
-                        }
+                        invalid = true;
+                        secure_transport = false;
+                        all_loopback = false;
                     }
-                    _ => invalid = true,
+                    _ => {
+                        invalid = true;
+                        secure_transport = false;
+                        all_loopback = false;
+                    }
                 }
             }
-            Err(_) => invalid = true,
+            Err(_) => {
+                invalid = true;
+                secure_transport = false;
+                all_loopback = false;
+            }
         }
     }
 
+    let manifest_configured = channel.has_endpoints();
+    let signature_configured = build_key_present || channel.has_pubkey();
+    let key_source = if channel.has_pubkey() {
+        "config"
+    } else if build_key_present {
+        "build"
+    } else {
+        "none"
+    };
+
     let status = if invalid {
         SecurityStatus::Fail
-    } else if !signature_configured {
+    } else if !manifest_configured || !signature_configured {
         SecurityStatus::Warn
     } else {
         SecurityStatus::Pass
@@ -262,14 +291,11 @@ fn audit_update_with(manifest_url: &str, signature_configured: bool) -> UpdateAu
     UpdateAudit {
         status,
         manifest_configured,
-        manifest_https,
+        manifest_https: manifest_configured && secure_transport,
+        manifest_loopback: manifest_configured && all_loopback,
         signature_configured,
         sha256_enforced: true,
-        key_source: if signature_configured {
-            "build".to_string()
-        } else {
-            "none".to_string()
-        },
+        key_source: key_source.to_string(),
     }
 }
 
@@ -572,50 +598,134 @@ mod tests {
         assert!(parse_capability_evidence("[]").map(|e| e.scoped) == Ok(false));
     }
 
-    #[test]
-    fn update_requires_https_or_loopback_and_rejects_userinfo() {
-        let configured = audit_update_with("https://updates.example.com/latest.json", true);
-        assert_eq!(configured.status, SecurityStatus::Pass);
-        assert!(configured.manifest_https);
+    /// 构造一个官方更新通道配置（端点 + 公钥）。
+    fn channel(endpoints: &[&str], pubkey: &str) -> NativeUpdaterConfig {
+        NativeUpdaterConfig {
+            endpoints: endpoints.iter().map(|value| value.to_string()).collect(),
+            pubkey: pubkey.to_string(),
+        }
+    }
 
-        let remote_http = audit_update_with("http://updates.example.com/latest.json", true);
+    #[test]
+    fn update_audit_reads_the_official_channel_from_build_config() {
+        // 正式版形态：HTTPS 端点 + 构建配置内的 minisign 公钥。
+        let release = audit_update_with(
+            &channel(
+                &["https://github.com/D-OneXXX/MR/releases/latest/download/latest.json"],
+                "dW50cnVzdGVkIGNvbW1lbnQ=",
+            ),
+            false,
+        );
+        assert_eq!(release.status, SecurityStatus::Pass);
+        assert!(release.manifest_configured);
+        assert!(release.manifest_https);
+        assert!(!release.manifest_loopback);
+        assert!(release.signature_configured);
+        assert!(release.sha256_enforced);
+        assert_eq!(release.key_source, "config");
+    }
+
+    #[test]
+    fn update_audit_requires_https_or_loopback_and_rejects_userinfo() {
+        let remote_http = audit_update_with(
+            &channel(&["http://updates.example.com/latest.json"], "key"),
+            false,
+        );
         assert_eq!(remote_http.status, SecurityStatus::Fail);
         assert!(!remote_http.manifest_https);
 
-        let localhost_http = audit_update_with("http://localhost:8080/latest.json", true);
+        let localhost_http =
+            audit_update_with(&channel(&["http://localhost:8080/latest.json"], "key"), false);
         assert_eq!(localhost_http.status, SecurityStatus::Pass);
         assert!(localhost_http.manifest_https);
+        assert!(localhost_http.manifest_loopback);
 
-        let loopback_v4 = audit_update_with("http://127.0.0.1/latest.json", true);
+        let loopback_v4 =
+            audit_update_with(&channel(&["http://127.0.0.1/latest.json"], "key"), false);
         assert_eq!(loopback_v4.status, SecurityStatus::Pass);
 
-        let loopback_v6 = audit_update_with("http://[::1]:9000/latest.json", true);
+        let loopback_v6 =
+            audit_update_with(&channel(&["http://[::1]:9000/latest.json"], "key"), false);
         assert_eq!(loopback_v6.status, SecurityStatus::Pass);
 
-        let userinfo = audit_update_with("https://user:pass@updates.example.com/latest.json", true);
+        let userinfo = audit_update_with(
+            &channel(&["https://user:pass@updates.example.com/latest.json"], "key"),
+            false,
+        );
         assert_eq!(userinfo.status, SecurityStatus::Fail);
 
-        let unsupported = audit_update_with("ftp://updates.example.com/latest.json", true);
+        let unsupported =
+            audit_update_with(&channel(&["ftp://updates.example.com/latest.json"], "key"), false);
         assert_eq!(unsupported.status, SecurityStatus::Fail);
 
-        let invalid = audit_update_with("not a url", true);
+        let invalid = audit_update_with(&channel(&["not a url"], "key"), false);
         assert_eq!(invalid.status, SecurityStatus::Fail);
     }
 
     #[test]
-    fn update_without_build_key_warns_and_blank_manifest_is_not_configured() {
-        let blank = audit_update_with("   ", false);
+    fn update_audit_without_endpoint_or_key_warns() {
+        let blank = audit_update_with(&channel(&[], ""), false);
         assert!(!blank.manifest_configured);
+        assert!(!blank.manifest_https);
+        assert!(!blank.manifest_loopback);
         assert_eq!(blank.status, SecurityStatus::Warn);
         assert_eq!(blank.key_source, "none");
         assert!(blank.sha256_enforced);
 
-        let configured_key = audit_update_with("", true);
-        assert_eq!(configured_key.status, SecurityStatus::Pass);
-        assert_eq!(configured_key.key_source, "build");
+        // 端点齐备但没有公钥：仍是「注意」，不谎报通过。
+        let without_key =
+            audit_update_with(&channel(&["https://updates.example.com/latest.json"], ""), false);
+        assert_eq!(without_key.status, SecurityStatus::Warn);
+        assert!(without_key.manifest_configured);
+        assert!(!without_key.signature_configured);
+        assert_eq!(without_key.key_source, "none");
 
-        let valid_without_key = audit_update_with("https://updates.example.com/latest.json", false);
-        assert_eq!(valid_without_key.status, SecurityStatus::Warn);
+        // 编译期 MR_UPDATE_PUBKEY 注入时，公钥来源标记为 build。
+        let build_key =
+            audit_update_with(&channel(&["https://updates.example.com/latest.json"], ""), true);
+        assert_eq!(build_key.status, SecurityStatus::Pass);
+        assert_eq!(build_key.key_source, "build");
+    }
+
+    #[test]
+    fn native_updater_config_reads_endpoints_and_pubkey() {
+        let value = serde_json::json!({
+            "plugins": {
+                "updater": {
+                    "endpoints": ["https://example.com/latest.json"],
+                    "pubkey": "  dW50cnVzdGVk  "
+                }
+            }
+        });
+        let parsed = NativeUpdaterConfig::from_json(&value);
+        assert_eq!(
+            parsed.endpoints,
+            vec!["https://example.com/latest.json".to_string()]
+        );
+        assert_eq!(parsed.pubkey, "dW50cnVzdGVk");
+        assert!(parsed.has_endpoints());
+        assert!(parsed.has_pubkey());
+
+        // 单字符串端点同样被接受（tauri 允许 endpoints 为字符串或数组）。
+        let single = serde_json::json!({
+            "plugins": { "updater": { "endpoints": "https://example.com/latest.json" } }
+        });
+        let parsed = NativeUpdaterConfig::from_json(&single);
+        assert_eq!(
+            parsed.endpoints,
+            vec!["https://example.com/latest.json".to_string()]
+        );
+
+        // 缺失 / 非法结构一律退化为「未配置」，绝不 panic。
+        let missing = serde_json::json!({ "plugins": {} });
+        let parsed = NativeUpdaterConfig::from_json(&missing);
+        assert!(!parsed.has_endpoints());
+        assert!(!parsed.has_pubkey());
+
+        let broken = serde_json::json!({ "plugins": { "updater": { "endpoints": 7, "pubkey": 9 } } });
+        let parsed = NativeUpdaterConfig::from_json(&broken);
+        assert!(!parsed.has_endpoints());
+        assert!(!parsed.has_pubkey());
     }
 
     #[test]

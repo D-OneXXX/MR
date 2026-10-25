@@ -10,9 +10,10 @@ import { platformKind } from "@/lib/platform";
 /**
  * Thin wrapper around the official Tauri updater/process plugins.
  *
- * The GitHub channel is an additive entry point: the custom manifest/patch
- * channel in `api.ts` stays untouched. Signature verification and installer
- * execution stay in Rust; the webview only receives sizes, versions and text.
+ * This is the only active update channel: the endpoint and the minisign public
+ * key are baked into the build config (`tauri.conf.json plugins.updater`).
+ * Signature verification and installer execution stay in Rust; the webview only
+ * receives sizes, versions and text.
  */
 
 export interface NativeUpdateInfo {

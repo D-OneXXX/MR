@@ -393,8 +393,11 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
 - 0.17.0 起设置页**不再暴露更新清单地址输入框**：端点在构建配置中锁死
   （Windows: GitHub Releases `latest.json`，Linux: `latest-linux-critical.json`）。
   旧 `check_update` / `download_update` / `install_update` / `cancel_update` /
-  `get_update_snapshot` 已不再注册；历史遗留的本机清单地址（`mr-update-prefs`）
-  仅供「隐私与安全」审计评估回环策略，不构成可用更新通道。
+  `get_update_snapshot` 已不再注册。
+- 0.17.1 起历史遗留的本机清单地址（localStorage `mr-update-prefs`）**彻底下线**：
+  前端不再读写该键，启动清洗把它当作废弃键删除（`DEPRECATED_KEY_PREFIXES`），
+  备份白名单本就排除它。该键此前唯一的消费者是隐私安全审计，0.17.1 起审计改为
+  直接读构建期更新通道配置，不再需要任何本机更新源地址。
 
 ### 8.2 官方 Tauri Updater / GitHub Releases（0.16.0）
 
@@ -407,6 +410,14 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   （汇总 `tauri.conf.json plugins.updater.pubkey` 与 `MR_UPDATE_PUBKEY`，
   0.17.0 前只看后者导致「一边已配置一边未配置」的矛盾展示）；重启只在
   用户点击 `restart_app` 后发生。Windows 安装器退出/重启属于用户点击安装后的预期行为。
+- **唯一事实源**：更新通道的端点与公钥只有一处来源——构建期写进二进制的
+  `tauri.conf.json plugins.updater`。`update::NativeUpdaterConfig::from_tauri_config`
+  在运行时从 Tauri 配置提取（`endpoints` 允许字符串或字符串数组），供
+  `get_app_info`（设置页徽章）与 `security_audit`（隐私安全自检的「更新包签名与
+  完整性」卡）共用。0.17.1 前自检卡读的是已下线的旧补丁通道（编译期
+  `MR_UPDATE_PUBKEY` + 本机遗留清单地址），正式版必然显示「尚未配置更新清单地址 /
+  签名公钥：未启用」的假告警；现在改为读真实通道后，端点、HTTPS、公钥与来源
+  （`config` / `build` / `none`，六语本地化）与徽章结论一致。
 - CI（0.17.0 起拆分，见 §8.4）：`release-windows.yml` 在推送 `v*` 标签（排除
   `-linux*`）时：校验 tag 与 `package.json` 版本一致 →
   `npm ci` → `tauri-action@v1`（NSIS，`uploadUpdaterJson: true`）→ 上传签名安装包与

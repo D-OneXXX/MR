@@ -211,16 +211,6 @@ function jsonRule(
   };
 }
 
-/** 更新偏好：与 features/update/types.ts 的 loadUpdatePrefs 保持同一套回落规则。 */
-function canonicalUpdatePrefs(parsed: unknown): unknown | null {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const source = parsed as Record<string, unknown>;
-  return {
-    manifestUrl: typeof source.manifestUrl === "string" ? source.manifestUrl : "",
-    channel: source.channel === "beta" ? "beta" : "stable",
-  };
-}
-
 /** 在线连通性记录：与 lib/onlineLastTest.ts 的 readOnlineLastTest 保持一致。 */
 function canonicalOnlineLastTest(parsed: unknown): unknown | null {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
@@ -252,7 +242,7 @@ function canonicalRecents(parsed: unknown): unknown | null {
 /**
  * 已知键注册表：键 -> 合法值 + 修复策略。
  * 键名与取值全部对照真实代码（ThemeProvider / i18n / tauri / Reader / Browser / Library /
- * onlineLastTest / update\types / PrivacyDialog），不在此表的键只会命中动态前缀或被当作未知键删除。
+ * onlineLastTest / PrivacyDialog），不在此表的键只会命中动态前缀或被当作未知键删除。
  */
 const KEY_RULES: Record<string, Rule> = {
   // 主题：只允许 system|light|dark，旧版 "dark-blue" 之类一律删除，ThemeProvider 回落到 system。
@@ -276,7 +266,6 @@ const KEY_RULES: Record<string, Rule> = {
   // 隐私弹窗确认标记：内容任意，但长度有上限（正常形如 "2026-10:0"）。
   "mr-privacy-ack": textRule(128, "隐私确认标记"),
   // JSON 键：解析失败即删，结构合法则规范化。
-  "mr-update-prefs": jsonRule("更新偏好", canonicalUpdatePrefs),
   "mr-online-last-test": jsonRule("在线连通性记录", canonicalOnlineLastTest),
   "mr-browser-recents": jsonRule("浏览器最近访问", canonicalRecents),
   // 书库分组 / 来源筛选（pages/Library.tsx）。
@@ -331,7 +320,8 @@ export const DYNAMIC_KEY_PREFIXES: readonly string[] = DYNAMIC_PREFIX_RULES.map(
 
 /**
  * 废弃前缀（含其后任意后缀一律删除）：
- * 翻译工作台 / 批量预翻译 / 术语表 / 选区翻译 / 页 OCR 存档 / 服务状态 / 独立数据页 等旧功能残留。
+ * 翻译工作台 / 批量预翻译 / 术语表 / 选区翻译 / 页 OCR 存档 / 服务状态 / 独立数据页 /
+ * 旧自定义补丁通道的本机更新偏好 等旧功能残留。
  */
 export const DEPRECATED_KEY_PREFIXES: readonly string[] = [
   "mr-translator",
@@ -343,6 +333,7 @@ export const DEPRECATED_KEY_PREFIXES: readonly string[] = [
   "mr-status",
   "mr-data",
   "mr-pretranslate",
+  "mr-update-prefs",
 ];
 
 // ---------------------------------------------------------------------------

@@ -292,5 +292,49 @@ export async function runPrivacySuite(ctx, report) {
     });
   }
 
+  // 更新通道自检必须反映构建期真实配置，而不是已下线的旧补丁通道。
+  // 0.17.0 的正式版因此长期显示「尚未配置更新清单地址 / 签名公钥：未启用」。
+  const audit = await invoke(page, "security_audit", {});
+  const update = audit?.update ?? {};
+  const updateFacts = {
+    manifestConfigured: update.manifestConfigured === true,
+    manifestHttps: update.manifestHttps === true,
+    signatureConfigured: update.signatureConfigured === true,
+    sha256Enforced: update.sha256Enforced === true,
+    keySource: update.keySource,
+    status: update.status,
+  };
+  const updateOk =
+    updateFacts.manifestConfigured &&
+    updateFacts.manifestHttps &&
+    updateFacts.signatureConfigured &&
+    updateFacts.sha256Enforced &&
+    updateFacts.keySource === "config" &&
+    updateFacts.status === "pass";
+  if (!updateOk) {
+    fail(report, {
+      id: "privacy:update-channel-audit",
+      suite: "privacy",
+      layer: "integration",
+      title: "更新包签名与完整性自检未反映真实更新通道",
+      severity: "P1",
+      details: JSON.stringify(updateFacts),
+      location: "src-tauri/src/security.rs:audit_update",
+      expected:
+        "端点已配置 + HTTPS + 已配置 minisign 公钥 + SHA-256 强制 + 公钥来源 config + 状态 pass",
+      actual: JSON.stringify(updateFacts),
+      rootCause: "自检改读了已下线的旧补丁通道（MR_UPDATE_PUBKEY / 本机遗留清单地址）",
+      fix: "按 AGENTS.md §4.1 用 update::NativeUpdaterConfig::from_tauri_config 读取构建期配置",
+    });
+  } else {
+    ok(report, {
+      id: "privacy:update-channel-audit",
+      suite: "privacy",
+      layer: "integration",
+      title: "更新通道自检与构建期配置一致（HTTPS + minisign 公钥）",
+      details: "manifestConfigured/https/signatureConfigured=true, keySource=config",
+    });
+  }
+
   note(report, "诊断敏感样本使用独立测试错误入口，未写入磁盘；动作/日志环形缓冲检查通过");
 }

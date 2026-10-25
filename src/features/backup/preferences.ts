@@ -6,7 +6,7 @@ import { sanitizeStorage } from "@/lib/storageSanitizer";
  * 备份偏好白名单：只允许轻量、可安全跨设备迁移的 localStorage 键。
  *
  * 明确排除（绝不允许进入备份）：
- * - 更新源 URL / 更新偏好（mr-update-prefs）
+ * - 更新源 URL / 更新偏好（历史遗留的 mr-update-prefs，已随旧补丁通道下线）
  * - 浏览器最近访问（mr-browser-recents）与辅助 WebView 交接状态
  * - 页签 / 会话 / 请求头 / Cookie 等凭据或运行时状态
  * - 按书的阅读态（mr-wt-*），避免把旧 bookId 带到恢复后的书库

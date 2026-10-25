@@ -793,10 +793,11 @@ pub fn diagnostics_update_context(context: RuntimeContextInput) -> Result<(), St
 
 #[tauri::command]
 pub fn diagnostics_collect(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     redact_url_paths: bool,
 ) -> Result<DiagnosticBundle, String> {
-    let app_info = crate::update::get_app_info();
+    let app_info = crate::update::get_app_info(app);
     let settings = state.settings.lock().clone();
     let private_terms = known_private_terms(state.inner());
     let proxy = settings.online_proxy.trim().to_string();

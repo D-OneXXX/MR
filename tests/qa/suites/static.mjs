@@ -572,6 +572,7 @@ export async function runStaticSuite(ctx, report) {
 
   checkCapabilityWall(root, report);
   checkStorageWhitelist(root, report);
+  checkUpdateChannelSource(root, report);
   checkWebtoonTextureGuard(root, report);
   checkProductionBundle(root, report);
   checkNoUnusedCustomProtocol(root, report);
@@ -579,6 +580,94 @@ export async function runStaticSuite(ctx, report) {
   checkPostI18nHardcodedText(root, report);
   checkReleaseSurface(root, report);
   checkAntiMockGuards(root, report);
+}
+
+/* ------------------------------------------------------------------ */
+/* §3.2 更新通道唯一事实源守卫                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 更新通道的端点与公钥只能来自构建期写进二进制的 `tauri.conf.json
+ * plugins.updater`。设置页签名徽章（`get_app_info`）与隐私安全自检
+ * （`security_audit`）必须读同一份配置。
+ *
+ * 0.17.0 的事故：自检卡读的是已下线的旧补丁通道（编译期 MR_UPDATE_PUBKEY +
+ * 本机遗留清单地址），正式版必然显示「尚未配置更新清单地址 / 签名公钥：未启用」
+ * 的假告警。本守卫把「唯一事实源」写成硬契约，防止回归。
+ */
+export function checkUpdateChannelSource(root, report) {
+  const errors = [];
+  const read = (relative) => {
+    const file = path.join(root, relative);
+    if (!fs.existsSync(file)) {
+      errors.push(`缺少 ${relative}`);
+      return "";
+    }
+    return fs.readFileSync(file, "utf8");
+  };
+
+  const updateRs = read("src-tauri/src/update.rs");
+  const securityRs = read("src-tauri/src/security.rs");
+  const privacyApi = read("src/features/privacy/api.ts");
+  const updateTypes = read("src/features/update/types.ts");
+  const sanitizer = read("src/lib/storageSanitizer.ts");
+
+  // 1) 提取器与唯一读取点必须存在。
+  if (!updateRs.includes("NativeUpdaterConfig")) {
+    errors.push("update.rs 缺少 NativeUpdaterConfig（更新通道配置提取器）");
+  }
+  if (!updateRs.includes("from_tauri_config")) {
+    errors.push("update.rs 缺少 from_tauri_config（未从运行时 Tauri 配置读取更新通道）");
+  }
+  if (!securityRs.includes("from_tauri_config")) {
+    errors.push(
+      "security.rs 的自检未读取构建期更新通道配置（正式版会出现未配置/未签名假告警）",
+    );
+  }
+
+  // 2) 自检不得回退到旧补丁通道的单一事实源。
+  if (securityRs.includes("update_key_configured")) {
+    errors.push("security.rs 仍在用旧补丁通道的 update_key_configured 判定签名");
+  }
+  if (securityRs.includes("manifest_url")) {
+    errors.push("security.rs 仍在读本机遗留清单地址 manifest_url");
+  }
+  if (/manifestUrl\s*[:=]/.test(privacyApi)) {
+    errors.push("privacy/api.ts 仍在向 security_audit 传本机更新源地址");
+  }
+
+  // 3) 已下线的遗留偏好不得复活。
+  if (updateTypes.includes("mr-update-prefs") || updateTypes.includes("manifestUrl")) {
+    errors.push("features/update/types.ts 仍在读写旧补丁通道的本机偏好");
+  }
+  if (!/DEPRECATED_KEY_PREFIXES[\s\S]*?"mr-update-prefs"/.test(sanitizer)) {
+    errors.push("storageSanitizer.ts 未把 mr-update-prefs 登记为废弃键");
+  }
+
+  if (errors.length) {
+    fail(report, {
+      id: "static:update-channel-source",
+      suite: "static",
+      layer: "static",
+      title: "更新通道未收敛到构建期唯一事实源",
+      severity: "P1",
+      details: errors.join(" | "),
+      location: "src-tauri/src/security.rs / src/features/privacy/api.ts",
+      expected:
+        "端点与公钥只来自 tauri.conf.json plugins.updater；自检与徽章共用 NativeUpdaterConfig",
+      actual: errors.join(" | "),
+      rootCause: "自检改读了已下线的旧补丁通道，正式版出现「未配置 / 未签名」假告警",
+      fix: "按 AGENTS.md §4.1 用 update::NativeUpdaterConfig::from_tauri_config 统一读取",
+    });
+  } else {
+    ok(report, {
+      id: "static:update-channel-source",
+      suite: "static",
+      layer: "static",
+      title: "更新通道端点与公钥收敛到构建期唯一事实源",
+      details: "自检与签名徽章共用 NativeUpdaterConfig，旧补丁通道偏好已下线",
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ */

@@ -537,17 +537,72 @@ fn configured_public_key() -> Option<&'static str> {
         .filter(|key| !key.is_empty())
 }
 
-/// 原生 GitHub 通道（`tauri.conf.json plugins.updater.pubkey`）是否配置公钥。
-/// 由 `lib.rs` 在 setup 阶段注入一次；序列化整个 Config 而非逐字段匹配，
-/// 避免依赖 tauri-utils `PluginConfig` 的内部形态。
-static NATIVE_UPDATER_PUBKEY: OnceLock<bool> = OnceLock::new();
-
-pub fn set_native_updater_pubkey_present(present: bool) {
-    let _ = NATIVE_UPDATER_PUBKEY.set(present);
+/// 官方 GitHub 更新通道（`tauri-plugin-updater`）的构建期配置。
+///
+/// 端点与公钥由 `tauri.conf.json → plugins.updater` 在构建期写死进二进制，
+/// 运行时从 Tauri 配置读取。这是「更新清单是否存在、是否 HTTPS、是否配置了
+/// 签名公钥」的唯一事实源：设置页签名徽章与隐私安全审计都从这里取值，
+/// 避免出现「一边已配置、一边未配置」的矛盾展示。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeUpdaterConfig {
+    /// 更新清单地址（`plugins.updater.endpoints`）。
+    pub endpoints: Vec<String>,
+    /// Minisign 签名公钥（`plugins.updater.pubkey`）。
+    pub pubkey: String,
 }
 
-pub fn native_updater_pubkey_present() -> bool {
-    *NATIVE_UPDATER_PUBKEY.get().unwrap_or(&false)
+impl NativeUpdaterConfig {
+    /// 从运行时 Tauri 配置中提取官方更新通道的端点与公钥。
+    ///
+    /// 序列化整个 Config 而非逐字段匹配，避免依赖 tauri-utils `PluginConfig`
+    /// 的内部形态；解析失败一律退化为「未配置」，绝不 panic。
+    pub fn from_tauri_config(config: &tauri::Config) -> Self {
+        let value = serde_json::to_value(config).unwrap_or(serde_json::Value::Null);
+        Self::from_json(&value)
+    }
+
+    /// 从 Tauri 配置的 JSON 视图中提取端点与公钥；结构缺失或非法时退化为
+    /// 「未配置」，绝不 panic。
+    pub fn from_json(value: &serde_json::Value) -> Self {
+        let updater = value
+            .get("plugins")
+            .and_then(|plugins| plugins.get("updater"));
+        let endpoints = updater
+            .and_then(|updater| updater.get("endpoints"))
+            .map(collect_endpoint_strings)
+            .unwrap_or_default();
+        let pubkey = updater
+            .and_then(|updater| updater.get("pubkey"))
+            .and_then(|key| key.as_str())
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        Self { endpoints, pubkey }
+    }
+
+    /// 是否配置了更新清单端点。
+    pub fn has_endpoints(&self) -> bool {
+        !self.endpoints.is_empty()
+    }
+
+    /// 是否配置了 Minisign 签名公钥。
+    pub fn has_pubkey(&self) -> bool {
+        !self.pubkey.is_empty()
+    }
+}
+
+/// `endpoints` 允许是单个字符串或字符串数组；只保留非空字符串项。
+fn collect_endpoint_strings(value: &serde_json::Value) -> Vec<String> {
+    let raw: Vec<&str> = match value {
+        serde_json::Value::Array(items) => items.iter().filter_map(|item| item.as_str()).collect(),
+        serde_json::Value::String(single) => vec![single.as_str()],
+        _ => Vec::new(),
+    };
+    raw.into_iter()
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// 是否在构建期配置了补丁通道的更新签名公钥（下载/回环策略门使用；
@@ -561,8 +616,8 @@ pub fn signature_configured() -> bool {
 /// - 原生 GitHub 通道：`tauri.conf.json plugins.updater.pubkey`。
 ///
 /// 这是设置页「软件更新」卡片签名徽章的唯一事实源。
-pub fn any_update_signature_configured() -> bool {
-    signature_configured() || native_updater_pubkey_present()
+pub fn any_update_signature_configured(native: &NativeUpdaterConfig) -> bool {
+    signature_configured() || native.has_pubkey()
 }
 
 /// 最近一次校验的时间与状态（"verified" / "failed"）；安全面板使用。
@@ -1756,7 +1811,8 @@ fn spawn_installer(_path: &Path, _format: &str, _relaunch_exe: &Path) -> Result<
 
 /// 应用基础信息（同步）。
 #[tauri::command]
-pub fn get_app_info() -> AppInfo {
+pub fn get_app_info(app: tauri::AppHandle) -> AppInfo {
+    let native = NativeUpdaterConfig::from_tauri_config(app.config());
     AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         build_baseline: build_baseline().to_string(),
@@ -1767,7 +1823,7 @@ pub fn get_app_info() -> AppInfo {
             "release"
         }
         .to_string(),
-        signature_configured: any_update_signature_configured(),
+        signature_configured: any_update_signature_configured(&native),
         sha256_enforced: true,
         build_origin: build_origin().to_string(),
         linux_install: crate::platform::install_channel().to_string(),

@@ -90,8 +90,7 @@ jobs:
         continue-on-error: true
         run: cargo audit --file src-tauri/Cargo.lock
 
-      # 已知 Vite 6.4.3 dev-server advisory 与 React Router 6.x open-redirect
-      # 需要跨大版本升级；打包产物不使用 dev server，本轮先保持可见。
+      # 依赖审计保持可见报告；新的 high/critical 公告需在发布评审前处置。
       - name: NPM audit report (production dependencies)
         continue-on-error: true
         run: npm audit --omit=dev --audit-level=high

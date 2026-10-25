@@ -13,6 +13,10 @@ on:
         description: "Skip GitHub-hosted full QA (requires a completed local full-QA attestation)"
         type: boolean
         default: false
+      local_qa_total:
+        description: "Local full-QA passed count written into the release notes (only used when skip_full_qa=true)"
+        type: string
+        default: "226"
 
 permissions:
   contents: write
@@ -133,7 +137,7 @@ jobs:
 
             - **Installer:** download the NSIS asset below.
             - **Updater:** `latest.json` and its signature are published with this release.
-            - **QA:** ${{ (github.event_name == 'workflow_dispatch' && inputs.skip_full_qa) && 'Full local QA passed (224/224); GitHub-hosted full QA skipped for this release due Windows Server 2022 / WebView2 131-specific UI/cache timing failures.' || 'Full GitHub-hosted QA passed.' }}
+            - **QA:** ${{ (github.event_name == 'workflow_dispatch' && inputs.skip_full_qa) && format('Full local QA passed ({0}); GitHub-hosted full QA skipped for this release due Windows Server 2022 / WebView2 131-specific UI/cache timing failures.', inputs.local_qa_total) || 'Full GitHub-hosted QA passed.' }}
             - **Source diff:** https://github.com/D-OneXXX/MR/commits/${{ github.ref_name }}
 
             Installation and verification notes are in the repository README. Linux assets follow

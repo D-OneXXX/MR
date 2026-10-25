@@ -115,10 +115,12 @@
 
    > **本地全量 QA 证明发布（例外）**：当 GitHub-hosted Windows runner 因已知
    > WebView2 131 环境问题阻塞全量 QA，且本机已运行 `node tests/qa/run-qa.mjs`
-   > 得到 224/224、P0–P3=0，可由维护者手动触发：
+   > 得到 226/226、P0–P3=0，可由维护者手动触发：
    > ```bat
-   > gh workflow run release-windows.yml --ref v0.17.1 -f skip_full_qa=true
+   > gh workflow run release-windows.yml --ref v0.17.1 -f skip_full_qa=true -f local_qa_total=226
    > ```
+   > `local_qa_total` 会原样写进发布说明的 QA 行；**每次受控发布都必须按当次本地
+   > 全量 QA 的实际通过数传入**，不要沿用上一版的数字。
    > 发布说明必须写明“本地全量 QA 已通过、CI 全量 QA 因环境原因跳过”；
    > 这是例外，不是默认发布流程。
 

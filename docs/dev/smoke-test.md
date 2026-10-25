@@ -190,7 +190,7 @@
 - [ ] `npx tsc --noEmit` 零错误。
 - [ ] `npm run test:version` 全绿。
 - [ ] `npm run version:check` 为 0.17.1。
-- [ ] `node tests\qa\run-qa.mjs` 无 P0/P1；全量 224 项通过、静态 backlog 0 条，
+- [ ] `node tests\qa\run-qa.mjs` 无 P0/P1；全量 226 项通过、静态 backlog 0 条，
       与 `docs/TESTING.md` 一致。
 - [ ] `npm run build` 产出 `dist/index.html` 与 `dist/recovery.html`；`cargo check` 通过。
 

@@ -894,6 +894,11 @@ export function checkReleaseSurface(root, report) {
   if (linuxStepText && !/gh release create[^\n]*--verify-tag/.test(linuxStepText)) {
     errors.push("release-linux-critical.yml 必须用 gh release create --verify-tag（不传 target_commitish）");
   }
+  // AppImage 的 minisign 签名必须作为 Release 资产发布：清单里虽然内嵌了签名，
+  // 但缺了 .sig 资产，用户就无法手动验签（Windows 通道同样发布 .exe.sig）。
+  if (linuxStepText && !linuxStepText.includes("appimage/*.AppImage.sig")) {
+    errors.push("release-linux-critical.yml 必须上传 appimage/*.AppImage.sig");
+  }
 
   // 常规 CI 必须覆盖 main 与 PR，且门禁步骤真实存在于 steps 内。
   for (const [file, markers] of [

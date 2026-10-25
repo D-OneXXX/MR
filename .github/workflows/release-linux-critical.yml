@@ -164,6 +164,7 @@ jobs:
             src-tauri/target/release/bundle/deb/*.deb \
             src-tauri/target/release/bundle/rpm/*.rpm \
             src-tauri/target/release/bundle/appimage/*.AppImage \
+            src-tauri/target/release/bundle/appimage/*.AppImage.sig \
             src-tauri/target/release/bundle/appimage/latest-linux-critical.json \
             $(ls channel/latest.json 2>/dev/null || true) \
             --clobber

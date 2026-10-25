@@ -161,10 +161,23 @@ function renderChecks(github) {
   if (!github.checkRuns || github.checkRuns.length === 0) {
     return "- HEAD CI：UNKNOWN（没有 check-run 数据）";
   }
-  const lines = ["| 检查 | 状态 | 结论 |", "|---|---|---|"];
+  const protection = github.branchProtection;
+  const scopeKnown = Boolean(
+    protection?.available && protection.protected !== false,
+  );
+  const required = new Set(protection?.requiredChecks || []);
+  const lines = [
+    "| 检查 | 必需 | 状态 | 结论 |",
+    "|---|---|---|---|",
+  ];
   for (const check of github.checkRuns) {
+    const scope = scopeKnown
+      ? required.has(check.name)
+        ? "是"
+        : "否"
+      : "UNKNOWN";
     lines.push(
-      `| ${mdCell(check.name)} | ${mdCell(check.status)} | ${mdCell(check.conclusion || "—")} |`,
+      `| ${mdCell(check.name)} | ${scope} | ${mdCell(check.status)} | ${mdCell(check.conclusion || "—")} |`,
     );
   }
   return lines.join("\n");

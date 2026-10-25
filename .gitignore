@@ -23,6 +23,7 @@ dist-ssr
 
 # Local agent tooling (kept on disk, not published)
 .zcode/
+.opencodereview/
 
 # Local environment and signing material
 .env

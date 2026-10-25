@@ -15,6 +15,19 @@ npm run build
 node tests/qa/run-qa.mjs --suite=static
 ```
 
+## Governance checks
+
+```bash
+npm run test:governance
+npm run status
+npm run labels:check   # requires gh auth and labels already applied
+```
+
+`npm run status` writes `docs/PROJECT_STATE.md`; it is generated and must not be
+hand-edited. `npm run labels:check` never changes remote labels; use
+`npm run labels:sync -- --apply` only from a maintainer account. The workflow
+rules live in [ENGINEERING_WORKFLOW.md](ENGINEERING_WORKFLOW.md).
+
 ## Rust checks
 
 ```bash
@@ -66,11 +79,14 @@ Remove personal paths, book titles, cookies, tokens, and full private URLs befor
 ## CI gates
 
 - `.github/workflows/ci-windows-check.yml` — version gate, TypeScript, production build,
-  Rust unit and integration tests, static QA.
+  Rust unit and integration tests, governance tests, and static QA.
 - `.github/workflows/ci-linux-check.yml` — Linux `cfg` compilation, clippy, Rust tests,
-  xvfb-backed integration tests, and visible dependency-audit reports.
+  xvfb-backed integration tests, governance tests, and visible dependency-audit reports.
 - `.github/workflows/release-windows.yml` — full QA before signing/publishing NSIS artifacts.
 - `.github/workflows/release-linux-critical.yml` — critical-fix Linux channel.
+
+> Phase 1–3: the release workflows still publish directly from a tag push. Do not push
+> any `v*` tag until Phase 4 replaces them with Draft + approval.
 
 Dependency-audit steps are currently visible reports rather than hard blockers. Triage results
 before a release; do not disable a failing guard just to make the pipeline green.

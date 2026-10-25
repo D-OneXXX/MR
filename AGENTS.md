@@ -8,6 +8,10 @@
 - 使命：本地优先、零遥测、零静默副作用的 Windows 桌面漫画阅读器。
 - 当前版本：`0.17.1`（版本单一事实源是 `package.json`，`npm run version:sync` 负责同步）。
 
+> **工程流程入口**：`docs/ENGINEERING_WORKFLOW.md` 与本文件同时生效。Issue、分支/Worktree、PR、质量门禁、发布审批与跨对话恢复按该文件执行。
+>
+> **Phase 1–3 发布暂停**：在 Phase 4 发布改造完成并获用户明确批准前，禁止推送任何 `v*` 发布 Tag。当前 Tag 推送会直接公开发布，且没有人工审批环境。
+
 ---
 
 ## 0. 术语与命名
@@ -271,6 +275,10 @@ node tests\qa\run-qa.mjs
 ```
 
 - 提交信息遵循 Conventional Commits 中文说明（`feat:` / `fix:` / `refactor!:` + 3–6 条中文要点）。
+- 任务入口：一个 Issue 一个分支/Worktree；认领 = Assignee + `status:in-progress`；同一文件同一时间只有一个写者。完整规则见 `docs/ENGINEERING_WORKFLOW.md`。
+- 新 Agent 开始前必须运行 `npm run status`，阅读 `docs/PROJECT_STATE.md` 与 `docs/ENGINEERING_WORKFLOW.md`。
+- 禁止用 `git stash`、`git checkout --`、强制推送或删除他人分支来清理工作区；冲突必须显式记录。
+- Phase 1–3 禁止推送 `v*` Tag；正式发布只按 `docs/ENGINEERING_WORKFLOW.md` 的 Draft + 审批流程执行，且每次发布需用户单独授权。
 - 涉及 UI 的改动必须同步：6 语字典、QA 回归、`docs/TESTING.md`、`docs/TECHNICAL.md`。
 - 涉及后端数据结构/命令的改动必须同步：`docs/TECHNICAL.md` 的数据模型与命令契约小节。
 - 子代理协作：按**文件所有权**切分，同一文件同一时间只允许一个代理写；主代理负责集成与验收。
@@ -284,3 +292,6 @@ node tests\qa\run-qa.mjs
 5. 是否有任何路径/漫画名/Cookie/Token 未经脱敏进入日志或 SQLite？
 6. `tsc` / `cargo test` / `npm run build` / 全量 QA 是否全绿？
 7. 版本号与 `docs/` 是否同步？
+8. Issue / 分支 / Worktree 是否一一对应，PR 是否关联 Issue？
+9. 是否运行 `npm run test:governance`，并更新 `docs/PROJECT_STATE.md`？
+10. 是否遵守 Phase 1–3 发布暂停，未推送任何发布 Tag？

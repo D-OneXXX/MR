@@ -1,5 +1,10 @@
 # 发布与自动更新签名
 
+> **Phase 1–3 发布暂停（2026-10-26）**：在 Phase 4 发布改造完成并获用户明确批准前，
+> **禁止推送任何 `v*` 发布标签**。当前两个发布工作流仍会在 Tag 推送后直接公开发布，
+> 且没有人工审批环境。准备阶段只允许本地构建、测试和 Draft 设计；不得修改公开更新清单。
+> 完整规则见 `docs/ENGINEERING_WORKFLOW.md`。
+
 > 适用版本：`0.17.0` 起。官方更新通道使用 Tauri 2 Updater + GitHub Releases；
 > **双通道拆分**：Windows 常规通道走 `latest.json`，Linux 长期稳定分支只接收
 > 高危安全/崩溃补丁，走 `latest-linux-critical.json`（平台专属配置
@@ -80,6 +85,9 @@
 `GITHUB_TOKEN` 由 Actions 自动提供，不需要手动添加。
 
 ## 4. 发布步骤
+
+> **Phase 1–3：以下步骤暂停执行。** 不要推送 Tag，不要创建公开 Release；Phase 4 将替换为
+> “固定 Commit → 全量 QA → 上传 Draft → 人工审批 → 发布”的流程。
 
 1. 修改版本（单一事实源为 `package.json`）：
 

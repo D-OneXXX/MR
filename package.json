@@ -12,6 +12,10 @@
     "version:sync": "node scripts/version-sync.mjs",
     "version:check": "node scripts/version-check.mjs",
     "test:version": "node --test scripts/version.test.mjs",
+    "test:governance": "node --test scripts/sync-labels.test.mjs scripts/project-status.test.mjs",
+    "status": "node scripts/project-status.mjs",
+    "labels:sync": "node scripts/sync-labels.mjs",
+    "labels:check": "node scripts/sync-labels.mjs --check",
     "qa:audit": "node tests/qa/run-qa.mjs"
   },
   "dependencies": {

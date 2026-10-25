@@ -39,6 +39,9 @@ jobs:
           npm run version:check
           npm run test:version
 
+      - name: Governance script tests
+        run: npm run test:governance
+
       - name: Typecheck frontend
         run: npx tsc --noEmit
 

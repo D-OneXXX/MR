@@ -8,6 +8,7 @@ body:
         Thanks for helping improve MangaReader. Do not post personal library paths,
         book titles, cookies, tokens, session headers, or private URLs. For security
         issues, use the private advisory link instead of a public issue.
+        Do not assign a severity label yourself; maintainers classify P0–P4.
   - type: input
     id: version
     attributes:
@@ -47,6 +48,50 @@ body:
       placeholder: Official Release
     validations:
       required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Choose the closest product area. Maintainers will add area labels.
+      options:
+        - Library / import / file association
+        - Reader / layout / webtoon
+        - Online reading
+        - Embedded browser / downloads
+        - Updater / installation / signing
+        - Database / backup / restore
+        - Security / privacy
+        - UI / accessibility
+        - Localization
+        - Release / packaging
+        - Other / unsure
+    validations:
+      required: true
+  - type: dropdown
+    id: data-impact
+    attributes:
+      label: Data impact
+      description: Select the highest impact you observed.
+      options:
+        - None / unsure
+        - Reading progress affected
+        - Library records affected
+        - Backup or restore affected
+        - Local files affected
+        - Credentials or privacy affected
+    validations:
+      required: true
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      options:
+        - Always
+        - Sometimes
+        - Once
+        - Not tried / cannot reproduce
+    validations:
+      required: true
   - type: textarea
     id: steps
     attributes:

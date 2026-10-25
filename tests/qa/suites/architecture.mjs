@@ -709,8 +709,12 @@ async function checkUltraTallWebtoon(ctx, report) {
   const seen = new Set();
   let brokenImages = 0;
   let totalTiles = 0;
-  const scrollSteps = 6;
-  for (let index = 0; index < scrollSteps; index += 1) {
+  let scrollSteps = 0;
+  let lastSnapshot = null;
+  // CI 的 WebView2/图片解码明显慢于开发机：固定 sleep 会在第二片解码前
+  // 就断言，造成假阴性。持续滚动并等待至少两片真正解码，超时仍按失败处理。
+  const tileDeadline = Date.now() + 30_000;
+  for (let index = 0; index < 40 && Date.now() < tileDeadline; index += 1) {
     const snapshot = await page.eval(`(() => {
       const scroller = document.querySelector(".webtoon-scroll");
       const imgs = [...document.querySelectorAll(".webtoon-tile img")];
@@ -724,26 +728,32 @@ async function checkUltraTallWebtoon(ctx, report) {
         clientHeight: scroller ? scroller.clientHeight : 0,
       };
     })()`);
+    lastSnapshot = snapshot;
+    scrollSteps = index + 1;
     totalTiles = Math.max(totalTiles, snapshot.tiles);
-    brokenImages += snapshot.broken;
+    brokenImages = Math.max(brokenImages, snapshot.broken);
     for (const src of snapshot.srcs) seen.add(src);
-    if (index < scrollSteps - 1) {
-      await page.eval(`(() => {
-        const scroller = document.querySelector(".webtoon-scroll");
-        if (!scroller) return false;
-        scroller.scrollTop = Math.min(
-          scroller.scrollHeight - scroller.clientHeight,
-          scroller.scrollTop + Math.max(200, (scroller.scrollHeight - scroller.clientHeight) / ${scrollSteps}),
-        );
-        return true;
-      })()`);
-      await sleep(700);
-    }
+    if (seen.size >= 2 && brokenImages === 0) break;
+    await page.eval(`(() => {
+      const scroller = document.querySelector(".webtoon-scroll");
+      if (!scroller) return false;
+      scroller.scrollTop = Math.min(
+        scroller.scrollHeight - scroller.clientHeight,
+        scroller.scrollTop + Math.max(200, (scroller.scrollHeight - scroller.clientHeight) / 6),
+      );
+      return true;
+    })()`);
+    await sleep(600);
   }
   evidence.ui = {
     maxTilesInDom: totalTiles,
     distinctTileImages: seen.size,
     brokenImages,
+    scrollSteps,
+    images: lastSnapshot?.images ?? 0,
+    scrollTop: lastSnapshot?.scrollTop ?? 0,
+    scrollHeight: lastSnapshot?.scrollHeight ?? 0,
+    clientHeight: lastSnapshot?.clientHeight ?? 0,
   };
 
   if (totalTiles < 1) problems.push("条漫 DOM 未渲染任何切片节点（.webtoon-tile）");

@@ -53,6 +53,14 @@ async function waitForRecovery(ctx, timeout = 16_000) {
     timeout: 12_000,
     label: "recovery rendered",
   });
+  // 恢复窗先渲染 loading shell，再异步取 get_recovery_context；CI 上
+  // 只等正文长度会把 "Loading…" 误当成已完成，随后读到空原因。
+  await page
+    .waitFor(
+      `!document.body.innerText.includes("Loading") && !document.body.innerText.includes("加载中")`,
+      { timeout: 12_000, label: "recovery context loaded" },
+    )
+    .catch(() => {});
   return { page, target };
 }
 
@@ -140,6 +148,14 @@ export async function runChaosSuite(ctx, report) {
         actual: "未出现 recovery target",
       });
     } else {
+      // 恢复原因由异步 IPC 填充；给慢速 CI 一个明确的就绪条件，
+      // 超时仍由下面的原因断言判失败。
+      await recovery.page
+        .waitFor(`document.body.innerText.includes("Repeated clicks")`, {
+          timeout: 12_000,
+          label: "rage-click recovery reason",
+        })
+        .catch(() => {});
       const body = await recovery.page.eval("document.body.innerText");
       const mainStillSame = (await targetsOnPort(ctx)).some((target) => target.id === mainTarget?.id);
       if (!body.includes("Repeated clicks") || !mainStillSame) {

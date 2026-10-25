@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-10-25T01:06:30.130Z",
+  "updatedAt": "2026-10-25T01:25:47.237Z",
   "regressions": [
     {
       "id": "REG-WT-ANCHOR",

@@ -157,6 +157,41 @@ test("renderStatusSnapshot separates GitHub status lists from the check table", 
   assert.match(markdown, /- 发布审批环境：未配置\n\n## 4\. 活跃 Issue/);
 });
 
+test("renderStatusSnapshot marks required and non-required check runs", () => {
+  const base = baseSnapshot();
+  const snapshot = baseSnapshot({
+    github: {
+      ...base.github,
+      checkRuns: [
+        { name: "Windows check", status: "completed", conclusion: "success" },
+        { name: "Dependabot", status: "completed", conclusion: "failure" },
+      ],
+      branchProtection: {
+        ...base.github.branchProtection,
+        requiredChecks: ["Windows check"],
+      },
+    },
+  });
+  const markdown = renderStatusSnapshot(snapshot);
+  assert.match(markdown, /\| Windows check \| 是 \| completed \| success \|/);
+  assert.match(markdown, /\| Dependabot \| 否 \| completed \| failure \|/);
+});
+
+test("renderStatusSnapshot marks check scope UNKNOWN when protection is unavailable", () => {
+  const base = baseSnapshot();
+  const snapshot = baseSnapshot({
+    github: {
+      ...base.github,
+      checkRuns: [
+        { name: "Windows check", status: "completed", conclusion: "success" },
+      ],
+      branchProtection: { available: false },
+    },
+  });
+  const markdown = renderStatusSnapshot(snapshot);
+  assert.match(markdown, /\| Windows check \| UNKNOWN \| completed \| success \|/);
+});
+
 test("renderStatusSnapshot marks issue-derived state UNKNOWN when issue data is unavailable", () => {
   const snapshot = baseSnapshot({
     github: {

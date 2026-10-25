@@ -108,6 +108,24 @@ jobs:
         # 少了它，Linux 产物会带着 Windows 的 latest.json 端点，更新功能形同虚设。
         run: npm run tauri -- build --config src-tauri/tauri.linux.conf.json --bundles deb,rpm,appimage
 
+      # 构建期硬校验：overlay 端点必须真的进了二进制。
+      # 少了 --config 时产物会带 Windows 的 latest.json 端点，
+      # Linux 客户端的「检查更新」永远看不到任何东西，而产物本身看不出异常。
+      - name: Verify Linux updater endpoint is baked into the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="src-tauri/target/release/manga-reader-tauri"
+          if [ ! -f "$BIN" ]; then
+            echo "找不到 $BIN，overlay 构建没有产出 release 二进制" >&2
+            exit 1
+          fi
+          if ! grep -a -q "latest-linux-critical.json" "$BIN"; then
+            echo "release 二进制里没有 latest-linux-critical.json：平台 overlay 未生效" >&2
+            exit 1
+          fi
+          echo "OK: Linux updater 端点已写入二进制"
+
       - name: Generate latest-linux-critical.json
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}

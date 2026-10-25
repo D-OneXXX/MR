@@ -1,0 +1,38 @@
+name: PR governance
+
+# 只校验 PR 元数据；不执行 PR 代码。
+# 使用 base SHA 的受信任脚本，避免 PR 修改校验器绕过门禁。
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-governance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-governance:
+    name: PR governance (issue link + branch naming)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate PR metadata
+        run: |
+          if [ ! -f scripts/pr-governance.mjs ]; then
+            echo "Bootstrap: script is not on base yet; skipping until this workflow is merged."
+            exit 0
+          fi
+          node scripts/pr-governance.mjs

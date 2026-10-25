@@ -159,6 +159,15 @@ git worktree add .worktrees/issue-<id>-<slug> -b <type>/<id>-<slug> main
 5. 不包含 P0/P1 未解释风险；数据迁移有专门测试。
 6. 版本策略满足：已发布版本不得复用 Tag；需要 bump 时同步全部版本文件。
 
+PR 元数据门禁（`ci-pr-governance.yml`，required check）：
+
+- 非 Dependabot/Renovate 的 PR 必须关联 Issue（`Closes/Fixes/Resolves/Refs #N`）。
+- 分支必须形如 `fix|feat|hotfix|chore/<issue>-<slug>`，编号必须与关联 Issue 一致。
+- PR 必须包含非空的「验证」「数据与隐私」「发布影响」段落。
+- PR 必须指向 `main`。
+- Dependabot / Renovate / `*[bot]` 自动跳过。
+- 校验脚本从 base SHA 读取；不在 PR 代码中执行校验器。
+
 任一条件不满足：停下来记录 `BLOCKED`，请求用户决定。
 
 ---

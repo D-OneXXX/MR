@@ -228,7 +228,13 @@ export async function startQaApp({
       // QA 在线夹具运行在 127.0.0.1；只对 debug 构建生效，release 永远拒绝回环。
       MR_ALLOW_LOOPBACK_ONLINE: "1",
       WEBVIEW2_USER_DATA_FOLDER: webviewDir,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
+      // CI 的窗口可能不在前台；关闭渲染器/定时器/遮挡节流，避免滚动挂载
+      // 窗口和恢复窗在后台被降频，导致切片只加载 1 张或 CDP 短暂无响应。
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:
+        `--remote-debugging-port=${cdpPort}` +
+        " --disable-background-timer-throttling" +
+        " --disable-renderer-backgrounding" +
+        " --disable-backgrounding-occluded-windows",
       QA_CDP_PORT: String(cdpPort),
       ...(telegramTestOrigin
         ? { MR_TELEGRAM_TEST_ORIGIN: telegramTestOrigin }

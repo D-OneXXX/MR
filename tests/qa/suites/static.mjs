@@ -664,7 +664,7 @@ export function checkActionsPinned(root, report) {
  * plugins.updater`。设置页签名徽章（`get_app_info`）与隐私安全自检
  * （`security_audit`）必须读同一份配置。
  *
- * 0.17.0 的事故：自检卡读的是已下线的旧补丁通道（编译期 MR_UPDATE_PUBKEY +
+ * 0.17.0 / 0.17.1 的事故：自检卡读的是已下线的旧补丁通道（编译期 MR_UPDATE_PUBKEY +
  * 本机遗留清单地址），正式版必然显示「尚未配置更新清单地址 / 签名公钥：未启用」
  * 的假告警。本守卫把「唯一事实源」写成硬契约，防止回归。
  */

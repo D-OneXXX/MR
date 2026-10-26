@@ -293,7 +293,7 @@ export async function runPrivacySuite(ctx, report) {
   }
 
   // 更新通道自检必须反映构建期真实配置，而不是已下线的旧补丁通道。
-  // 0.17.0 的正式版因此长期显示「尚未配置更新清单地址 / 签名公钥：未启用」。
+  // 0.17.0 / 0.17.1 的正式版因此长期显示「尚未配置更新清单地址 / 签名公钥：未启用」。
   const audit = await invoke(page, "security_audit", {});
   const update = audit?.update ?? {};
   const updateFacts = {

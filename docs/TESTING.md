@@ -120,6 +120,12 @@ uploads `qa-evidence-<sha>` on success or failure. A release candidate must refe
 artifact; do not substitute a hand-written local QA count. It has no access to signing
 secrets and cannot publish a Release.
 
+The full QA step allows one retry of the **complete suite** for the known windows-2022
+WebView2 131 arch/lazy-load timing flake. Both attempts remain in the job log; no suite is
+skipped and assertions are not weakened. A second failure blocks the job. The first
+observed failure (`arch:ultra-tall-webtoon`, 2026-10-26) passed the same commit locally
+228/228 and had correct API tile geometry; it is tracked in #32.
+
 > Phase 1–3: the release workflows still publish directly from a tag push. Do not push
 > any `v*` tag until Phase 4 replaces them with Draft + approval.
 

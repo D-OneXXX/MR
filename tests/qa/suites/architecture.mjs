@@ -722,7 +722,9 @@ async function checkUltraTallWebtoon(ctx, report) {
         tiles: document.querySelectorAll(".webtoon-tile").length,
         images: imgs.length,
         broken: imgs.filter((img) => !(img.complete && img.naturalWidth > 0)).length,
-        srcs: imgs.map((img) => img.src.slice(0, 64)),
+        // 用完整 data URL 去重：JPEG/PNG 的前 64 字符是相同头部，
+        // 截断会把不同切片误判成同一张。
+        srcs: imgs.map((img) => img.src),
         scrollTop: scroller ? scroller.scrollTop : 0,
         scrollHeight: scroller ? scroller.scrollHeight : 0,
         clientHeight: scroller ? scroller.clientHeight : 0,
@@ -739,11 +741,14 @@ async function checkUltraTallWebtoon(ctx, report) {
       if (!scroller) return false;
       scroller.scrollTop = Math.min(
         scroller.scrollHeight - scroller.clientHeight,
-        scroller.scrollTop + Math.max(200, (scroller.scrollHeight - scroller.clientHeight) / 6),
+        scroller.scrollTop + Math.max(200, (scroller.scrollHeight - scroller.clientHeight) / 20),
       );
+      // WebView2 在程序化 scrollTop 后偶发不派发 scroll；显式补一次，
+      // 仍由真实滚动位置与图片解码断言，不改变产品行为。
+      scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
       return true;
     })()`);
-    await sleep(600);
+    await sleep(800);
   }
   evidence.ui = {
     maxTilesInDom: totalTiles,

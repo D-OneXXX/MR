@@ -4,7 +4,8 @@
 > `AGENTS.md` 负责架构、隐私、数据与产品不变量；本文件负责任务、分支、质量门禁与发布治理。
 > 两者冲突时，以更严格、更保护用户数据与发布安全的一方为准。
 >
-> 当前状态：Phase 1（治理骨架）。Phase 4 发布改造完成前，**禁止推送任何 `v*` 发布标签**。
+> 当前状态：Phase 5（v0.17.2 发布候选准备与验证）。仓库内已无 Tag 触发的发版工作流；
+> 正式发布仍需维护者本人审批，且必须先满足干净环境安装/升级验证等强制门禁。
 
 ---
 
@@ -247,21 +248,24 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 
 ---
 
-## 10. 当前发布安全暂停
+## 10. 当前发布安全状态
 
-**Phase 1–3 期间不得推送任何 `v*` Tag。**
+**Phase 4 已完成发布链路改造**：仓库内**不再存在任何 Tag 触发的发版工作流**。
+推送 `v*` 标签只创建引用，不会构建、不会公开发布。正式发布必须由维护者手动触发
+「候选」与「发布」两个工作流，两次都经过 Environment 人工审批，并在发布前通过
+「版本 + Commit + 制品 SHA-256 + 平台 + QA 证据 + 签名证据 + 干净环境安装回执」
+的绑定校验。
 
-原因：当前 `release-windows.yml` 与 `release-linux-critical.yml` 会在 Tag 推送后直接发布，且没有人工审批环境。Phase 4 完成 Draft/审批改造并获用户批准前，任何发布 Tag 都可能立即改变公开更新通道。
+Phase 5（v0.17.2 候选准备）进行中，正式发布仍需维护者本人单独批准。
 
-允许：本地构建、CI 验证、静态 QA、生成候选制品到本地或 Draft（在修改工作流后）。
-禁止：`git push origin v*`、创建会触发发布的 Release、修改公开更新清单。
+允许：本地构建、CI 验证、静态 QA、生成候选制品到 Draft。
+禁止：绕过证据门禁发布、未经审批公开发布、修改公开更新清单。
 
-当前已知发布阻塞（Phase 4 必须解决）：
+当前已知发布阻塞（正式发布前必须解除）：
 
-- `GITHUB_TOKEN` 创建 Release 被拒，当前依赖管理员预建；根因待确认。
-- 发布公开时间早于资产上传，存在更新清单空窗。
-- v0.17.1 发布使用未绑定 Commit 的本地 QA 声明。
-- 已发布 v0.17.1 不含 `main` 上后续的隐私/更新自检修复；下一次发布前必须 bump。
+- 干净 Windows VM 上的 NSIS 全新安装 / 覆盖升级 / 回滚 / 数据完整性验证
+  （共享宿主上的回执**不满足**门禁——`machine.cleanEnvironment` 必须为 true）。
+- Linux 通道的安装/升级证据（尚无 Linux 主机）。
 
 ---
 
@@ -274,12 +278,12 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 | `main` required checks | Windows + Linux + PR governance | 保持 | 已具备 |
 | `enforce_admins` | true | true（常规改动走 PR） | 已启用 |
 | required reviews | 无 | 不要求人工 review（AI 自动合并）；发布单独审批 | 已确认维持 |
-| 发布 Environment | 无 | `release-windows` + `release-linux`（required reviewer + 签名 Secret） | Phase 4 待授权配置 |
+| 发布 Environment | `release-windows` + `release-linux`（required reviewer = 维护者，签名 Secret 在 Environment 级） | 同左 | 已配置并验证（审批真实生效） |
 | Secret scanning / push protection | 开启 | 开启 | 已完成 |
 | Dependabot alerts / security updates | 开启 | 开启 | 已完成 |
 | Code scanning（CodeQL default setup） | actions + JS/TS 开启；Rust 不在默认支持列表 | 保持 | 已完成 |
 | Actions 引用 | 固定 SHA（含版本注释，静态守卫强制） | 固定 SHA | 已完成 |
-| 发布 concurrency | 无 | 按通道加 concurrency | Phase 4 |
+| 发布 concurrency | 按通道加 concurrency（候选与发布各一组，`cancel-in-progress: false`） | 同左 | 已具备 |
 
 ---
 
@@ -301,8 +305,8 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 | 1 | 治理骨架：Issue/分支/Worktree/状态/PR 模板 | 已完成（PR #14） |
 | 2 | Bug 生命周期与自动修复流程 | 已完成门禁与单 Bug 演练（PR #20/#22、#21） |
 | 3 | 质量门禁与安全扫描 | **完成**：安全/供应链/格式/夹具/发布契约门禁全部进 CI；hosted 全量 QA 已在 windows-2022 连续跑出全绿证据（main 上 run 40267990890，229/229）；#42/#51 两个偶发失败已按证据修复 |
-| 4 | RC / Draft / 审批 / 双通道发布 | 进行中：代码与工作流就绪（无 Tag 触发、候选→Draft→审批→发布、制品绑定校验、权限收敛、双通道独立），隔离演练 22/22；**待用户授权配置 Environment 与签名 Secret 后**，审批门禁才能真实生效 |
-| 5 | 发布后验证、Hotfix 与回滚 | 待开始 |
+| 4 | RC / Draft / 审批 / 双通道发布 | **已完成**：无 Tag 触发、候选→Draft→审批→发布、制品绑定校验、权限收敛、双通道独立；Environment 与签名 Secret 已配置，审批门禁与验签均已真实验证；演练 31/31；签名与安装证据纳入强制发布门禁 |
+| 5 | 发布后验证、Hotfix 与回滚 | 进行中：v0.17.2 候选准备与验证（Phase 5，见 `docs/dev/PHASE5_RELEASE_CANDIDATE.md`）；发布后验证与 Hotfix 流程待正式发布后开始 |
 | 6 | 隔离演练，不触发真实发布 | 待开始 |
 
 Phase 2 收尾于 2026-10-26：PR 元数据 required check 已生效；#18（glib 风险接受）与 #23（chaos/CDP flake）已处置。Phase 3 已于 2026-10-26 收尾：安全、供应链（Actions SHA 固定）、格式、夹具、发布契约五类门禁全部进 CI；hosted 全量 QA 在 windows-2022 连续跑出全绿证据（main 上 run 40267990890，229/229）；两个偶发失败（#32 断言判据无效、#42/#51 测试前置条件缺失）均已按证据定位并修复。唯一未完成项是需要干净 Windows VM 的真实安装/升级/回滚验证（BLOCKED）。发布候选仍按 `docs/dev/LOCAL_QA_ATTESTATION.md` 走本地 attestation，直到 Phase 4 的 Draft + 审批流落地。

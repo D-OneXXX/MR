@@ -1,19 +1,18 @@
 # v0.17.2 Release Candidate 准备与验证 · 执行计划与验收报告
 
-> **For agentic workers:** 本文件既是 Phase 5 的执行计划，也是最终验收报告。
-> 任务按勾选框跟踪；每完成一项在「执行记录」补一行真实输出。
+> **本文件既是 Phase 5 的执行计划，也是最终验收报告。**
 >
 > **授权边界（维护者 2026-10-26 授权）**：仅限版本准备、候选构建、自动化测试、
 > 安装升级验证与 Release Draft。**不包含正式公开发布**、不发布正式 Release、
 > 不修改公开更新清单、不绕过任何发布门禁、不动 Linux 通道。
 >
-> 本文件不构成发布授权；正式发布必须由维护者本人在全部门禁通过后单独批准。
+> 本文件不构成发布授权。正式发布必须由维护者本人在全部门禁通过后单独批准。
 
 **Goal:** 把 `main` 从 0.17.1 推进到 0.17.2，产出绑定「版本 + Commit + 平台 + QA 证据 +
 制品 SHA-256」的 Windows Release Candidate（Draft），并用真实证据验证签名与安装升级链路。
 
 **Architecture:** 复用 Phase 4 已建成的发布状态机：`固定 Commit → 全量 QA →
-候选工作流（签名、只建 Draft）→ 绑定校验 → 人工审批 → 发布`。本轮**不触碰发布工作流**，
+候选工作流（签名、只建 Draft）→ 绑定校验 → 人工审批 → 发布`。本轮**不触发发布工作流**，
 只在候选侧产出证据，并把「干净环境安装验证」这一强制前置条件从口头约定升级为
 机器可判定字段，避免共享宿主上的回执满足发布门禁。
 
@@ -44,424 +43,92 @@ GitHub Actions + Environments / Node 22（QA harness）
 
 ---
 
-## Task 1: 预检与版本规范核对
+## 1. 执行结果总览
 
-**Files:**
-- Read: `docs/ENGINEERING_WORKFLOW.md` §9.1/§9.2/§10、`scripts/version-lib.mjs`
-
-- [x] **Step 1: 核对工作区与版本**
-
-```bash
-git status --short                 # 期望：无输出
-git rev-parse --abbrev-ref HEAD    # 期望：main
-node -p "require('./package.json').version"   # 期望：0.17.1
-```
-
-- [x] **Step 2: 核对已发布版本与待发布变更**
-
-```bash
-gh release list --limit 10
-git log --oneline v0.17.1..main
-```
-
-- [x] **Step 3: 判定 bump 类型**
-
-`scripts/version-lib.mjs::classifyVersionChange("0.17.1","0.17.2")` →
-`{kind:"patch", updateMode:"patch-preferred"}`，符合 `docs/ENGINEERING_WORKFLOW.md` §9.1
-「已发布版本不得重打 Tag；下一次修复用新的补丁版本」与 §10「已发布 v0.17.1 不含 main 上
-后续的隐私/更新自检修复；下一次发布前必须 bump」。
-
-- [x] **Step 4: 结论落档** → 见「执行记录」第 1 行与本文件第 6 节。
+| 任务 | 结果 | 关键证据 |
+|---|---|---|
+| 1 预检与版本规范核对 | ✅ DONE | `main` 干净、版本 0.17.1；`v0.17.1..main` 41 个提交；0.17.1→0.17.2 = `patch / patch-preferred` |
+| 2 安装证据「干净环境」硬约束 | ✅ DONE | `machine.cleanEnvironment` + `machine.image` 双端校验；单测与演练同步更新；静态守卫生效 |
+| 3 版本同步到 0.17.2 | ✅ DONE | `version:sync` 写 5 个文件；`version:check` OK 0.17.2；`test:version` 6/6 |
+| 4 本地完整质量门禁 | ✅ DONE | 见第 5 节；全量 QA **230/230**，P0=P1=P2=P3=0 |
+| 5 PR 提交与合并 | ✅ DONE | PR #74 → 合并提交 `f331782`；hosted CI 6 项全绿 |
+| 6 打标签 v0.17.2 | ✅ DONE | 标签指向 `f331782`；推送后**零 workflow 被触发** |
+| 7 hosted 全量 QA | ✅ DONE | run `40324223701` success，head_sha = `f331782`，230/230 |
+| 8 候选 Draft | ✅ DONE | run `40325710339` success；`v0.17.2` Draft，7 个资产，`isDraft=true` |
+| 9 验签与安装升级验证 | ✅ DONE（宿主） / 🚧 BLOCKED（干净 VM） | 见第 6 节 |
+| 10 发布闸门与 Draft 隔离 | ✅ DONE | 三道闸门对真实远端 Draft 均拒绝；公开面字节未变 |
+| 11 visual:theme-token 观察 | ✅ DONE（未复现） | 本地与 hosted 均 12/12；观察记录已写入 `docs/TESTING.md` |
+| 12 验收报告与状态快照 | ✅ DONE | 本文件 + `docs/PROJECT_STATE.md` + `docs/ENGINEERING_WORKFLOW.md` |
 
 ---
 
-## Task 2: 安装证据的「干净环境」硬约束
+## 2. 候选身份（唯一事实）
 
-**Files:**
-- Modify: `scripts/release-smoke/windows-install-upgrade.ps1`（新增 `-CleanEnvironment` /
-  `-ImageName`，证据写入 `machine.cleanEnvironment` 与 `machine.image`）
-- Modify: `scripts/release-governance/evidence.mjs`（`validateInstallEvidence` 要求
-  windows 通道声明干净环境 + 镜像标识）
-- Modify: `scripts/release-governance/evidence.test.mjs`（新增正反例）
-- Modify: `scripts/release-governance/rehearse.mjs`（场景 I 增加干净环境判定）
-- Modify: `docs/dev/RELEASE.md` §4.2（干净 VM 命令行加新参数）
-
-**Interfaces:**
-- Produces: `evidence.mjs::validateInstallEvidence(evidence, expected)` 新增问题串
-  「安装证据未声明干净环境（共享宿主上的验证不满足发布强制条件）」；
-  证据字段 `machine.cleanEnvironment: boolean`、`machine.image: string`。
-- Consumes: 无（纯函数 + 脚本参数）。
-
-- [ ] **Step 1: 写失败测试**（`evidence.test.mjs`）
-
-```js
-test("windows 通道拒绝未声明干净环境的安装证据", () => {
-  const evidence = baseInstallEvidence();
-  delete evidence.machine.cleanEnvironment;
-  const problems = validateInstallEvidence(evidence, { channel: "windows" });
-  assert.ok(problems.some((p) => p.includes("干净环境")));
-});
-
-test("windows 通道要求干净环境声明镜像标识", () => {
-  const evidence = baseInstallEvidence({ cleanEnvironment: true, image: "" });
-  const problems = validateInstallEvidence(evidence, { channel: "windows" });
-  assert.ok(problems.some((p) => p.includes("镜像")));
-});
-```
-
-- [ ] **Step 2: 运行测试确认失败**
-
-Run: `node --test scripts/release-governance/evidence.test.mjs`
-Expected: FAIL（新用例失败，旧用例通过）
-
-- [ ] **Step 3: 实现契约**（`evidence.mjs`）
-
-在 `validateInstallEvidence` 的 `machine?.os` 检查之后追加：
-
-```js
-const requiredChecks = expected.channel === "linux-critical" ? ... : ...
-if (expected.channel !== "linux-critical") {
-  if (evidence.machine?.cleanEnvironment !== true) {
-    problems.push("安装证据未声明干净环境（共享宿主上的验证不满足发布强制条件）");
-  }
-  if (!String(evidence.machine?.image || "").trim()) {
-    problems.push("安装证据未记录干净环境镜像标识（machine.image）");
-  }
-}
-```
-
-- [ ] **Step 4: 脚本产出字段**（`windows-install-upgrade.ps1`）
-
-参数区新增：
-
-```powershell
-  [Parameter(Mandatory = $false)]
-  [switch]$CleanEnvironment,
-
-  [Parameter(Mandatory = $false)]
-  [string]$ImageName = "",
-```
-
-证据 `machine` 段新增：
-
-```powershell
-      cleanEnvironment = [bool]$CleanEnvironment
-      image = if ($ImageName) { $ImageName } else { $env:IMAGE_NAME }
-```
-
-并在声明干净环境但缺少镜像标识时 `Assert-True $false`，使脚本自身失败。
-
-- [ ] **Step 5: 运行测试确认通过**
-
-Run: `node --test scripts/release-governance/evidence.test.mjs && npm run release:rehearse`
-Expected: 全部 PASS；演练场景 I 增加「干净环境缺失即拒绝」判定
-
-- [ ] **Step 6: 提交**
-
-```bash
-git add scripts/release-smoke/windows-install-upgrade.ps1 \
-        scripts/release-governance/evidence.mjs \
-        scripts/release-governance/evidence.test.mjs \
-        scripts/release-governance/rehearse.mjs docs/dev/RELEASE.md
-git commit -m "feat(release): 安装证据必须声明干净环境并记录镜像标识"
-```
+| 项 | 值 |
+|---|---|
+| 候选 ID | `rc-v0.17.2-f331782a29e5` |
+| 版本 / 标签 | `0.17.2` / `v0.17.2`（annotated tag → `f331782a29e53885c061b56d740dbd1faabdec1c`） |
+| Commit | `f331782a29e53885c061b56d740dbd1faabdec1c`（PR #74 合并提交，在 `origin/main` 上） |
+| 通道 / 平台 | `windows` / `windows-x86_64` |
+| QA 证据 | `qa-full` run `40324223701`（success，head_sha = 候选 Commit，230/230） |
+| 主制品 | `MangaReader_0.17.2_x64-setup.exe`，SHA-256 `b6d7048894a4b16382ce25b5762c881dba79e03f1642acf3452ceb4f11f1db82`（5 306 377 字节） |
+| 签名 | `MangaReader_0.17.2_x64-setup.exe.sig`，SHA-256 `ee09d934…` |
+| 清单 | `latest.json`，SHA-256 `d9c43243…`（version 0.17.2 / windows-x86_64） |
+| Draft 状态 | `isDraft=true`，`publishedAt=null`，`prerelease=false` |
 
 ---
 
-## Task 3: 版本同步到 0.17.2
+## 3. 本轮实测发现并修复的四个真实缺陷
 
-**Files:**
-- Modify: `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、
-  `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（全部由同步脚本写入）
+这四个缺陷都**发生在门禁之前或门禁内部**，发布门禁自己无法发现；其中三个会**直接阻断正式发布**。
 
-- [ ] **Step 1: 干跑确认变更类型**
+| # | 缺陷 | 现象 | 根因 | 修复 |
+|---|---|---|---|---|
+| 1 | **回执契约分裂**（发布阻断级） | 发布工作流第一道闸门 `verify-draft.mjs` 对**安装脚本真实产出的回执**必然判「疑似审批后替换制品」 | `rc-record.mjs` 期望 `installer.sha256` + 检查项 `install/upgrade/rollback/dataIntegrity`；脚本与 `evidence.mjs` 用的是 `artifactSha256` + `freshInstall/upgrade/dataIntegrity/recovery`。两套字段名长期并存 | 统一为**唯一契约**（`artifactName`/`artifactSha256` + 四个检查项），`rc-record.mjs` 与 `evidence.mjs` 对齐；演练夹具与单测同步；新增「旧结构必须被拒绝」用例 |
+| 2 | **卸载路径解析错误**（安装验证假失败） | 脚本末尾「卸载后卸载列表不再包含 MangaReader」恒失败，`verdict` 恒为 FAIL | 注册表 `UninstallString` 是**带引号且含空格**的路径（`"C:\Program Files\…"`），脚本用 `.Split(" ")[0]` 截成 `"C:\Program`，卸载器从未执行 | 正确解析引号路径；并对 NSIS 卸载器的**异步清理**做 30s 有界轮询（不弱化断言） |
+| 3 | **minisign 在 Windows 上装不上**（发布阻断级） | `Expand-Archive: NotSupportedArchiveFileExtension`，发布流水线第一步就崩 | 压缩包临时文件丢掉了 `.zip` 扩展名，而 PowerShell `Expand-Archive` 只接受 `.zip` | 按 URL 保留真实扩展名（新增 `resolveArchiveName`），并检查解压命令退出码 |
+| 4 | **minisign 定位不到 / 选错架构**（发布阻断级） | 报「找不到 minisign」；修复后又命中 `aarch64` 可执行文件而静默拿不到结果 | 官方包解压后位于 `tools/minisign/minisign-win64/x86_64/`，脚本只找扁平路径；递归查找时又未按架构排序 | 递归定位 `tools/minisign` 且**优先宿主架构**；失败时输出工具执行错误 |
 
-```bash
-npm run version:sync -- --dry-run 0.17.2
-```
-Expected: `change.kind = "patch"`，`updateMode = "patch-preferred"`
-
-- [ ] **Step 2: 执行同步**
-
-```bash
-npm run version:sync -- 0.17.2
-```
-
-- [ ] **Step 3: 校验无漂移**
-
-```bash
-npm run version:check && npm run test:version
-```
-Expected: 两者均 exit 0，五个版本文件一致为 `0.17.2`
+回归保护：新增 `scripts/release-governance/minisign-tooling.test.mjs`（5 项）并入 `npm run test:release`；
+`rc-record.test.mjs` 与 `evidence.test.mjs` 新增契约与干净环境用例；演练新增 I8 场景。
 
 ---
 
-## Task 4: 本地完整质量门禁
+## 4. 执行记录（真实输出）
 
-- [ ] **Step 1: 前端类型与生产构建**
-
-```bash
-npx tsc --noEmit && npm run build
-```
-
-- [ ] **Step 2: Rust 单测与 clippy**
-
-```bash
-cargo test --lib --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-npm run format:check
-```
-
-- [ ] **Step 3: 治理与发布契约**
-
-```bash
-npm run test:governance
-npm run test:fixtures
-npm run test:release
-npm run release:rehearse
-node tests/qa/run-qa.mjs --suite=static
-```
-
-- [ ] **Step 4: 依赖审计**
-
-```bash
-npm audit --omit=dev --audit-level=high
-```
-
-- [ ] **Step 5: 全量 QA**
-
-```bash
-node tests/qa/run-qa.mjs
-```
-Expected: 全部通过、P0/P1 = 0；失败必须定位并修复，**不得跳过**。
+| 步骤 | 命令 / 动作 | 结果 |
+|---|---|---|
+| 预检 | `git status --short` / `node -p require('./package.json').version` | 干净；0.17.1 |
+| 待发布变更 | `git log --oneline v0.17.1..main` | 41 个提交（隐私/更新自检修复 + Phase 4 治理 + 本轮门禁） |
+| 版本类型 | `version:sync -- --dry-run 0.17.2` | `kind=patch`、`updateMode=patch-preferred` |
+| 版本同步 | `npm run version:sync -- 0.17.2` | 写 `package.json` / `package-lock.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` |
+| 一致性 | `npm run version:check` / `npm run test:version` | OK 0.17.2；6/6 |
+| 本地门禁 | 见第 5 节 | 全绿 |
+| PR | `gh pr create` → PR #74 | CI 6 项全绿后 squash 合并为 `f331782` |
+| 打标签 | `git tag -a v0.17.2 f331782` + `git push origin v0.17.2` | 推送时间 12:37:35Z；此后**零 workflow 运行** |
+| hosted QA | `gh workflow run qa-full.yml --ref main -f ref=v0.17.2` | run `40324223701` success，230/230，P0–P3=0 |
+| 候选 | `gh workflow run release-candidate.yml -f tag=v0.17.2 -f qa_run_id=40324223701 -f rehearsal=false` | run `40325710339`：Environment 审批 `waiting → queued`（**维护者本人在 GitHub UI 批准**）→ success |
+| 候选产物 | `gh release view v0.17.2` | Draft，7 资产，`publishedAt=null` |
+| 摘要比对 | 实际下载 vs `rc-record.json` | 3/3 制品 SHA-256 **完全一致** |
+| 清单 | `verify-updater-manifest.mjs latest.json --expect-version 0.17.2 --require-platform windows-x86_64` | OK |
+| 验签 | 官方 minisign 0.12 vs `tauri.conf.json` 配置公钥 | `Signature and comment signature verified`，公钥 ID `67CB304460E08E4A` |
+| 安装 A | 全新安装 0.17.2 候选 | 全部 OK，`verdict=PASS` |
+| 安装 B | 0.17.1 → 0.17.2 覆盖升级 → 回滚 0.17.1 | 全部 OK，`verdict=PASS`（四项 check 全 pass） |
+| 数据完整性 | 应用读回 + 直接读 SQLite | 8 本书、`QA Local Folder` 进度 = 3、`scroll_pct=0.42`、`reading_log` 1 行 |
+| 闸门 | `verify-draft.mjs` / `verify-evidence.mjs` 对真实 Draft | **拒绝**（非零码），理由见第 6.2 节 |
 
 ---
 
-## Task 5: 提交并合并版本准备 PR
-
-- [ ] **Step 1: 建 Issue**（标题含版本与范围）
-- [ ] **Step 2: 建分支**
-
-```bash
-git worktree add .worktrees/issue-<id>-release-0-17-2 -b chore/<id>-release-0-17-2 main
-```
-
-- [ ] **Step 3: 提交并推送，开 PR**（PR 正文含「验证」「数据与隐私」「发布影响」三段，
-  并 `Closes #<id>`）
-- [ ] **Step 4: 等 required checks 全绿**（Windows check / Linux check / PR governance /
-  Release governance rehearsal）
-- [ ] **Step 5: 按保护规则合并**（strict up-to-date），确认 `main` HEAD = 合并提交
-
----
-
-## Task 6: 打标签 v0.17.2 并确认不触发任何工作流
-
-- [ ] **Step 1: 在合并提交上打标签并推送**
-
-```bash
-git tag v0.17.2 <merge-commit>
-git push origin v0.17.2
-```
-
-- [ ] **Step 2: 记录推送前的 workflow run 数量，推送后核对无新增发版运行**
-
-```bash
-gh run list --limit 20 --json databaseId,name,createdAt
-```
-Expected: 无新增 `Release candidate` / `Publish release` 运行。
-
-- [ ] **Step 3: 核对公开面未变**
-
-```bash
-gh release view --json tagName,isDraft    # releases/latest 仍为 v0.17.1-linux-sec1
-```
-Expected: `latest.json` / `latest-linux-critical.json` 字节不变。
-
----
-
-## Task 7: hosted 全量 QA
-
-- [ ] **Step 1: 触发**
-
-```bash
-gh workflow run qa-full.yml --ref main -f ref=v0.17.2
-```
-
-- [ ] **Step 2: 等待并核对**
-
-```bash
-gh run list --workflow qa-full.yml --limit 3
-```
-Expected: `conclusion=success` 且 `head_sha` 等于候选提交；否则记录真实失败原因。
-
----
-
-## Task 8: 触发 Windows 候选工作流
-
-- [ ] **Step 1: 触发**
-
-```bash
-gh workflow run release-candidate.yml --ref main \
-  -f tag=v0.17.2 -f qa_run_id=<run id> -f rehearsal=false
-```
-
-- [ ] **Step 2: Environment 审批**
-
-`release-windows` 的 required reviewer 为维护者本人；**候选阶段只建 Draft**，
-不构成正式发布批准。
-
-- [ ] **Step 3: 核对产物**
-
-```bash
-gh release view v0.17.2 --json isDraft,assets
-```
-Expected: `isDraft=true`，资产含 NSIS 安装包、`.nsis.zip`、`.sig`、`latest.json`、
-`rc-record.json`、`rc-summary.md`。
-
----
-
-## Task 9: 验签与安装升级验证
-
-- [ ] **Step 1: 下载候选制品并校验清单**
-
-```bash
-gh release download v0.17.2 --dir candidate --clobber
-node scripts/verify-updater-manifest.mjs candidate/latest.json --require-platform windows-x86_64
-```
-
-- [ ] **Step 2: 官方 minisign 验签**
-
-```bash
-node scripts/release-governance/fetch-minisign.mjs
-node scripts/release-governance/verify-signature.mjs \
-  --artifact candidate/MangaReader_0.17.2_x64-setup.exe \
-  --public-key src-tauri/updater.key.pub --output signature-verification.json
-```
-
-- [ ] **Step 3: 安装 / 升级 / 回滚 + 数据完整性**
-
-```bash
-pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 \
-  -PreviousInstaller <v0.17.1 安装包> \
-  -Installer candidate/MangaReader_0.17.2_x64-setup.exe \
-  -ExpectedVersion 0.17.2 -Commit <candidate commit> \
-  -DataDirForApp <隔离数据目录> \
-  -EmitEvidence install-verification.json \
-  -ArtifactName MangaReader_0.17.2_x64-setup.exe
-```
-**本机是共享宿主**：不传 `-CleanEnvironment`，产物 `machine.cleanEnvironment=false`，
-据此发布门禁必须拒绝（见 Task 10），这正是诚实结果。
-
-- [ ] **Step 4: 上传两份证据为 Draft 资产**
-
-```bash
-gh release upload v0.17.2 install-verification.json signature-verification.json --clobber
-```
-
----
-
-## Task 10: 发布闸门拒绝路径与 Draft 隔离验证
-
-- [ ] **Step 1: 用真实 Draft 跑绑定校验**
-
-```bash
-node scripts/release-governance/verify-draft.mjs --tag v0.17.2 --assets-dir candidate
-```
-
-- [ ] **Step 2: 跑证据总闸**
-
-```bash
-node scripts/release-governance/verify-evidence.mjs \
-  --record candidate/rc-record.json --assets-dir candidate \
-  --signature-evidence signature-verification.json \
-  --install-evidence install-verification.json \
-  --public-key src-tauri/updater.key.pub --channel windows --commit <commit>
-```
-Expected: **拒绝**，理由为「安装证据未声明干净环境」——这正是本轮的真实结论。
-
-- [ ] **Step 3: 确认公开面未变**（`releases/latest`、两个公开清单字节、演练 Draft 仍在）
-
-- [ ] **Step 4: 确认未代批任何发布部署**
-
-```bash
-gh api repos/:owner/:repo/actions/runs --jq '.workflow_runs[] | select(.name|startswith("Publish"))'
-```
-Expected: 本轮没有任何 publish 运行被批准或执行。
-
----
-
-## Task 11: visual:theme-token 观察
-
-- [ ] **Step 1: 汇总该用例历史失败记录**（CI run 与本地 QA 报告）
-- [ ] **Step 2: 本轮是否复现**
-  - 复现 → 建 Issue，附复现命令、run id、失败断言、怀疑因素；
-  - 未复现 → 在报告里保留观察记录与触发条件（并发负载），并给出后续观察点。
-
----
-
-## Task 12: 验收报告与状态快照
-
-- [ ] **Step 1: 补全本文件第 6 节**（VERIFIED / BLOCKED / NOT_VERIFIED + 维护者待办）
-- [ ] **Step 2: 刷新状态快照**
-
-```bash
-npm run status
-```
-
-- [ ] **Step 3: 更新 `docs/ENGINEERING_WORKFLOW.md` §13 阶段表**
-- [ ] **Step 4: 开 PR 并合并**
-
----
-
-## 6. 验收报告
-
-> 执行完成后由 Task 12 补全。发布前强制门禁未全绿前，本报告不构成发布申请。
-
-### 6.1 VERIFIED
-
-（待填）
-
-### 6.2 BLOCKED
-
-（待填）
-
-### 6.3 NOT_VERIFIED
-
-（待填）
-
-### 6.4 需要维护者亲自完成的最小操作
-
-（待填）
-
----
-
-## 7. 执行记录
-
-| # | 任务 | 结果 | 证据 |
-|---|---|---|---|
-| 1 | 预检与版本规范核对 | DONE | main 干净、版本 0.17.1；`v0.17.1..main` 41 个提交；0.17.1→0.17.2 = `patch / patch-preferred` |
-| 2 | 安装证据干净环境硬约束 | DONE | `machine.cleanEnvironment` + `machine.image` 双端校验；单测 43/43；演练 31/31；静态守卫生效 |
-| 3 | 版本同步到 0.17.2 | DONE | `version:sync` 写 5 个文件；`version:check` OK 0.17.2；`test:version` 6/6 |
-| 4 | 本地完整质量门禁 | DONE | 见第 8 节「本地门禁证据」 |
-| 5 | PR 提交与合并 | PENDING | — |
-| 6 | 打标签 v0.17.2 | PENDING | — |
-| 7 | hosted 全量 QA | PENDING | — |
-| 8 | 候选 Draft | PENDING | — |
-| 9 | 验签与安装升级验证 | PARTIAL | 已发布 v0.17.1 制品用官方 minisign 0.12 验签通过（公钥 ID `67CB304460E08E4A`）；0.17.2 候选待产出 |
-| 10 | 发布闸门与 Draft 隔离 | PENDING | — |
-| 11 | visual:theme-token 观察 | DONE | 本轮 12/12 全过（6 语 × 明暗）；hosted qa-full 历史未复现 |
-| 12 | 验收报告与状态快照 | PENDING | — |
-
-## 8. 本地门禁证据（2026-10-26）
+## 5. 本地质量门禁证据
 
 | 门禁 | 结果 |
 |---|---|
-| `npm run version:check` | OK 0.17.2（package.json / tauri.conf.json / Cargo.toml / Cargo.lock / package-lock.json 一致） |
+| `npm run version:check` | OK 0.17.2 |
 | `npm run test:version` | 6/6 |
 | `npm run test:governance` | 33/33 |
 | `npm run test:fixtures` | 3/3 |
-| `npm run test:release` | 43/43（含新增 5 项 minisign 工具链回归） |
-| `npm run release:rehearse` | 31/31 |
+| `npm run test:release` | 全绿（发布契约 + 治理 + 证据 + 工具链） |
+| `npm run release:rehearse` | 31/31（新增 I8：未声明干净环境即拒绝） |
 | `npx tsc --noEmit` | exit 0 |
 | `npm run build` | ✓ built |
 | `cargo test --lib` | 325 passed / 0 failed |
@@ -470,29 +137,150 @@ npm run status
 | `npm run format:check` | 无差异 |
 | `npm audit --omit=dev --audit-level=high` | 0 vulnerabilities |
 | `node tests/qa/run-qa.mjs --suite=static` | 23/23，P0=P1=P2=P3=0 |
-| `node tests/qa/run-qa.mjs`（全量） | 见 8.1 |
-| `node tests/qa/run-qa.mjs --suite=chaos` | 33/33，P0=0 |
+| `node tests/qa/run-qa.mjs`（全量） | **230/230 (100.0%)**，P0=P1=P2=P3=0 |
+| hosted `qa-full`（候选提交） | **230/230 (100.0%)**，P0=P1=P2=P3=0 |
 
-### 8.1 全量 QA 的 chaos P0：已知 flake 取证（Issue #23 同类）
+### 5.1 全量 QA 首轮的 chaos P0：已知 flake 取证（Issue #23 同类）
 
-首次全量 QA 得到 223/225，2 个 P0：`chaos:recovery-window`、`chaos:freeze-suite`。
+首次本地全量 QA 得到 223/225，2 个 P0：`chaos:recovery-window`、`chaos:freeze-suite`。
 
 | 取证动作 | 结果 |
 |---|---|
-| 失败详情 | 恢复窗内容为 WebView2 错误页 `ERR_CONNECTION_REFUSED`（访问 `localhost:1420` 失败），随后 `freeze-suite` 因找不到「Reload view only」按钮而中断 |
-| 本次变更是否触及该链路 | **否**：本轮改动只有版本号、发布证据契约、静态守卫；未触碰 `resilience.rs` / `RecoveryApp.tsx` / chaos 套件 / Vite 配置 |
+| 失败详情 | 恢复窗内容为 WebView2 错误页 `ERR_CONNECTION_REFUSED`（`localhost:1420` 连不上），随后 `freeze-suite` 因找不到「Reload view only」按钮而中断 |
+| 本轮变更是否触及该链路 | **否**：改动只有版本号、发布证据契约、静态守卫与文档；未触碰 `resilience.rs` / `RecoveryApp.tsx` / chaos 套件 / Vite 配置 |
 | 单独跑 chaos 套件 | **33/33 全过，P0=0**（与 Issue #23 的特征一致：全量中偶发、单独跑必过） |
-| 已发布 v0.17.1 制品验签 | 通过（官方 minisign 0.12，`Signature and comment signature verified`，公钥 ID `67CB304460E08E4A`） |
-| 处置 | 按 #23 的既定方法处理：不清断言、不跳过套件；用干净工作树复跑全量 QA 取第二次证据；hosted `qa-full` 作为最终判定 |
+| 干净工作树复跑全量 | **230/230 全绿** |
+| hosted 全量（候选提交） | **230/230 全绿**，chaos 10/10 通过 |
+| 处置 | 按 #23 的既定方法处理：不清断言、不跳过套件；用干净工作树 + hosted QA 取两次独立证据 |
 
-### 8.2 本轮实测发现并修复的两个发布链路真实缺陷
+### 5.2 `visual:theme-token` 观察（要求 9）
 
-两者都发生在**门禁之前**，因此发布门禁自己发现不了，必须单测锁死：
+| 运行 | 结果 |
+|---|---|
+| 本地首轮全量 | 12/12 pass |
+| 本地干净树全量 | 12/12 pass |
+| hosted `40324223701` | 12/12 pass（工件 `qa-evidence-f331782…`） |
+| 单独 visual 复跑 | 12/12 pass |
+| hosted 历史 | 近期唯一失败是**另一个**用例（`cache:clear-isolated`，P1，`463a5ed`），已单独处置 |
 
-| 缺陷 | 现象 | 根因 | 修复 |
-|---|---|---|---|
-| `fetch-minisign.mjs` 在 Windows 上必然失败 | `Expand-Archive: NotSupportedArchiveFileExtension` → minisign 永远装不上 → 发布流水线在第一步就崩 | 压缩包临时文件名丢掉了 `.zip` 扩展名，而 PowerShell `Expand-Archive` 只接受 `.zip` | 按 URL 保留真实扩展名（新增 `resolveArchiveName`），并检查解压命令退出码 |
-| `verify-signature.mjs` 定位不到 minisign | 报「找不到 minisign」→ 验签步骤失败 → 发布被拒 | 官方包解压后位于 `tools/minisign/minisign-win64/x86_64/minisign.exe`，脚本只找扁平的 `tools/minisign/minisign.exe` | 递归查找 `tools/minisign`，并**优先宿主架构**（先命中 aarch64 会静默拿到跑不起来的二进制） |
+历史观察：并发负载下的**一次**本地 P2（读取 `--sh-background` 时主题尚未生效）。
+本轮**多次独立全量 + hosted 均未复现** → 按要求**不建 Issue**，
+改为在 `docs/TESTING.md` 建立观察条目（保留证据 + 复现后的处置路径）。
 
-新增回归：`scripts/release-governance/minisign-tooling.test.mjs`（5 项），已并入 `npm run test:release`。
+---
 
+## 6. 验收报告
+
+### 6.1 VERIFIED（有可复现输出）
+
+| 项 | 证据 |
+|---|---|
+| 版本提升合法且无漂移 | `npm run version:sync -- 0.17.2`；五个版本文件一致为 0.17.2；`version:check` OK；`test:version` 6/6；类型 = patch |
+| 本地完整质量门禁 | 全量 QA **230/230**，P0–P3=0；static 23/23；治理 33/33；Rust 325 单测 + 集成测试 + clippy 零告警 |
+| hosted 全量 QA 绑定候选提交 | run `40324223701` success，`head_sha = f331782a29e5…`（= 候选 Commit），230/230，P0–P3=0 |
+| 标签推送不再触发公开发布 | `v0.17.2` 推送时间 12:37:35Z；此后 `gh run list` **零新增运行**；仓库内无 `push: tags:` |
+| Environment 审批真实生效 | deployment `7332256741`：`waiting`（12:51:06Z）→ `queued`（13:09:12Z，**维护者本人在 GitHub UI 批准**）→ `in_progress` → `success`；job 在审批前不执行 |
+| 候选只建 Draft | `v0.17.2`：`isDraft=true`、`publishedAt=null`、`prerelease=false`；`releases/latest` 仍是 `v0.17.1-linux-sec1`（id 423315120，published_at 未变） |
+| RC 记录绑定完整 | `rc-v0.17.2-f331782a29e5`：版本 / 标签 / Commit / 通道 / 平台 / QA runId / buildCommit / 3 个制品 SHA-256；实际下载摘要 **3/3 完全一致** |
+| 候选制品签名有效 | 官方 minisign 0.12 验证 `MangaReader_0.17.2_x64-setup.exe`：`Signature and comment signature verified`，锚定仓库配置公钥 ID `67CB304460E08E4A` |
+| 已发布版本信任链仍完好 | 同法验证已发布 `v0.17.1` 安装包（SHA-256 `3e90ece5…`）：通过 |
+| 更新清单合法 | `verify-updater-manifest.mjs` OK：version 0.17.2 / platforms `windows-x86_64` |
+| Windows 全新安装 | 运行 A：注册项 0.17.2、主程序启动、`library.db` 创建，全部 OK |
+| 0.17.1 → 0.17.2 覆盖升级 | 运行 B：注册项 0.17.2、主程序启动、`library.db` 存在且未截断（4096 → 4096） |
+| 回滚到 0.17.1 | 重新安装旧版本后仍注册、仍可启动、`library.db` 仍在 |
+| 阅读进度与 SQLite 完整性 | 升级 + 回滚后：**8 本书**、`QA Local Folder` 进度 = 3、`scroll_pct=0.42`、`reading_log` 1 行；应用读回与直接读库结果一致 |
+| 数据库在版本间无功能变更 | `SCHEMA_VERSION` 两版同为 1；`db.rs` 差异**纯 rustfmt 换行**，新增内容只有测试 |
+| 发布闸门对真实远端 Draft 生效 | `verify-draft.mjs` 与 `verify-evidence.mjs` 对**真实** v0.17.2 Draft 均以非零码拒绝；理由仅剩「未声明干净环境」 |
+| 闸门唯一阻塞项定位精确 | 控制探针：同一回执仅把 `cleanEnvironment` 置真并补 `image` 后，`verify-evidence` 立即 **OK**（exit 0）——证明签名/摘要/版本/Commit/平台/QA 绑定已全部对齐 |
+| 演练候选永不发布 | 对真实远端 `v0.0.0-rehearsal` Draft 跑两道闸门 → 均拒绝「演练候选永远不得发布」 |
+| 公开更新面完全未变 | `latest.json` = `64f6038e…`、`latest-linux-critical.json` = `2bdb3af5…`，与 Phase 5 基线**字节一致** |
+| 历史记录未被修改 | `v0.17.0` / `v0.17.1` / `v0.17.1-linux-sec1` 三个正式 Release 的时间与内容未动；`v0.0.0-rehearsal` 标签与 Draft 完整保留 |
+| 双通道独立 | 本轮**未触发**任何 Linux 工作流；`release-linux-critical` 目录与 `latest-linux-critical.json` 未变 |
+| AI 未代批任何正式发布 | `gh run list` 中 **0** 个 `Publish release` 运行；`release-windows` 环境本轮只有一次部署（候选构建），由维护者本人在 UI 批准 |
+
+### 6.2 BLOCKED（当前环境无法完成，未伪造通过）
+
+| 项 | 原因 | 解除方式 |
+|---|---|---|
+| **干净 Windows VM 上的安装/升级/回滚验证** | 本机是共享宿主（Windows 11 专业工作站版，`WIN-VIIUQOUF1EB`）：无管理员权限、`WindowsSandbox.exe` 不存在、Hyper-V 模块与 vmms 服务缺失、无 Docker/VirtualBox/qemu；且本机本身运行在 hypervisor 内，嵌套虚拟化不可用 | 在一次性干净 Windows VM 上用同一脚本跑两遍（全新安装 + 覆盖升级/回滚，用 `-MergeFrom` 合并），**必须带 `-CleanEnvironment -ImageName "<镜像名>"`**，把 `install-verification.json` 上传为 Draft 资产替换本轮的共享宿主回执 |
+| 正式发布本身 | 未授权，且上述强制门禁未解除 | 维护者在干净 VM 补齐证据后，重新触发 `release-publish.yml`，并在 Environment 审批中本人批准 |
+| Linux 通道的安装/升级证据 | 无 Linux 主机 | Linux 通道同样需要一份带干净环境声明的安装回执（Linux 侧尚无证据产出脚本） |
+
+> **本轮安装证据的状态**：`install-verification.json` 四项检查全 `pass`，但
+> `machine.cleanEnvironment=false`（共享宿主，未传 `-CleanEnvironment`）。
+> 因此 `verify-draft.mjs` 与 `verify-evidence.mjs` **必然拒绝**——
+> 这是刻意的失败方向，防止「在开发机上跑一遍」冒充干净环境验证。
+
+### 6.3 NOT_VERIFIED（当前无法验证，不代表正常）
+
+| 项 | 说明 |
+|---|---|
+| 干净环境声明的真实性 | `machine.cleanEnvironment` 由执行脚本的人显式声明，机器只能校验字段；它无法证明那台机器确实干净。这条仍依赖维护者的操作纪律与 VM 的一次性属性 |
+| 已安装的**发布版**应用被 CDP 驱动 | 发布版构建不暴露 CDP target；安装脚本以「进程存活」判断，数据核验通过调试构建 + 直接读 SQLite 完成 |
+| 正式发布的**公开**路径 | 本轮只到 Draft；`release-publish.yml` 从未被执行过（草稿转公开、清单接力、发布后校验均未实测） |
+| minisign 工具自身的发布签名 | 上游未公布其发布用公钥，无法离线验证；工具来源为官方 GitHub Release，SHA-256 固定在 `minisign.digests.json` |
+| AI 无法代维护者审批的技术边界 | `gh` 令牌当前登录身份就是维护者 `D-OneXXX`（scopes: `repo`, `workflow`），**技术上具备代批能力**；阻止代批的是流程约束（维护者明确要求 AI 不得代替其审批）与本轮的自律，不是密码学限制。工作流自身的 `GITHUB_TOKEN` 无法审批自己的部署（GitHub 平台规则） |
+| 真实用户目录下的升级迁移 | 超出隐私边界，不做自动化 |
+
+### 6.4 需要维护者亲自完成的最小操作
+
+1. **在干净 Windows VM 上重跑安装/升级/回滚**（解除唯一强制门禁）：
+
+   ```powershell
+   pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 `
+     -PreviousInstaller <v0.17.1 安装包> `
+     -Installer MangaReader_0.17.2_x64-setup.exe `
+     -ExpectedVersion 0.17.2 -Commit f331782a29e53885c061b56d740dbd1faabdec1c `
+     -CleanEnvironment -ImageName "<VM 镜像名>" `
+     -DataDirForApp <隔离数据目录> `
+     -EmitEvidence install-verification.json `
+     -ArtifactName MangaReader_0.17.2_x64-setup.exe
+   ```
+
+   再跑一遍「仅全新安装」并用 `-MergeFrom` 合并，然后
+   `gh release upload v0.17.2 install-verification.json --clobber` 覆盖本轮回执。
+   命令细节见 `docs/dev/RELEASE.md` §4.2。
+
+2. **本人批准正式发布**（仅在第 1 步完成后）：触发 `release-publish.yml -f tag=v0.17.2`
+   并在 `release-windows` Environment 审批。**AI 不得代批**；若希望从技术上杜绝，
+   可为 Agent 会话使用一个不具备 deployment 审批能力的受限令牌（或撤销本机 PAT）。
+
+3. **决定演练产物去留**：`v0.0.0-rehearsal` 标签与 Draft 已按要求保留；
+   ruleset 保护 `v*` 标签的删除/修改，清理需要豁免或接受保留。
+
+4. **Linux 通道**：如需发布 `vX.Y.Z-linux-secN`，需另行准备带干净环境声明的 Linux 安装证据。
+
+---
+
+## 7. 本轮改动清单
+
+| 文件 | 改动 |
+|---|---|
+| `package.json` / `package-lock.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` | 版本 0.17.1 → 0.17.2（由同步脚本写入） |
+| `scripts/release-governance/evidence.mjs` | 安装证据要求 `machine.cleanEnvironment` 与 `machine.image` |
+| `scripts/release-governance/rc-record.mjs` | 回执契约统一为 `artifactName`/`artifactSha256` + 四个检查项；新增干净环境校验；`signature-verification.json` 归入治理文件 |
+| `scripts/release-governance/verify-signature.mjs` | minisign 递归定位 + 宿主架构优先 + 执行错误输出 |
+| `scripts/release-governance/fetch-minisign.mjs` | 压缩包保留真实扩展名 + 检查解压退出码 |
+| `scripts/release-governance/minisign-tooling.test.mjs` | 新增 5 项工具链回归测试 |
+| `scripts/release-governance/evidence.test.mjs` / `rc-record.test.mjs` | 新增干净环境与契约用例 |
+| `scripts/release-governance/rehearse.mjs` | 夹具对齐唯一契约；新增 I8 场景 |
+| `scripts/release-smoke/windows-install-upgrade.ps1` | 新增 `-CleanEnvironment` / `-ImageName`；修复卸载路径解析；卸载后有界轮询 |
+| `tests/qa/suites/static.mjs` | 静态守卫守住三处 `cleanEnvironment` 契约 |
+| `.gitignore` | 忽略本地工具目录 `tools/` |
+| `docs/TESTING.md` | CI 门禁章节更新为现有工作流；新增 `visual:theme-token` 观察条目 |
+| `docs/dev/RELEASE.md` | 发布流水线描述更新为「候选 → Draft → 审批 → 发布」；§4.2 补干净 VM 参数 |
+| `docs/ENGINEERING_WORKFLOW.md` | §10 发布安全状态、阶段表与设置基线同步到 Phase 5 |
+| `docs/dev/PHASE5_RELEASE_CANDIDATE.md` | 本文件 |
+| `docs/PROJECT_STATE.md` | 由 `npm run status` 生成 |
+
+---
+
+## 8. 复核命令
+
+```bash
+npm run test:release          # 发布契约 + 治理单测
+npm run release:rehearse      # 隔离发布演练
+node tests/qa/run-qa.mjs --suite=static
+git ls-remote --tags origin   # 标签：v0.17.2 指向 f331782（不含触发器）
+gh release view v0.17.2 --json isDraft,publishedAt   # 期望 isDraft=true / publishedAt=null
+```

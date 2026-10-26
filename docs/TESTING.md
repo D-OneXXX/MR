@@ -99,6 +99,25 @@ now mitigated:
 Do not skip the chaos suite or weaken assertions. If the timeout recurs, reopen #23 with the
 QA artifact; the release workflow still retries the complete QA once as a coarse fallback.
 
+## `visual:theme-token` observation (watch list)
+
+`visual:theme-token` (background token per locale × theme) failed **once** as a P2 during a
+concurrent-load local run: the computed `--sh-background` value was read before the requested
+theme was applied, so the assertion compared against the previous theme's token.
+
+Evidence and current status:
+
+- Definition: `tests/qa/suites/visual.mjs` (12 assertions = 6 locales × light/dark).
+- Since that observation the check has passed in **every** subsequent run: 12/12 locally on the
+  clean candidate tree, 12/12 in hosted QA run `40324223701` (230/230, P0–P3=0), and 12/12 in the
+  standalone visual re-run.
+- The hosted history shows the only recent QA failure was a *different* check
+  (`cache:clear-isolated`, P1, commit `463a5ed`), which was fixed separately.
+
+Treat it as a watch-list item, not a known failure: do not lower the assertion. If it recurs,
+open an issue with the QA artifact (locale, theme, expected/actual token) and the run id, then
+look at the theme-apply → token-read ordering in the harness before touching the product CSS.
+
 ## What to include in a failure report
 
 - Command and suite name.
@@ -124,8 +143,16 @@ Remove personal paths, book titles, cookies, tokens, and full private URLs befor
 - `.github/workflows/qa-full.yml` — reusable/dispatchable release-candidate full QA. It runs
   version/governance/type/build/Rust/integration/clippy/audit gates and the Windows/WebView2
   full QA, then uploads `qa-evidence-<sha>` with reports and logs.
-- `.github/workflows/release-windows.yml` — full QA before signing/publishing NSIS artifacts.
-- `.github/workflows/release-linux-critical.yml` — critical-fix Linux channel.
+- `.github/workflows/release-candidate.yml` / `release-candidate-linux.yml` — manual
+  (`workflow_dispatch`) candidate builds: they verify tag/version/QA-evidence binding, build and
+  sign, and create a **Draft** release with `rc-record.json`. They never publish.
+- `.github/workflows/release-publish.yml` / `release-publish-linux.yml` — manual
+  (`workflow_dispatch`) publication: they re-verify the binding, fetch the official minisign to
+  verify the artifact signature, and require the clean-environment install/upgrade evidence before
+  turning the Draft into a public release.
+- `.github/workflows/release-rehearsal.yml` — secret-free rehearsal of the release state machine
+  (candidate → Draft → approval binding → publish → recovery → concurrency → manifest safety →
+  cross-channel → evidence gate). It runs on every push and pull request.
 
 ## Full QA evidence
 

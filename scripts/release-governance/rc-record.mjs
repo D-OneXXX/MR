@@ -28,22 +28,24 @@ export const CHANNELS = {
     platform: "windows-x86_64",
     // 常规通道标签不带 Linux 后缀。
     tagPattern: /^v(\d+\.\d+\.\d+)$/,
-    requiredChecks: ["install", "upgrade", "rollback", "dataIntegrity"],
+    // 检查项名称与安装脚本实际产出的证据字段一致（唯一事实源）。
+    requiredChecks: ["freshInstall", "upgrade", "dataIntegrity", "recovery"],
   },
   "linux-critical": {
     id: "linux-critical",
     platform: "linux-x86_64",
     // 高危补丁通道标签必须带 -linux-secN 后缀。
     tagPattern: /^v(\d+\.\d+\.\d+)-linux-sec(\d+)$/,
-    requiredChecks: ["install"],
+    requiredChecks: ["freshInstall", "upgrade", "dataIntegrity"],
   },
 };
 
-/** 治理文件（记录/摘要/安装验证回执）：不是构建产物，不参与制品摘要比对。 */
+/** 治理文件（记录/摘要/安装验证回执/签名验证证据）：不是构建产物，不参与制品摘要比对。 */
 export const GOVERNANCE_FILES = new Set([
   "rc-record.json",
   "rc-summary.md",
   "install-verification.json",
+  "signature-verification.json",
 ]);
 
 const HEX40 = /^[0-9a-f]{40}$/;
@@ -194,6 +196,12 @@ export function validateRcRecord(record) {
 
 /**
  * 校验安装验证回执（干净 Windows VM 的真实安装/升级/回滚/数据完整性）。
+ *
+ * 回执结构与 `evidence.mjs` **完全一致**（唯一契约）：
+ * `artifactName` / `artifactSha256` / `checks.{freshInstall,upgrade,dataIntegrity,recovery}`。
+ * 两处曾各用一套字段名，导致发布工作流的第一道闸门对**脚本真实产出的回执**
+ * 必然判「疑似审批后替换制品」——已统一。
+ *
  * @returns {string[]} 问题列表
  */
 export function validateInstallAttestation(attestation, expected) {
@@ -216,13 +224,19 @@ export function validateInstallAttestation(attestation, expected) {
     }
     if (
       expected.installerSha256 &&
-      attestation.installer?.sha256 !== expected.installerSha256
+      String(attestation.artifactSha256 || "") !== expected.installerSha256
     ) {
       problems.push("回执指向的安装包摘要与候选制品不一致（疑似审批后替换制品）");
     }
   }
+  if (!attestation.artifactName) {
+    problems.push("安装验证回执缺少被安装制品名（artifactName）");
+  }
+  if (!HEX64.test(String(attestation.artifactSha256 || ""))) {
+    problems.push("安装验证回执缺少被安装制品的 SHA-256（artifactSha256）");
+  }
   const channel = expected?.channel ? CHANNELS[expected.channel] : null;
-  const required = channel?.requiredChecks || ["install", "upgrade", "rollback", "dataIntegrity"];
+  const required = channel?.requiredChecks || ["freshInstall", "upgrade", "dataIntegrity", "recovery"];
   for (const key of required) {
     if (attestation.checks?.[key] !== "pass") {
       problems.push(`安装验证缺少通过项：${key}`);

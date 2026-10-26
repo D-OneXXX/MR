@@ -108,9 +108,16 @@ function makeAttestation(record, installerSha256, overrides = {}) {
     version: record.version,
     commit: record.commit,
     platform: record.platform,
-    installer: { name: "setup.exe", sha256: installerSha256 },
+    // 与安装脚本产出的结构一致（唯一契约）：artifactName / artifactSha256。
+    artifactName: "setup.exe",
+    artifactSha256: installerSha256,
     verdict: "PASS",
-    checks: { install: "pass", upgrade: "pass", rollback: "pass", dataIntegrity: "pass" },
+    checks: {
+      freshInstall: "pass",
+      upgrade: "pass",
+      dataIntegrity: "pass",
+      recovery: "pass",
+    },
     machine: { os: "Windows Server 2022", cleanEnvironment: true, image: "rehearsal-vm" },
     verifiedAt: new Date().toISOString(),
     ...overrides,

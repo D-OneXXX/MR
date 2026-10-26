@@ -39,9 +39,16 @@ function makeAttestation(overrides = {}) {
     version: "0.17.2",
     commit: COMMIT,
     platform: "windows-x86_64",
-    installer: { name: "app-setup.exe", sha256: INSTALLER_SHA },
+    // 与安装脚本产出的结构一致（唯一契约）。
+    artifactName: "app-setup.exe",
+    artifactSha256: INSTALLER_SHA,
     verdict: "PASS",
-    checks: { install: "pass", upgrade: "pass", rollback: "pass", dataIntegrity: "pass" },
+    checks: {
+      freshInstall: "pass",
+      upgrade: "pass",
+      dataIntegrity: "pass",
+      recovery: "pass",
+    },
     machine: { os: "Windows Server 2022", cleanEnvironment: true, image: "windows-2022-clean" },
     verifiedAt: new Date().toISOString(),
     ...overrides,
@@ -80,10 +87,33 @@ test("validateInstallAttestation：必须 PASS 且四项检查齐全", () => {
   const notPass = validateInstallAttestation(makeAttestation({ verdict: "FAIL" }), null);
   assert.ok(notPass.some((p) => p.includes("不是 PASS")));
   const missing = validateInstallAttestation(
-    makeAttestation({ checks: { install: "pass" } }),
+    makeAttestation({ checks: { freshInstall: "pass" } }),
     null,
   );
   assert.ok(missing.some((p) => p.includes("upgrade")));
+});
+
+test("validateInstallAttestation：回执结构必须与安装脚本一致（artifactSha256）", () => {
+  // 旧结构（installer.sha256）不再被接受：发布工作流对真实回执必须能通过绑定校验。
+  const legacy = makeAttestation();
+  delete legacy.artifactSha256;
+  legacy.installer = { name: "app-setup.exe", sha256: INSTALLER_SHA };
+  const problems = validateInstallAttestation(legacy, null);
+  assert.ok(
+    problems.some((p) => p.includes("artifactSha256")),
+    "缺少 artifactSha256 必须被拒绝",
+  );
+});
+
+test("validateInstallAttestation：制品摘要与候选不一致 → 拒绝", () => {
+  const problems = validateInstallAttestation(makeAttestation(), {
+    version: "0.17.2",
+    commit: COMMIT,
+    platform: "windows-x86_64",
+    channel: "windows",
+    installerSha256: "f".repeat(64),
+  });
+  assert.ok(problems.some((p) => p.includes("疑似审批后替换制品")));
 });
 
 test("validateInstallAttestation：未声明干净环境 → 拒绝", () => {

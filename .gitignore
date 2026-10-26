@@ -25,6 +25,9 @@ dist-ssr
 .zcode/
 .opencodereview/
 
+# 本地工具目录（官方 minisign 等按固定摘要校验后解压到 tools/，不入库）
+tools/
+
 # Local environment and signing material
 .env
 .env.*

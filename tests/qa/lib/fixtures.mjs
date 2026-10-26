@@ -58,6 +58,54 @@ export function makePng(width, height, [red, green, blue], deflateLevel = 9) {
   ]);
 }
 
+/**
+ * 竖向渐变 PNG：红通道色阶随 y 线性变化（与 Rust `ultra_tall_page` 的 ramp
+ * 同公式：`r = floor(y * 255 / h)`，绿/蓝固定）。
+ *
+ * 为什么超高条漫夹具必须用渐变而不是纯色：
+ * 纯色图被切成多片后，**每一片的像素完全相同** → 编码字节相同 → data URL 相同。
+ * 此时「加载到 2 张不同的切片图片」这个断言实际上在测量「渲染宽度有没有变」，
+ * 而不是「巨图有没有被切片」，属于无效断言（hosted 与本地结果不一致的根因）。
+ * 渐变夹具让不同切片的内容必然不同，切片断言才真正有效。
+ */
+export function makeRampPng(
+  width,
+  height,
+  [green, blue],
+  deflateLevel = 1,
+) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  const rowLength = 1 + width * 3;
+  const row = Buffer.alloc(rowLength);
+  const raw = Buffer.alloc(rowLength * height);
+  for (let y = 0; y < height; y += 1) {
+    const step = Math.floor((y * 255) / height);
+    row[0] = 0;
+    row[1] = step;
+    row[2] = green;
+    row[3] = blue;
+    for (let x = 1; x < rowLength; x += 3) {
+      row[x] = step;
+      row[x + 1] = green;
+      row[x + 2] = blue;
+    }
+    row.copy(raw, y * rowLength);
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlib.deflateSync(raw, { level: deflateLevel })),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
 function u16(value) {
   const buffer = Buffer.alloc(2);
   buffer.writeUInt16LE(value);
@@ -209,15 +257,19 @@ function writeNaturalArchive(root) {
  * - 条漫「先切后缩」必须把巨图切成多片渲染，前端不得出现黑/白块；
  * - 单页模式渲染高度必须被钳制到 ≤ MAX_SAFE_TEXTURE_H(8192)。
  *
- * 体积控制：纯色 PNG 压缩后只有几百 KB；但生成期 raw 缓冲为
- * 800×21000×3 ≈ 48MB，用 deflate level 1 把生成耗时压到百毫秒级。
+ * 必须用**竖向渐变**而不是纯色：纯色图切出的每一片像素完全相同，
+ * 「多张不同切片」的断言会退化成「渲染宽度是否变化」的无效断言
+ * （见 `makeRampPng` 注释与 Issue #32）。
+ *
+ * 体积控制：渐变 PNG 压缩后约几百 KB；生成期 raw 缓冲为
+ * 800×21000×3 ≈ 48MB，用 deflate level 1 把生成耗时压到秒级。
  */
 function writeUltraTallWebtoon(root, width, height) {
   const dir = path.join(root, "QA Ultra Tall Webtoon");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "001.png"),
-    makePng(width, height, [36, 120, 210], 1),
+    makeRampPng(width, height, [128, 64], 1),
   );
   return dir;
 }

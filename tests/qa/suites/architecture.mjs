@@ -9,9 +9,18 @@
  *
  * 全部走隔离数据目录与本地 stub，不触碰真实用户数据、不访问真实外网。
  */
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { invokeSafe } from "../lib/app.mjs";
 import { fail, note, ok } from "../lib/report.mjs";
+
+/** data URL 指纹：只留 hash，绝不把图片字节写进报告。 */
+function dataUrlHash(dataUrl) {
+  return createHash("sha256")
+    .update(String(dataUrl || ""))
+    .digest("hex")
+    .slice(0, 16);
+}
 
 /** 已下线 / 历史路径：必须静默 replace 回书库首页 "#/"。 */
 const LEGACY_ROUTES = [
@@ -672,6 +681,9 @@ async function checkUltraTallWebtoon(ctx, report) {
       ok: result.ok,
       height: result.ok ? Number(result.value?.height ?? 0) : null,
       width: result.ok ? Number(result.value?.width ?? 0) : null,
+      // 指纹用于证明「不同切片的内容确实不同」（纯色夹具会让这里恒等）。
+      dataUrlHash: result.ok ? dataUrlHash(result.value?.dataUrl) : null,
+      dataUrlLength: result.ok ? String(result.value?.dataUrl ?? "").length : null,
       error: result.ok ? null : result.error,
     });
   }
@@ -682,6 +694,13 @@ async function checkUltraTallWebtoon(ctx, report) {
     if (item.ok && item.height > 2048) {
       problems.push(`切片 ${item.tile} 高度 ${item.height} 超过 WEBTOON_TILE_H(2048)`);
     }
+  }
+  // 同一渲染宽度下，不同切片号必须返回**不同内容**：
+  // 这条断言直接证明「巨图被切成多片」而不是「同一张图被重复渲染」。
+  if (tiles[0].ok && tiles[1].ok && tiles[0].dataUrlHash === tiles[1].dataUrlHash) {
+    problems.push(
+      `切片 0 与切片 1 内容完全相同（hash=${tiles[0].dataUrlHash}）：巨图未被真正切分`,
+    );
   }
   const outOfRange = await invokeSafe(page, "get_webtoon_tile", {
     bookId: tall.id,
@@ -801,6 +820,7 @@ async function checkUltraTallWebtoon(ctx, report) {
 
   const seen = new Set();
   const seenHashes = new Set();
+  const seenKeys = new Set();
   let brokenImages = 0;
   let totalTiles = 0;
   let scrollSteps = 0;
@@ -817,6 +837,7 @@ async function checkUltraTallWebtoon(ctx, report) {
     for (const src of snapshot.srcs) seen.add(src);
     for (const tile of snapshot.tileDetail) {
       if (tile.srcHash) seenHashes.add(tile.srcHash);
+      if (tile.key) seenKeys.add(tile.key);
     }
     if (seen.size >= 2 && brokenImages === 0) break;
     await page.eval(`(() => {
@@ -834,57 +855,8 @@ async function checkUltraTallWebtoon(ctx, report) {
     await sleep(800);
   }
 
-  // 严格断言使用激活前的观察结果，避免后续诊断步骤把失败“修成”通过。
-  const seenForAssertion = new Set(seen);
-  const seenHashesForAssertion = new Set(seenHashes);
-  const finalBeforeActivation = lastSnapshot;
-
-  // 若 hosted runner 只是把窗口置于后台/遮挡，Page.bringToFront 应恢复帧调度；
-  // 这里只采集证据，不在本轮改变断言阈值。
-  let activationProbe = null;
-  if (seenForAssertion.size < 2) {
-    let bringError = null;
-    try {
-      await page.send("Page.bringToFront", {}, 5000);
-    } catch (error) {
-      bringError = String(error);
-    }
-    await page
-      .eval(`(() => {
-        const scroller = document.querySelector(".webtoon-scroll");
-        if (!scroller) return false;
-        scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
-        return true;
-      })()`)
-      .catch(() => false);
-    const activationDeadline = Date.now() + 10_000;
-    let activationSnapshot = null;
-    while (Date.now() < activationDeadline) {
-      await sleep(500);
-      activationSnapshot = await readSnapshot();
-      const hashes = new Set(
-        activationSnapshot.tileDetail.map((tile) => tile.srcHash).filter(Boolean),
-      );
-      if (hashes.size >= 2) break;
-    }
-    activationProbe = {
-      bringError,
-      snapshot: activationSnapshot
-        ? {
-            images: activationSnapshot.images,
-            tileDetail: activationSnapshot.tileDetail,
-            probe: activationSnapshot.probe,
-            visibility: activationSnapshot.visibility,
-            hidden: activationSnapshot.hidden,
-            hasFocus: activationSnapshot.hasFocus,
-          }
-        : null,
-    };
-  }
-
-  // data URL 体积很大，报告只保留 hash/长度（finalSnapshot 的完整 src 只用于去重）。
-  const { srcs: _discardedSrcs, ...finalForEvidence } =
-    finalBeforeActivation ?? {};
+  // data URL 体积很大，报告只保留 hash/长度（完整 src 只用于去重）。
+  const { srcs: _discardedSrcs, ...finalForEvidence } = lastSnapshot ?? {};
 
   const screenshotPath = path.join(
     ctx.artifactDir,
@@ -893,33 +865,36 @@ async function checkUltraTallWebtoon(ctx, report) {
   );
   try {
     await page.screenshot(screenshotPath);
-  } catch (error) {
-    activationProbe = {
-      ...(activationProbe || {}),
-      screenshotError: String(error),
-    };
+  } catch {
+    /* 截图失败不影响断言结果 */
   }
 
   evidence.ui = {
     maxTilesInDom: totalTiles,
-    distinctTileImages: seenForAssertion.size,
-    distinctTileHashes: seenHashesForAssertion.size,
+    distinctTileImages: seen.size,
+    distinctTileHashes: seenHashes.size,
+    distinctTileKeys: [...seenKeys],
     brokenImages,
     scrollSteps,
-    images: finalBeforeActivation?.images ?? 0,
-    scrollTop: finalBeforeActivation?.scrollTop ?? 0,
-    scrollHeight: finalBeforeActivation?.scrollHeight ?? 0,
-    clientHeight: finalBeforeActivation?.clientHeight ?? 0,
+    images: finalForEvidence.images ?? 0,
+    scrollTop: finalForEvidence.scrollTop ?? 0,
+    scrollHeight: finalForEvidence.scrollHeight ?? 0,
+    clientHeight: finalForEvidence.clientHeight ?? 0,
     envBefore,
-    finalBeforeActivation: finalForEvidence,
-    activationProbe,
+    finalSnapshot: finalForEvidence,
     screenshot: screenshotPath,
   };
 
   if (totalTiles < 1) problems.push("条漫 DOM 未渲染任何切片节点（.webtoon-tile）");
-  if (seenForAssertion.size < 2) {
+  // 切片号必须真的推进过：只渲染一张切片不算「切成多片」。
+  if (seenKeys.size < 2) {
     problems.push(
-      `条漫只加载了 ${seenForAssertion.size} 张切片，巨图未被切成多片渲染`,
+      `条漫 DOM 只出现过 ${seenKeys.size} 个切片节点（keys=${[...seenKeys].join(",")}）：巨图未被切成多片渲染`,
+    );
+  }
+  if (seen.size < 2) {
+    problems.push(
+      `条漫只加载了 ${seen.size} 张切片，巨图未被切成多片渲染`,
     );
   }
   if (brokenImages > 0) {
@@ -1052,7 +1027,7 @@ async function checkUltraTallWebtoon(ctx, report) {
       severity: "P1",
       details: JSON.stringify({ problems, evidence }, null, 2),
       location: "src-tauri/src/pipeline.rs / src/components/Reader/Webtoon.tsx",
-      expected: `源高 ${expected.ultraTallHeight} 切成多片（每片 ≤2048）、前端切片 naturalWidth>0、单页渲染高度 ≤8192`,
+      expected: `源高 ${expected.ultraTallHeight} 切成多片（每片 ≤2048、切片内容互不相同）、前端切片 naturalWidth>0、单页渲染高度 ≤8192`,
       actual: problems.join(" | "),
       rootCause:
         "切片未生效（仍整图直送 <img>）或单页路径缺少 MAX_SAFE_TEXTURE_H 钳制",
@@ -1064,7 +1039,7 @@ async function checkUltraTallWebtoon(ctx, report) {
       suite: "architecture",
       layer: "e2e",
       title: "超高条漫切成多片渲染且单页高度被钳制到 8192 以内",
-      details: `源 ${expected.ultraTallWidth}×${expected.ultraTallHeight}；单页高 ${evidence.single?.height}；DOM 切片峰值 ${totalTiles}，加载 ${seen.size} 张`,
+      details: `源 ${expected.ultraTallWidth}×${expected.ultraTallHeight}；单页高 ${evidence.single?.height}；API 切片指纹 ${tiles.map((item) => item.dataUrlHash).join("/")}；DOM 切片峰值 ${totalTiles}，切片节点 ${[...seenKeys].join(",")}，加载 ${seen.size} 张`,
     });
   }
 }

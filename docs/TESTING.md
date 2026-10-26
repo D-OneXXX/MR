@@ -120,6 +120,12 @@ uploads `qa-evidence-<sha>` on success or failure. A release candidate must refe
 artifact; do not substitute a hand-written local QA count. It has no access to signing
 secrets and cannot publish a Release.
 
+If hosted QA is blocked by the recorded #30/#32 windows-2022 / WebView2 issue, use the
+controlled local attestation in
+[LOCAL_QA_ATTESTATION.md](dev/LOCAL_QA_ATTESTATION.md). It still requires an exact Commit,
+clean tree, complete suite, P0/P1=0, report hashes, environment details, and maintainer
+approval; it does not authorize a release.
+
 The full QA step allows one retry of the **complete suite** for the known windows-2022
 WebView2 131 arch/lazy-load timing flake. Both attempts remain in the job log; no suite is
 skipped and assertions are not weakened. A second failure blocks the job. The first

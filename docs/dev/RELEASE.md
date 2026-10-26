@@ -171,27 +171,78 @@ un-qa.mjs --suite=static   :: 含 static:release-governance 守卫
 
 ### 4.2 安装验证（正式发布的强制条件）
 
-在**一次性干净 Windows 虚拟机**上执行：
+安装验证必须在**一次性干净 Windows 环境**上执行，两种来源都可以，但都必须
+产出可核实的 provenance：
+
+1. **GitHub-hosted `windows-2022` runner（推荐，本次 v0.17.2 使用）**：
+   `.github/workflows/release-install-verify.yml` 在一次性 hosted VM 上下载 Draft
+   制品，跑全新安装 + 覆盖升级/回滚两遍，自动记录 `ImageOS`/`ImageVersion`/
+   `RUNNER_NAME`/`GITHUB_RUN_ID`，run 日志与 artifact 都可公开核实。
+2. **自建/本机一次性 Windows VM**：必须显式提供 `-Hypervisor`、`-VmId`、
+   `-VmImageSha256`（64 hex）、`-VmStartedAt`；provenance 会写入回执，发布时由维护者
+   人工核验镜像 SHA-256 与 VM 运行日志。
+
+hosted 工作流（只读 Draft、不写 Release、不发布）：
+
+```bat
+gh workflow run release-install-verify.yml --ref main ^
+  -f tag=v0.17.2 -f previous_tag=v0.17.1 -f previous_version=0.17.1
+```
+
+它会：
+
+1. 解析 tag 的 Commit，下载 Draft 的 `rc-record.json`、安装包、`.sig`、`latest.json`
+   与签名证据；`prepare-candidate.mjs` 校验 tag/Commit/版本/每个制品名称、大小、SHA-256；
+2. **第一遍**：全新安装 → 启动 → 创建 `library.db` → 卸载；
+3. **第二遍**：安装旧版本 → 启动 → 关闭 → 写入合成书库（3 页、`current_page=2`、
+   `scroll_pct=0.5`、两条 reading_log 共 3 页）→ 安装新版本 → 启动 → 通过真实
+   `list_books` IPC 回读书库与进度 → 关闭 → 校验数据库 → 回滚 → 再启动/IPC/校验；
+4. 用 `verify-evidence.mjs` 对 Draft 记录、签名证据、新安装证据做自检；
+5. 上传 `install-verification.json`、fresh/upgrade 日志、`run-manifest.json` 等
+   Actions artifact；**不会**自动写 Draft。
+
+本地 VM 命令（与 hosted 工作流使用同一脚本）：
 
 ```powershell
-pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 ^
-  -PreviousInstaller <旧版安装包> -Installer <新版本安装包> -ExpectedVersion 0.17.2 ^
-  -CleanEnvironment -ImageName "Windows 11 Pro 24H2" ^
-  -Commit <候选提交> -DataDirForApp <隔离数据目录> `
+pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 `
+  -PreviousInstaller <v0.17.1 安装包> `
+  -Installer <v0.17.2 安装包> `
+  -ExpectedVersion 0.17.2 `
+  -ExpectedSha256 <rc-record 中的安装包 SHA-256> `
+  -PreviousExpectedVersion 0.17.1 `
+  -PreviousExpectedSha256 <v0.17.1 安装包 SHA-256> `
+  -Commit <候选提交> `
+  -DataDirForApp <隔离数据目录> `
+  -LibrarySeedScript scripts/release-smoke/library-fixture.mjs `
+  -LibraryVerifyScript scripts/release-smoke/library-fixture.mjs `
+  -LibraryUiCheckScript scripts/release-smoke/library-ui-check.mjs `
+  -LibraryFixture <隔离数据目录>\fixture.json `
+  -CleanEnvironment -Hypervisor hyperv -VmId <VM 标识> `
+  -VmImageSha256 <镜像 SHA-256> -VmStartedAt <ISO8601> `
   -EmitEvidence install-verification.json `
   -ArtifactName MangaReader_0.17.2_x64-setup.exe
 ```
 
-脚本会输出安装验证回执（JSON）。把它作为候选/发布输入（base64）或直接作为
-Draft 资产 `install-verification.json` 上传。**没有这份回执，发布工作流会拒绝发布**
-（这是设计，不是可绕过的例外）。
+两遍运行（先 fresh、再 upgrade/rollback）时，第二遍加
+`-MergeFrom <fresh 证据>`；脚本会拒绝合并不同版本/Commit/安装包摘要的证据。
+所有 `MR_DATA_DIR`、`MR_RENDER_CACHE_DIR`、`MR_ONLINE_CACHE_DIR` 与
+`WEBVIEW2_USER_DATA_FOLDER` 必须落在隔离目录；产出证据时不允许使用默认用户数据目录。
 
-> **干净环境声明是机器可判定字段**：回执必须带
-> `machine.cleanEnvironment: true` 与 `machine.image`（镜像标识）。
-> 这两个字段由 `-CleanEnvironment` / `-ImageName` 显式声明——**共享宿主上不要传**：
-> 回执会写成 `cleanEnvironment=false`，发布门禁（`verify-draft.mjs` 与
-> `verify-evidence.mjs`）直接拒绝。这是有意的失败方向，避免「在开发机上跑一遍」
-> 冒充干净环境验证。声明了 `-CleanEnvironment` 却没有镜像标识时脚本自身判失败。
+回执必须包含：
+
+- `artifactSha256` 与 `expectedArtifactSha256` 相等（精确候选制品）；
+- `previousVersion` / `previousArtifactSha256`（覆盖升级时）；
+- `machine.cleanEnvironment: true`、`machine.image`、`machine.provenance`
+  （`github-actions` 必须有 repository/runId/runUrl/runnerName/imageOs/imageVersion；
+  `local-vm` 必须有 hypervisor/vmId/imageSha256/startedAt）；
+- `library`：`quickCheck=ok`、schema 版本不降级、合成书库、阅读进度、
+  `readingLogPages`、`snapshotSha256`，以及 `list_books` IPC 回读一致。
+
+**发布门禁**（`verify-draft.mjs` + `verify-evidence.mjs` + `verify-provenance.mjs`）
+缺任一项即拒绝；旧共享宿主回执（`cleanEnvironment=false`、无 provenance/library）
+会被明确拒绝。hosted 证据还会在线核验 run 必须是一次真实成功、`workflow_dispatch`
+触发、跑在 `main` 上的 run；本地 VM 证据会打印人工核验要求。把这些回执作为 Draft
+资产 `install-verification.json` 上传后，才能申请正式发布。
 
 ### 4.3 发布（人工审批后）
 

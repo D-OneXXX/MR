@@ -35,6 +35,7 @@ jobs:
     environment: release-windows
     permissions:
       contents: write # 仅用于发布 Draft、接力通道清单与发布后校验
+      actions: read # 读取 run 审批记录与安装证据 provenance
     steps:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -194,6 +195,64 @@ jobs:
             --public-key evidence/configured.pub \
             --channel windows \
             --commit "$COMMIT"
+
+      # 干净环境不能只是 cleanEnvironment=true 的声明：
+      # - GitHub-hosted 证据必须能追溯到一次真实成功、由 workflow_dispatch 触发、
+      #   跑在 main 上的 run，且证据时间落在 run 执行窗口内；
+      # - 本地 VM 证据会打印人工核验要求（镜像 SHA-256 + 运行日志）。
+      - name: Verify clean-VM provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/release-governance/verify-provenance.mjs \
+            --evidence draft-assets/install-verification.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --expected-workflow ".github/workflows/release-install-verify.yml" \
+            --out evidence/provenance-verification.json
+
+      # 只读审计：记录本次发布的触发者与 Environment 审批人。
+      # 当前 release-windows 允许 self-review（prevent_self_review=false），
+      # 因此 AI 与维护者共用身份时无法靠技术区分；这里只把风险写进日志与
+      # job summary，不改变现有审批结构、不阻断发布。
+      - name: Audit deployment approval boundary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" > approvals.json || true
+          node - <<'NODE'
+          const fs = require("node:fs");
+          let approvals = [];
+          try { approvals = JSON.parse(fs.readFileSync("approvals.json", "utf8")); } catch {}
+          const approvers = [...new Set((Array.isArray(approvals) ? approvals : [])
+            .filter((entry) => entry.state === "approved")
+            .map((entry) => entry.user?.login)
+            .filter(Boolean))];
+          const actor = process.env.GITHUB_ACTOR || "(unknown)";
+          const same = approvers.includes(actor);
+          const lines = [
+            "### Release approval boundary",
+            "",
+            `- Run actor: \`${actor}\``,
+            `- Deployment approvers: \`${approvers.join(", ") || "(none read)"}\``,
+            `- Same identity self-review: \`${same ? "YES — process-only separation" : "no"}\``,
+            "",
+            "当前 Environment 允许 self-review；若 actor 与 approver 相同，AI 与维护者共用身份时无法技术区分。",
+            "要获得技术隔离，请维护者配置 GitHub App/第二账号审批身份（见 docs/dev/RELEASE_APPROVAL_BOUNDARY.md）。",
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          console.log(lines.join("\n"));
+          if (approvers.length === 0) {
+            console.log("::warning::未读取到 deployment approval 记录，请人工确认 Environment 审批存在");
+          }
+          if (same) {
+            console.log("::warning::触发者与审批人是同一账号；当前仅靠流程约束区分 AI 与维护者");
+          }
+          NODE
+
       - name: Publish the Draft
         if: steps.state.outputs.published != 'true'
         shell: bash

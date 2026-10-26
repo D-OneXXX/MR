@@ -261,11 +261,57 @@ Phase 5（v0.17.2 候选准备）进行中，正式发布仍需维护者本人�
 允许：本地构建、CI 验证、静态 QA、生成候选制品到 Draft。
 禁止：绕过证据门禁发布、未经审批公开发布、修改公开更新清单。
 
+### 10.1 安装证据的可核实性
+
+`machine.cleanEnvironment: true` **不再是充分条件**。安装回执还必须带：
+
+- `machine.provenance`：`github-actions`（repository/runId/runUrl/runnerName/
+  imageOs/imageVersion）或 `local-vm`（hypervisor/vmId/imageSha256/startedAt）；
+- `artifactSha256` 与 `expectedArtifactSha256` 一致，覆盖升级还必须有
+  `previousVersion` / `previousArtifactSha256`；
+- Windows 通道的 `library`：数据库 `quick_check`、schema 不降级、合成书库、
+  阅读进度、`readingLogPages`、`snapshotSha256`，以及真实 `list_books` IPC 回读。
+
+GitHub-hosted `windows-2022` 一次性 runner 通过
+`.github/workflows/release-install-verify.yml` 产出证据：两遍运行（全新安装 +
+升级/回滚），只读下载 Draft，不写 Release。发布前 `verify-provenance.mjs` 会在线
+核验 run 是真实成功、`workflow_dispatch` 触发、跑在 `main` 上；本地 VM 证据会打印
+人工核验要求。旧共享宿主回执（`cleanEnvironment=false`、无 provenance/library）
+会被 `verify-draft` / `verify-evidence` 拒绝。
+
+### 10.2 审批边界（2026-10-26 审计）
+
+当前事实：
+
+- Agent 使用的 `gh` 是维护者本人的 `gho_` OAuth token（scopes：`gist`、`read:org`、
+  `repo`、`workflow`）；Agent 与维护者在 GitHub 上是**同一身份**。
+- `release-windows` / `release-linux` 的 required reviewer 都是 `D-OneXXX`；
+  `prevent_self_review=false`，`can_admins_bypass=true`。
+- 因此技术上 Agent 可以触发 publish 并批准自己的 deployment；当前只有流程约束
+  （“Agent 不批准”）在阻止，**不是技术隔离**。
+
+推荐变更（需维护者单独确认后执行，本轮未改任何远程设置）：
+
+1. **推荐**：为自动化创建 GitHub App（仅 Contents/Actions/Issues/PR 必要权限，
+   不作为 Environment reviewer），Agent 使用 App installation token；Environment
+   保持 `D-OneXXX` 为 reviewer，启用 `prevent_self_review=true`、
+   `can_admins_bypass=false`。效果：Agent 触发 run 时 actor=App，维护者本人批准，
+   AI 无法自批；现有 PR/候选/QA CI 不受影响。
+2. 备选：维护者控制的第二个 GitHub 账号作为 reviewer，启用
+   `prevent_self_review=true`、`can_admins_bypass=false`。
+3. 备选：Agent 使用细粒度 PAT（不含 Deployments/Environments/Administration 写权限），
+   publish 由维护者手动触发并批准；需先确认 deployment approval 的最小权限。
+
+详见 `docs/dev/RELEASE_APPROVAL_BOUNDARY.md`。在完成技术隔离前，正式发布必须由
+维护者本人操作，Agent 不得触发或批准 publish deployment。
+
 当前已知发布阻塞（正式发布前必须解除）：
 
-- 干净 Windows VM 上的 NSIS 全新安装 / 覆盖升级 / 回滚 / 数据完整性验证
-  （共享宿主上的回执**不满足**门禁——`machine.cleanEnvironment` 必须为 true）。
-- Linux 通道的安装/升级证据（尚无 Linux 主机）。
+- 干净 Windows VM 上的 NSIS 全新安装 / 覆盖升级 / 回滚 / 数据完整性验证：
+  必须产出带 provenance + library + IPC 的可核实回执；共享宿主回执不满足。
+- 审批边界技术隔离：当前单账号 + 允许 self-review，AI 与维护者无法技术区分；
+  需维护者配置 GitHub App/第二身份或明确接受流程约束。
+- Linux 通道的安装/升级证据（尚无 Linux 主机）；Linux 保持独立，不随 Windows 自动发布。
 
 ---
 

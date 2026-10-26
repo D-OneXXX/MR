@@ -14,7 +14,7 @@
     "test:version": "node --test scripts/version.test.mjs",
     "test:governance": "node --test scripts/sync-labels.test.mjs scripts/project-status.test.mjs scripts/pr-governance.test.mjs tests/qa/lib/reliability.test.mjs",
     "test:fixtures": "node --test tests/qa/lib/fixtures.test.mjs",
-    "test:release": "node --test scripts/release-contract.test.mjs scripts/release-governance/rc-record.test.mjs scripts/release-governance/evidence.test.mjs scripts/release-governance/minisign-tooling.test.mjs",
+    "test:release": "node --test scripts/release-contract.test.mjs scripts/release-governance/rc-record.test.mjs scripts/release-governance/evidence.test.mjs scripts/release-governance/minisign-tooling.test.mjs scripts/release-governance/verify-provenance.test.mjs scripts/release-smoke/prepare-candidate.test.mjs scripts/release-smoke/library-fixture.test.mjs scripts/release-smoke/library-ui-check.test.mjs",
     "release:rehearse": "node scripts/release-governance/rehearse.mjs",
     "format:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
     "status": "node scripts/project-status.mjs",

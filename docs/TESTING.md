@@ -146,6 +146,13 @@ Remove personal paths, book titles, cookies, tokens, and full private URLs befor
 - `.github/workflows/release-candidate.yml` / `release-candidate-linux.yml` — manual
   (`workflow_dispatch`) candidate builds: they verify tag/version/QA-evidence binding, build and
   sign, and create a **Draft** release with `rc-record.json`. They never publish.
+- `.github/workflows/release-install-verify.yml` — manual (`workflow_dispatch`), clean
+  GitHub-hosted `windows-2022` install/upgrade/rollback verification. It downloads the Draft
+  read-only, binds the installer to `rc-record.json` (tag + Commit + SHA-256), runs a fresh
+  install and a 0.17.1 → 0.17.2 upgrade/rollback with a synthetic library/progress and
+  `list_books` IPC check, self-checks the evidence gate, and uploads evidence artifacts. It never
+  writes or publishes a Release. The publish workflow verifies the recorded run online with
+  `verify-provenance.mjs`.
 - `.github/workflows/release-publish.yml` / `release-publish-linux.yml` — manual
   (`workflow_dispatch`) publication: they re-verify the binding, fetch the official minisign to
   verify the artifact signature, and require the clean-environment install/upgrade evidence before
@@ -153,6 +160,44 @@ Remove personal paths, book titles, cookies, tokens, and full private URLs befor
 - `.github/workflows/release-rehearsal.yml` — secret-free rehearsal of the release state machine
   (candidate → Draft → approval binding → publish → recovery → concurrency → manifest safety →
   cross-channel → evidence gate). It runs on every push and pull request.
+
+## Clean Windows VM install verification
+
+The release gate requires an `install-verification.json` produced on a clean Windows VM, not on a
+shared development host. Two sources are accepted, both with machine-checkable provenance:
+
+- **GitHub-hosted `windows-2022` runner (recommended)**:
+  `gh workflow run release-install-verify.yml --ref main -f tag=v0.17.2 -f previous_tag=v0.17.1 -f previous_version=0.17.1`.
+  The workflow downloads the Draft read-only, validates `rc-record.json` and every artifact
+  SHA-256, runs a fresh install and an upgrade/rollback pair, writes a synthetic library
+  (`page_count=3`, `current_page=2`, `scroll_pct=0.5`, two `reading_log` rows totaling 3 pages),
+  reads it back through the app's real `list_books` IPC, and self-checks
+  `verify-evidence.mjs`. It uploads `install-verification.json`, logs, and `run-manifest.json`
+  as Actions artifacts; it never writes the Draft.
+- **A disposable local Windows VM**: run
+  `scripts/release-smoke/windows-install-upgrade.ps1` with `-CleanEnvironment`, `-Hypervisor`,
+  `-VmId`, `-VmImageSha256`, `-VmStartedAt`, and the isolated `-DataDirForApp`. The evidence
+  records `provenance.kind=local-vm`; the maintainer must verify the image hash and VM log.
+
+The evidence must include:
+
+- `artifactSha256 === expectedArtifactSha256`, plus `previousVersion` /
+  `previousArtifactSha256` for the upgrade pass;
+- `machine.cleanEnvironment=true`, `machine.image`, and `machine.provenance`;
+- `library.quickCheck=ok`, a non-decreasing schema version, the synthetic book/progress,
+  `readingLogPages>0`, and `library.ipc` matching `books[0]` (`list_books`).
+
+After reviewing the workflow artifact, upload it to the Draft:
+
+```bash
+gh release upload vX.Y.Z install-verification.json --clobber
+```
+
+Do not substitute an earlier build's receipt: the version, Commit, and artifact SHA-256 must match
+the Draft's `rc-record.json`. The publish workflow rejects old shared-host receipts
+(`cleanEnvironment=false`) and receipts without provenance/library; for GitHub-hosted evidence it
+also verifies online that the recorded run is a real successful `workflow_dispatch` run on `main`.
+Local-VM evidence prints a manual-verification requirement instead.
 
 ## Full QA evidence
 
@@ -181,8 +226,9 @@ was byte-identical and the "distinct slices" assertion was measuring render widt
 of slicing). A retry would have masked real failures; any remaining failure now blocks the
 job on the first attempt.
 
-> Phase 1–3: the release workflows still publish directly from a tag push. Do not push
-> any `v*` tag until Phase 4 replaces them with Draft + approval.
+> Phase 4 removed every tag-push release trigger. Pushing a `v*` tag only creates the ref;
+> it does not build or publish. A formal release is a manual candidate → Draft → Environment
+> approval → publish flow with binding, signature, and clean-VM evidence checks.
 
 Production `npm audit --omit=dev --audit-level=high` is blocking in both CI jobs.
 `cargo audit` is blocking on Linux with documented exceptions for the updater's

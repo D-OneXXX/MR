@@ -757,6 +757,73 @@ export function checkReleaseGovernance(root, report) {
     }
   }
 
+  // 8) 干净环境必须可核实：provenance / 合成书库+进度+IPC / 精确制品摘要，
+  //    并且 hosted 验证工作流只做只读下载与验证。
+  if (fs.existsSync(installScript)) {
+    const source = fs.readFileSync(installScript, "utf8");
+    for (const marker of [
+      "ExpectedSha256",
+      "expectedArtifactSha256",
+      "previousArtifactSha256",
+      "cleanEnvironment",
+      "provenance",
+      "imageVersion",
+      "library",
+      "list_books",
+      "MergeFrom",
+    ]) {
+      if (!source.includes(marker)) {
+        errors.push(`安装验证脚本缺少可核实证据标记 ${marker}`);
+      }
+    }
+  }
+  const installVerifyWorkflow = path.join(dir, "release-install-verify.yml");
+  if (!fs.existsSync(installVerifyWorkflow)) {
+    errors.push("缺少干净 VM 安装验证工作流 release-install-verify.yml");
+  } else {
+    const source = fs.readFileSync(installVerifyWorkflow, "utf8");
+    for (const marker of [
+      "workflow_dispatch",
+      "runs-on: windows-2022",
+      "CleanEnvironment",
+      "prepare-candidate.mjs",
+      "library-ui-check.mjs",
+      "install-verification.json",
+      "verify-evidence.mjs",
+    ]) {
+      if (!source.includes(marker)) {
+        errors.push(`release-install-verify.yml 缺少 ${marker}`);
+      }
+    }
+    if (/push:\s*\n\s*tags:/m.test(source)) {
+      errors.push("release-install-verify.yml 不得由 Tag 推送触发");
+    }
+    const secretRefs = [...source.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(
+      (match) => match[1],
+    );
+    const disallowed = [...new Set(secretRefs.filter((name) => name !== "GITHUB_TOKEN"))];
+    if (disallowed.length > 0) {
+      errors.push(`release-install-verify.yml 不得引用非默认 Secret：${disallowed.join(", ")}`);
+    }
+    if (/gh release\s+(upload|edit|delete)|--draft=false/i.test(source)) {
+      errors.push("release-install-verify.yml 不得写 Release（只允许只读下载与验证）");
+    }
+    evidence.push("release-install-verify.yml: workflow_dispatch + windows-2022 + 只读证据");
+  }
+  const windowsPublishPath = path.join(dir, "release-publish.yml");
+  if (fs.existsSync(windowsPublishPath)) {
+    const source = fs.readFileSync(windowsPublishPath, "utf8");
+    if (!source.includes("verify-provenance.mjs")) {
+      errors.push("release-publish.yml 必须在线核验安装证据 provenance");
+    }
+    if (!source.includes("Audit deployment approval boundary")) {
+      errors.push("release-publish.yml 必须记录触发者与 deployment 审批人的边界审计");
+    }
+    if (!/actions:\s*read/.test(source)) {
+      errors.push("release-publish.yml 必须声明 actions: read（读取 run 审批/运行来源）");
+    }
+  }
+
   if (errors.length) {
     fail(report, {
       id: "static:release-governance",

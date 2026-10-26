@@ -1,6 +1,7 @@
 /**
  * 发布证据门禁单元测试：缺证据 / 过期 / 版本不一致 / 制品被换 / 公钥不匹配 / 演练候选
- * 都必须**拒绝**发布；齐备且绑定一致才放行。
+ * 都必须**拒绝**发布；干净环境必须是**可核实的 provenance**，Windows 通道还必须
+ * 证明安装/升级后用户数据仍在（数据库自检 + 进度 + IPC 回读）。齐备且绑定一致才放行。
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -15,7 +16,11 @@ import {
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const ARTIFACT_SHA = "a".repeat(64);
+const PREVIOUS_SHA = "b".repeat(64);
+const BOOK_ID = "1".repeat(64);
+const SNAPSHOT_SHA = "c".repeat(64);
 const KEY_ID = "67CB304460E08E4A";
+const NOW = "2026-10-27T00:00:00.000Z";
 
 const record = {
   kind: "manga-reader.release-candidate",
@@ -43,28 +48,95 @@ const signatureEvidence = {
   verifiedAt: "2026-10-26T00:00:00.000Z",
 };
 
-const installEvidence = {
-  kind: INSTALL_EVIDENCE_KIND,
-  verdict: "PASS",
-  version: "0.17.2",
-  commit: COMMIT,
-  platform: "windows-x86_64",
-  artifactName: "MangaReader_0.17.2_x64-setup.exe",
-  artifactSha256: ARTIFACT_SHA,
-  checks: {
-    freshInstall: "pass",
-    upgrade: "pass",
-    dataIntegrity: "pass",
-    recovery: "pass",
-  },
-  machine: {
-    os: "Windows Server 2022",
-    // 干净环境声明：共享宿主上的验证不满足发布强制条件。
-    cleanEnvironment: true,
-    image: "windows-2022-clean",
-  },
-  verifiedAt: "2026-10-26T00:00:00.000Z",
-};
+/** 合法的新证据结构（canonical）：干净 GitHub-hosted runner + 合成书库 + IPC 回读。 */
+function makeInstallEvidence(overrides = {}) {
+  return {
+    kind: INSTALL_EVIDENCE_KIND,
+    verdict: "PASS",
+    version: "0.17.2",
+    commit: COMMIT,
+    platform: "windows-x86_64",
+    artifactName: "MangaReader_0.17.2_x64-setup.exe",
+    artifactSha256: ARTIFACT_SHA,
+    expectedArtifactSha256: ARTIFACT_SHA,
+    previousVersion: "0.17.1",
+    previousArtifactName: "MangaReader_0.17.1_x64-setup.exe",
+    previousArtifactSha256: PREVIOUS_SHA,
+    checks: {
+      freshInstall: "pass",
+      upgrade: "pass",
+      dataIntegrity: "pass",
+      recovery: "pass",
+    },
+    library: {
+      quickCheck: "ok",
+      schemaVersionBefore: 1,
+      schemaVersionAfter: 1,
+      bookCount: 1,
+      readingLogRows: 2,
+      readingLogPages: 3,
+      books: [
+        {
+          id: BOOK_ID,
+          title: "Release Smoke Book",
+          pageCount: 3,
+          currentPage: 2,
+          scrollPct: 0.5,
+          removed: 0,
+          sourceType: "local",
+        },
+      ],
+      ipc: {
+        ok: true,
+        source: "list_books",
+        bookId: BOOK_ID,
+        title: "Release Smoke Book",
+        currentPage: 2,
+        scrollPct: 0.5,
+        bookCount: 1,
+        checkedAt: "2026-10-26T00:10:00.000Z",
+      },
+      snapshotSha256: SNAPSHOT_SHA,
+      verifiedAt: "2026-10-26T00:10:00.000Z",
+    },
+    machine: {
+      os: "Microsoft Windows Server 2022 Datacenter",
+      cleanEnvironment: true,
+      image: "GitHub Actions windows-2022 20261021.1.0",
+      host: "RUNNER-01",
+      provenance: {
+        kind: "github-actions",
+        repository: "D-OneXXX/MR",
+        runId: "1234567890",
+        runUrl: "https://github.com/D-OneXXX/MR/actions/runs/1234567890",
+        runnerName: "RUNNER-01",
+        imageOs: "win22",
+        imageVersion: "20261021.1.0",
+        workflow:
+          "D-OneXXX/MR/.github/workflows/release-install-verify.yml@refs/heads/main",
+        actor: "D-OneXXX",
+        runAttempt: "1",
+        startedAt: "2026-10-26T00:00:00.000Z",
+      },
+    },
+    verifiedAt: "2026-10-26T00:10:00.000Z",
+    ...overrides,
+  };
+}
+
+function withProvenance(provenance) {
+  const evidence = makeInstallEvidence();
+  evidence.machine = { ...evidence.machine, provenance };
+  return evidence;
+}
+
+function withLibrary(patch) {
+  const evidence = makeInstallEvidence();
+  evidence.library = { ...evidence.library, ...patch };
+  return evidence;
+}
+
+const installEvidence = makeInstallEvidence();
 
 const expected = {
   version: "0.17.2",
@@ -74,7 +146,7 @@ const expected = {
   artifactSha256: ARTIFACT_SHA,
   publicKeyId: KEY_ID,
   channel: "windows",
-  now: "2026-10-27T00:00:00.000Z",
+  now: NOW,
 };
 
 test("publicKeyId：从 minisign 公钥文本取 key ID", () => {
@@ -102,6 +174,20 @@ test("签名证据：缺失 / 非 PASS / 公钥不匹配 → 拒绝", () => {
   );
 });
 
+test("安装证据：合法新证据 → 通过", () => {
+  assert.deepEqual(validateInstallEvidence(installEvidence, expected), []);
+  // local-vm provenance 同样合法（人工核验镜像 SHA 与日志由 verify-provenance 负责）。
+  const localVm = withProvenance({
+    kind: "local-vm",
+    hypervisor: "hyperv",
+    vmId: "vm-77-clean",
+    imageSha256: "d".repeat(64),
+    imagePath: "D:/vm/win2022-clean.vhdx",
+    startedAt: "2026-10-26T00:00:00.000Z",
+  });
+  assert.deepEqual(validateInstallEvidence(localVm, expected), []);
+});
+
 test("安装证据：缺少任一检查项 → 拒绝", () => {
   for (const key of ["freshInstall", "upgrade", "dataIntegrity", "recovery"]) {
     const checks = { ...installEvidence.checks };
@@ -114,7 +200,25 @@ test("安装证据：缺少任一检查项 → 拒绝", () => {
   }
 });
 
-test("安装证据：未声明干净环境 → 拒绝（共享宿主不满足发布强制条件）", () => {
+test("安装证据：旧共享宿主回执（clean=false、无 provenance/library）→ 拒绝", () => {
+  const legacy = makeInstallEvidence();
+  delete legacy.library;
+  delete legacy.expectedArtifactSha256;
+  delete legacy.previousVersion;
+  delete legacy.previousArtifactName;
+  delete legacy.previousArtifactSha256;
+  legacy.machine = {
+    os: "Windows 11",
+    image: "shared-workstation",
+    cleanEnvironment: false,
+  };
+  const problems = validateInstallEvidence(legacy, expected);
+  assert.ok(problems.some((p) => p.includes("干净环境")));
+  assert.ok(problems.some((p) => p.includes("provenance")));
+  assert.ok(problems.some((p) => p.includes("library")));
+});
+
+test("安装证据：未声明干净环境 / 镜像为空 → 拒绝", () => {
   const withoutFlag = validateInstallEvidence(
     {
       ...installEvidence,
@@ -134,9 +238,6 @@ test("安装证据：未声明干净环境 → 拒绝（共享宿主不满足发
     expected,
   );
   assert.ok(explicitlyDirty.some((p) => p.includes("干净环境")));
-});
-
-test("安装证据：干净环境必须记录镜像标识", () => {
   const withoutImage = validateInstallEvidence(
     {
       ...installEvidence,
@@ -144,9 +245,186 @@ test("安装证据：干净环境必须记录镜像标识", () => {
     },
     expected,
   );
+  assert.ok(withoutImage.some((p) => p.includes("镜像")));
+});
+
+test("安装证据：github-actions provenance 缺 runUrl/runId/imageVersion → 拒绝", () => {
+  for (const key of ["runUrl", "runId", "imageVersion", "repository", "runnerName", "actor"]) {
+    const provenance = { ...installEvidence.machine.provenance };
+    delete provenance[key];
+    const problems = validateInstallEvidence(withProvenance(provenance), expected);
+    assert.ok(
+      problems.some((p) => p.includes(key)),
+      `缺少 provenance.${key} 必须被拒绝`,
+    );
+  }
+  const badImageVersion = validateInstallEvidence(
+    withProvenance({
+      ...installEvidence.machine.provenance,
+      imageVersion: "2026-10-21",
+    }),
+    expected,
+  );
+  assert.ok(badImageVersion.some((p) => p.includes("imageVersion")));
+});
+
+test("安装证据：runUrl 与 repository/runId 不一致 → 拒绝", () => {
+  const problems = validateInstallEvidence(
+    withProvenance({
+      ...installEvidence.machine.provenance,
+      runUrl: "https://github.com/D-OneXXX/MR/actions/runs/9999999999",
+    }),
+    expected,
+  );
+  assert.ok(problems.some((p) => p.includes("runUrl")));
+});
+
+test("安装证据：local-vm provenance 缺 hypervisor/vmId/imageSha256 → 拒绝", () => {
+  for (const key of ["hypervisor", "vmId", "imageSha256"]) {
+    const provenance = {
+      kind: "local-vm",
+      hypervisor: "hyperv",
+      vmId: "vm-77-clean",
+      imageSha256: "d".repeat(64),
+      startedAt: "2026-10-26T00:00:00.000Z",
+    };
+    delete provenance[key];
+    const problems = validateInstallEvidence(withProvenance(provenance), expected);
+    assert.ok(
+      problems.some((p) => p.includes(key)),
+      `local-vm 缺少 ${key} 必须被拒绝`,
+    );
+  }
+  const badKind = validateInstallEvidence(
+    withProvenance({ kind: "manual", operator: "someone" }),
+    expected,
+  );
+  assert.ok(badKind.some((p) => p.includes("provenance.kind")));
+});
+
+test("安装证据：expectedArtifactSha256 必须是 64 hex 且等于 artifactSha256", () => {
+  const missing = makeInstallEvidence();
+  delete missing.expectedArtifactSha256;
   assert.ok(
-    withoutImage.some((p) => p.includes("镜像")),
-    "缺少 machine.image 必须被拒绝",
+    validateInstallEvidence(missing, expected).some((p) => p.includes("expectedArtifactSha256")),
+  );
+  const short = validateInstallEvidence(
+    { ...installEvidence, expectedArtifactSha256: "abc" },
+    expected,
+  );
+  assert.ok(short.some((p) => p.includes("expectedArtifactSha256")));
+  const mismatched = validateInstallEvidence(
+    { ...installEvidence, expectedArtifactSha256: "e".repeat(64) },
+    expected,
+  );
+  assert.ok(mismatched.some((p) => p.includes("expectedArtifactSha256")));
+});
+
+test("安装证据：library 缺 quickCheck/books/readingLogPages → 拒绝", () => {
+  for (const key of ["quickCheck", "books", "readingLogPages", "snapshotSha256", "ipc"]) {
+    const evidence = makeInstallEvidence();
+    delete evidence.library[key];
+    const problems = validateInstallEvidence(evidence, expected);
+    assert.ok(
+      problems.some((p) => p.includes(key)),
+      `library 缺少 ${key} 必须被拒绝`,
+    );
+  }
+  const noProgress = validateInstallEvidence(
+    withLibrary({
+      books: [
+        {
+          id: BOOK_ID,
+          title: "Release Smoke Book",
+          pageCount: 3,
+          currentPage: 0,
+          scrollPct: 0,
+          removed: 0,
+          sourceType: "local",
+        },
+      ],
+    }),
+    expected,
+  );
+  assert.ok(noProgress.some((p) => p.includes("currentPage")));
+  const badReadingLog = validateInstallEvidence(
+    withLibrary({ readingLogRows: 0, readingLogPages: 0 }),
+    expected,
+  );
+  assert.ok(badReadingLog.some((p) => p.includes("readingLogRows")));
+  assert.ok(badReadingLog.some((p) => p.includes("readingLogPages")));
+});
+
+test("安装证据：books 与 ipc 的 currentPage 不一致 → 拒绝", () => {
+  const evidence = makeInstallEvidence();
+  evidence.library = {
+    ...evidence.library,
+    ipc: { ...evidence.library.ipc, currentPage: 1 },
+  };
+  const problems = validateInstallEvidence(evidence, expected);
+  assert.ok(problems.some((p) => p.includes("ipc.currentPage")));
+
+  const wrongIpcSource = withLibrary({
+    ipc: { ...installEvidence.library.ipc, source: "get_book" },
+  });
+  assert.ok(
+    validateInstallEvidence(wrongIpcSource, expected).some((p) => p.includes("ipc.source")),
+  );
+  const wrongBookCount = withLibrary({
+    ipc: { ...installEvidence.library.ipc, bookCount: 2 },
+  });
+  assert.ok(
+    validateInstallEvidence(wrongBookCount, expected).some((p) => p.includes("ipc.bookCount")),
+  );
+});
+
+test("安装证据：upgrade=pass 但缺 previousVersion/previousArtifactSha256 → 拒绝", () => {
+  const noPrevious = makeInstallEvidence();
+  delete noPrevious.previousVersion;
+  delete noPrevious.previousArtifactName;
+  delete noPrevious.previousArtifactSha256;
+  const problems = validateInstallEvidence(noPrevious, expected);
+  assert.ok(problems.some((p) => p.includes("previousVersion")));
+  assert.ok(problems.some((p) => p.includes("previousArtifactName")));
+  assert.ok(problems.some((p) => p.includes("previousArtifactSha256")));
+
+  const sameVersion = validateInstallEvidence(
+    { ...installEvidence, previousVersion: "0.17.2" },
+    expected,
+  );
+  assert.ok(sameVersion.some((p) => p.includes("previousVersion")));
+
+  const notSemver = validateInstallEvidence(
+    { ...installEvidence, previousVersion: "v0.17.1" },
+    expected,
+  );
+  assert.ok(notSemver.some((p) => p.includes("previousVersion")));
+});
+
+test("安装证据：linux-critical 通道不要求 library，但仍要求 provenance", () => {
+  const linux = makeInstallEvidence({
+    platform: "linux-x86_64",
+    artifactName: "MangaReader_0.17.2_amd64.AppImage",
+    checks: { freshInstall: "pass", upgrade: "pass", dataIntegrity: "pass" },
+    machine: {
+      ...installEvidence.machine,
+      os: "Ubuntu 22.04",
+      image: "GitHub Actions ubuntu-22.04 20261021.1.0",
+    },
+  });
+  delete linux.library;
+  const linuxExpected = {
+    ...expected,
+    platform: "linux-x86_64",
+    artifactName: "MangaReader_0.17.2_amd64.AppImage",
+    channel: "linux-critical",
+    requiredChecks: ["freshInstall", "upgrade", "dataIntegrity"],
+  };
+  assert.deepEqual(validateInstallEvidence(linux, linuxExpected), []);
+  const noProvenance = { ...linux, machine: { ...linux.machine } };
+  delete noProvenance.machine.provenance;
+  assert.ok(
+    validateInstallEvidence(noProvenance, linuxExpected).some((p) => p.includes("provenance")),
   );
 });
 
@@ -159,7 +437,7 @@ test("总闸：证据齐备且绑定一致 → 放行", () => {
     channel: "windows",
     commit: COMMIT,
     publicKeyId: KEY_ID,
-    now: "2026-10-27T00:00:00.000Z",
+    now: NOW,
   });
   assert.equal(verdict.ok, true, verdict.problems.join(" | "));
 });
@@ -176,7 +454,7 @@ test("总闸：安装证据来自共享宿主（未声明干净环境）→ 拒�
     channel: "windows",
     commit: COMMIT,
     publicKeyId: KEY_ID,
-    now: "2026-10-27T00:00:00.000Z",
+    now: NOW,
   });
   assert.equal(verdict.ok, false);
   assert.ok(verdict.problems.some((p) => p.includes("干净环境")));
@@ -189,7 +467,7 @@ test("总闸：缺安装证据 / 缺签名证据 → 拒绝", () => {
     channel: "windows",
     commit: COMMIT,
     publicKeyId: KEY_ID,
-    now: "2026-10-27T00:00:00.000Z",
+    now: NOW,
   };
   const noInstall = verifyReleaseEvidence({ ...base, signatureEvidence, installEvidence: null });
   assert.equal(noInstall.ok, false);
@@ -206,7 +484,7 @@ test("总闸：证据过期 → 拒绝", () => {
     channel: "windows",
     commit: COMMIT,
     publicKeyId: KEY_ID,
-    now: "2026-10-27T00:00:00.000Z",
+    now: NOW,
   });
   assert.equal(verdict.ok, false);
   assert.ok(verdict.problems.some((p) => p.includes("过期")));
@@ -219,7 +497,7 @@ test("总闸：版本 / Commit / 平台 / 制品摘要不一致 → 拒绝", () 
     channel: "windows",
     commit: COMMIT,
     publicKeyId: KEY_ID,
-    now: "2026-10-27T00:00:00.000Z",
+    now: NOW,
   };
   const wrongVersion = verifyReleaseEvidence({
     ...base,

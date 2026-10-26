@@ -51,6 +51,205 @@ export const GOVERNANCE_FILES = new Set([
 const HEX40 = /^[0-9a-f]{40}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const SEMVER = /^\d+\.\d+\.\d+$/;
+const IMAGE_VERSION = /^\d{8}(\.\d+)+$/;
+const RUN_ID = /^\d+$/;
+
+/**
+ * 干净环境 provenance 契约（与安装脚本 / 证据 schema 共用，唯一事实源）。
+ *
+ * - `github-actions`：必须能定位到**具体 workflow run**（repository/runId/runUrl 自洽），
+ *   否则「干净 VM」只是一句无法核实的声明；
+ * - `local-vm`：必须能定位到具体虚拟机镜像（hypervisor/vmId/imageSha256）。
+ */
+export function provenanceProblems(provenance, subject = "安装证据") {
+  if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) {
+    return [
+      `${subject}缺少可核实的运行来源（machine.provenance：github-actions 或 local-vm）`,
+    ];
+  }
+  const problems = [];
+  const nonEmpty = (value) => String(value ?? "").trim().length > 0;
+  if (provenance.kind === "github-actions") {
+    for (const key of [
+      "repository",
+      "runId",
+      "runUrl",
+      "runnerName",
+      "imageOs",
+      "imageVersion",
+      "workflow",
+      "actor",
+    ]) {
+      if (!nonEmpty(provenance[key])) {
+        problems.push(`${subject}的 github-actions provenance 缺少 ${key}`);
+      }
+    }
+    if (nonEmpty(provenance.runId) && !RUN_ID.test(String(provenance.runId))) {
+      problems.push(`${subject}的 github-actions provenance runId 必须为纯数字`);
+    }
+    if (nonEmpty(provenance.repository) && nonEmpty(provenance.runId)) {
+      const expectedUrl = `https://github.com/${provenance.repository}/actions/runs/${provenance.runId}`;
+      if (String(provenance.runUrl) !== expectedUrl) {
+        problems.push(
+          `${subject}的 github-actions provenance runUrl 与 repository/runId 不一致（期望 ${expectedUrl}）`,
+        );
+      }
+    }
+    if (
+      nonEmpty(provenance.imageVersion) &&
+      !IMAGE_VERSION.test(String(provenance.imageVersion))
+    ) {
+      problems.push(
+        `${subject}的 github-actions provenance imageVersion 必须形如 20261021.1.0（实际 ${provenance.imageVersion}）`,
+      );
+    }
+  } else if (provenance.kind === "local-vm") {
+    for (const key of ["hypervisor", "vmId"]) {
+      if (!nonEmpty(provenance[key])) {
+        problems.push(`${subject}的 local-vm provenance 缺少 ${key}`);
+      }
+    }
+    if (!HEX64.test(String(provenance.imageSha256 || ""))) {
+      problems.push(`${subject}的 local-vm provenance imageSha256 必须为 64 位十六进制`);
+    }
+    if (Number.isNaN(Date.parse(provenance.startedAt || ""))) {
+      problems.push(`${subject}的 local-vm provenance startedAt 必须是合法时间`);
+    }
+  } else {
+    problems.push(
+      `${subject}的 machine.provenance.kind 非法：${String(provenance.kind)}（只接受 github-actions / local-vm）`,
+    );
+  }
+  return problems;
+}
+
+/** 运行环境（干净环境声明 + 镜像标识 + provenance）统一校验。 */
+export function machineEvidenceProblems(machine, subject = "安装证据") {
+  const problems = [];
+  if (!machine?.os) problems.push(`${subject}未记录运行环境（machine.os）`);
+  // 干净环境是**发布强制条件**：共享宿主上的安装/升级回执不能满足发布门禁。
+  if (machine?.cleanEnvironment !== true) {
+    problems.push(
+      `${subject}未声明干净环境（machine.cleanEnvironment 必须为 true；共享宿主上的验证不满足发布强制条件）`,
+    );
+  }
+  if (!String(machine?.image || "").trim()) {
+    problems.push(`${subject}未记录干净环境镜像标识（machine.image）`);
+  }
+  problems.push(...provenanceProblems(machine?.provenance, subject));
+  return problems;
+}
+
+/**
+ * 用户数据完整性快照（合成书库 + 阅读进度 + 真实 IPC 回读）。
+ *
+ * 只校验结构与自洽性：`books[0]` 必须被 `list_books` IPC 回读为同一本书、
+ * 同一进度。任何一项对不上，说明「安装/升级后数据仍在」只是声明而非事实。
+ */
+export function libraryEvidenceProblems(library, subject = "安装证据") {
+  if (!library || typeof library !== "object" || Array.isArray(library)) {
+    return [
+      `${subject}缺少用户数据完整性快照（library：quickCheck / schemaVersion / bookCount / readingLog / books / ipc / snapshotSha256）`,
+    ];
+  }
+  const problems = [];
+  if (library.quickCheck !== "ok") {
+    problems.push(`${subject}的 library.quickCheck 必须为 ok（实际 ${String(library.quickCheck)}）`);
+  }
+  if (!Number.isInteger(library.schemaVersionBefore) || library.schemaVersionBefore < 1) {
+    problems.push(`${subject}的 library.schemaVersionBefore 必须 ≥ 1`);
+  }
+  if (!Number.isInteger(library.schemaVersionAfter)) {
+    problems.push(`${subject}的 library.schemaVersionAfter 缺失或非整数`);
+  } else if (
+    Number.isInteger(library.schemaVersionBefore) &&
+    library.schemaVersionAfter < library.schemaVersionBefore
+  ) {
+    problems.push(
+      `${subject}的 library.schemaVersionAfter（${library.schemaVersionAfter}）小于 schemaVersionBefore（${library.schemaVersionBefore}）`,
+    );
+  }
+  if (!Number.isInteger(library.bookCount) || library.bookCount < 1) {
+    problems.push(`${subject}的 library.bookCount 必须 ≥ 1`);
+  }
+  if (!Number.isInteger(library.readingLogRows) || library.readingLogRows < 1) {
+    problems.push(`${subject}的 library.readingLogRows 必须 ≥ 1`);
+  }
+  if (!Number.isFinite(library.readingLogPages) || library.readingLogPages <= 0) {
+    problems.push(`${subject}的 library.readingLogPages 必须 > 0`);
+  }
+  if (!HEX64.test(String(library.snapshotSha256 || ""))) {
+    problems.push(`${subject}的 library.snapshotSha256 必须为 64 位十六进制`);
+  }
+
+  const books = Array.isArray(library.books) ? library.books : [];
+  if (books.length === 0) {
+    problems.push(`${subject}的 library.books 必须非空`);
+  } else {
+    if (!books.some((book) => Number.isFinite(book?.currentPage) && book.currentPage > 0)) {
+      problems.push(`${subject}的 library.books 至少需要一本书 currentPage > 0`);
+    }
+    const first = books[0] || {};
+    if (!String(first.id || "").trim()) {
+      problems.push(`${subject}的 library.books[0] 缺少 id`);
+    }
+    const ipc = library.ipc;
+    if (ipc?.ok !== true) {
+      problems.push(`${subject}的 library.ipc.ok 必须为 true（安装后必须真实通过 IPC 回读书库）`);
+    }
+    if (ipc?.source !== "list_books") {
+      problems.push(`${subject}的 library.ipc.source 必须为 list_books`);
+    }
+    if (String(ipc?.bookId ?? "") !== String(first.id ?? "")) {
+      problems.push(`${subject}的 library.ipc.bookId 与 books[0].id 不一致`);
+    }
+    if (String(ipc?.title ?? "") !== String(first.title ?? "")) {
+      problems.push(`${subject}的 library.ipc.title 与 books[0].title 不一致`);
+    }
+    if (Number(ipc?.currentPage) !== Number(first.currentPage)) {
+      problems.push(`${subject}的 library.ipc.currentPage 与 books[0].currentPage 不一致`);
+    }
+    if (Number(ipc?.scrollPct) !== Number(first.scrollPct)) {
+      problems.push(`${subject}的 library.ipc.scrollPct 与 books[0].scrollPct 不一致`);
+    }
+    if (Number(ipc?.bookCount) !== Number(library.bookCount)) {
+      problems.push(`${subject}的 library.ipc.bookCount 与 library.bookCount 不一致`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * 摘要与升级前版本的自洽性：`expectedArtifactSha256` 必须是本次安装包摘要，
+ * 覆盖升级还必须记录上一个版本的版本号与安装包摘要。
+ */
+export function installIntegrityProblems(evidence, subject = "安装证据") {
+  const problems = [];
+  const expectedSha = String(evidence.expectedArtifactSha256 || "");
+  if (!HEX64.test(expectedSha)) {
+    problems.push(`${subject}缺少合法的 expectedArtifactSha256（64 位十六进制）`);
+  } else if (expectedSha !== String(evidence.artifactSha256 || "")) {
+    problems.push(
+      `${subject}的 expectedArtifactSha256 与实际安装包摘要不一致（疑似换包）`,
+    );
+  }
+  if (evidence.checks?.upgrade === "pass") {
+    if (!SEMVER.test(String(evidence.previousVersion || ""))) {
+      problems.push(`${subject}声明覆盖升级通过，但缺少合法的 previousVersion`);
+    } else if (String(evidence.previousVersion) === String(evidence.version)) {
+      problems.push(`${subject}的 previousVersion 不能等于当前版本（${evidence.version}）`);
+    }
+    if (!String(evidence.previousArtifactName || "").trim()) {
+      problems.push(`${subject}声明覆盖升级通过，但缺少 previousArtifactName`);
+    }
+    if (!HEX64.test(String(evidence.previousArtifactSha256 || ""))) {
+      problems.push(
+        `${subject}声明覆盖升级通过，但 previousArtifactSha256 不是 64 位十六进制`,
+      );
+    }
+  }
+  return problems;
+}
 
 /** 文件摘要（SHA-256）。 */
 export function sha256File(filePath) {
@@ -235,22 +434,20 @@ export function validateInstallAttestation(attestation, expected) {
   if (!HEX64.test(String(attestation.artifactSha256 || ""))) {
     problems.push("安装验证回执缺少被安装制品的 SHA-256（artifactSha256）");
   }
-  const channel = expected?.channel ? CHANNELS[expected.channel] : null;
+  const channelId = expected?.channel || "windows";
+  const channel = CHANNELS[channelId] || null;
   const required = channel?.requiredChecks || ["freshInstall", "upgrade", "dataIntegrity", "recovery"];
   for (const key of required) {
     if (attestation.checks?.[key] !== "pass") {
       problems.push(`安装验证缺少通过项：${key}`);
     }
   }
-  if (!attestation.machine?.os) problems.push("安装验证回执缺少运行环境记录");
-  // 干净环境声明：共享宿主上的验证不满足发布强制条件。
-  if (attestation.machine?.cleanEnvironment !== true) {
-    problems.push(
-      "安装验证回执未声明干净环境（machine.cleanEnvironment 必须为 true；共享宿主上的验证不满足发布强制条件）",
-    );
-  }
-  if (!String(attestation.machine?.image || "").trim()) {
-    problems.push("安装验证回执未记录干净环境镜像标识（machine.image）");
+  // 运行环境 / provenance / 摘要 / 升级前版本：与 evidence.mjs 共用同一套纯函数。
+  problems.push(...machineEvidenceProblems(attestation.machine, "安装验证回执"));
+  problems.push(...installIntegrityProblems(attestation, "安装验证回执"));
+  // Windows 通道必须证明「安装/升级后用户数据仍在」：数据库自检、进度、真实 IPC 回读。
+  if (channelId === "windows") {
+    problems.push(...libraryEvidenceProblems(attestation.library, "安装验证回执"));
   }
   if (!attestation.verifiedAt || Number.isNaN(Date.parse(attestation.verifiedAt))) {
     problems.push("安装验证回执缺少合法时间");

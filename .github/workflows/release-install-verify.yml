@@ -1,0 +1,323 @@
+name: Release install verification (clean Windows VM)
+
+# 干净 Windows VM 安装/升级/回滚验证（Issue #77）。
+#
+# 只做一件事：在**一次性 GitHub-hosted windows-2022 runner**上，
+# 用 Draft 里已存在的候选制品，验证：
+# - 全新安装；
+# - 0.17.1 → 0.17.2 覆盖升级；
+# - 回滚；
+# - 合成用户书库、阅读进度、数据库自检与真实 list_books IPC 回读。
+#
+# 证据绑定：tag + Commit + 安装包 SHA-256 + ImageOS/ImageVersion + run URL。
+# 本工作流**不**写 Draft、不发布 Release、不引用任何非默认 Secret；只用
+# GITHUB_TOKEN 只读下载 Draft 资产。Draft 资产对 token 的可见性要求推送级读取，
+# 因此这里使用 contents: write，但没有任何写 Release 的调用；static 守卫会检查这一点。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "候选标签（vX.Y.Z，必须已存在且指向 main 上的候选 Commit）"
+        required: true
+        default: v0.17.2
+        type: string
+      previous_tag:
+        description: "覆盖升级的旧版本标签"
+        required: true
+        default: v0.17.1
+        type: string
+      previous_version:
+        description: "旧版本号（与 previous_tag 的安装包名一致）"
+        required: true
+        default: 0.17.1
+        type: string
+
+permissions:
+  contents: write # 仅用于读取 Draft 资产；无任何写 Release 调用
+  actions: read
+
+concurrency:
+  group: release-install-verify-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  install-verify:
+    name: Clean Windows VM install verification (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout main (gate scripts)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve candidate tag commit
+        id: tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "候选标签必须形如 vX.Y.Z：$TAG" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          COMMIT="$(git rev-list -n 1 "refs/tags/${TAG}")"
+          if ! printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "无法解析标签 Commit：$TAG" >&2
+            exit 1
+          fi
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Download Draft assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          rm -rf candidate && mkdir -p candidate
+          gh release download "$TAG" --dir candidate --clobber
+          ls -l candidate
+
+      - name: Validate candidate input binding
+        id: candidate
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          rm -rf candidate-meta && mkdir -p candidate-meta
+          node scripts/release-smoke/prepare-candidate.mjs \
+            --record candidate/rc-record.json \
+            --assets-dir candidate \
+            --tag "$TAG" \
+            --expected-commit "$TAG_COMMIT" \
+            --out candidate-meta/candidate.json
+          VERSION="$(node -p "require('./candidate-meta/candidate.json').version")"
+          INSTALLER="$(node -p "require('./candidate-meta/candidate.json').artifactName")"
+          SHA="$(node -p "require('./candidate-meta/candidate.json').artifactSha256")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "installer=${INSTALLER}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Download previous installer
+        id: previous
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+        run: |
+          set -euo pipefail
+          rm -rf previous && mkdir -p previous
+          PREVIOUS_INSTALLER="MangaReader_${PREVIOUS_VERSION}_x64-setup.exe"
+          gh release download "$PREVIOUS_TAG" --dir previous --pattern "$PREVIOUS_INSTALLER" --clobber
+          PREVIOUS_SHA="$(node -e 'const crypto=require("node:crypto");const fs=require("node:fs");console.log(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "previous/${PREVIOUS_INSTALLER}")"
+          echo "installer=${PREVIOUS_INSTALLER}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${PREVIOUS_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Fresh install verification
+        shell: pwsh
+        env:
+          INSTALLER: ${{ steps.candidate.outputs.installer }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+          ARTIFACT_SHA: ${{ steps.candidate.outputs.sha256 }}
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "$env:RUNNER_TEMP\mr-fresh"
+          Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          Start-Transcript -Path "$root\fresh.log" -Force
+          try {
+            & pwsh -NoProfile -File scripts/release-smoke/windows-install-upgrade.ps1 `
+              -Installer (Resolve-Path "candidate/$env:INSTALLER").Path `
+              -ExpectedVersion $env:VERSION `
+              -ExpectedSha256 $env:ARTIFACT_SHA `
+              -Commit $env:TAG_COMMIT `
+              -DataDirForApp "$root\data" `
+              -CleanEnvironment `
+              -EmitEvidence "$root\fresh-install-verification.json" `
+              -ArtifactName $env:INSTALLER
+            if ($LASTEXITCODE -ne 0) {
+              throw "全新安装验证失败（exit $LASTEXITCODE）"
+            }
+          } finally {
+            Stop-Transcript
+          }
+
+      - name: Upgrade and rollback verification
+        shell: pwsh
+        env:
+          INSTALLER: ${{ steps.candidate.outputs.installer }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+          ARTIFACT_SHA: ${{ steps.candidate.outputs.sha256 }}
+          PREVIOUS_INSTALLER: ${{ steps.previous.outputs.installer }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha256 }}
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "$env:RUNNER_TEMP\mr-upgrade"
+          Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          Start-Transcript -Path "$root\upgrade.log" -Force
+          try {
+            & pwsh -NoProfile -File scripts/release-smoke/windows-install-upgrade.ps1 `
+              -PreviousInstaller (Resolve-Path "previous/$env:PREVIOUS_INSTALLER").Path `
+              -Installer (Resolve-Path "candidate/$env:INSTALLER").Path `
+              -ExpectedVersion $env:VERSION `
+              -ExpectedSha256 $env:ARTIFACT_SHA `
+              -PreviousExpectedVersion $env:PREVIOUS_VERSION `
+              -PreviousExpectedSha256 $env:PREVIOUS_SHA `
+              -Commit $env:TAG_COMMIT `
+              -DataDirForApp "$root\data" `
+              -LibrarySeedScript "scripts/release-smoke/library-fixture.mjs" `
+              -LibraryVerifyScript "scripts/release-smoke/library-fixture.mjs" `
+              -LibraryUiCheckScript "scripts/release-smoke/library-ui-check.mjs" `
+              -LibraryFixture "$root\fixture.json" `
+              -UiCheckPort 9333 `
+              -CleanEnvironment `
+              -EmitEvidence "$root\install-verification.json" `
+              -MergeFrom "$env:RUNNER_TEMP\mr-fresh\fresh-install-verification.json" `
+              -ArtifactName $env:INSTALLER
+            if ($LASTEXITCODE -ne 0) {
+              throw "升级/回滚验证失败（exit $LASTEXITCODE）"
+            }
+          } finally {
+            Stop-Transcript
+          }
+
+      - name: Verify evidence bundle against Draft record
+        shell: bash
+        env:
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json","utf8"));fs.writeFileSync("evidence/configured.pub",Buffer.from(c.plugins.updater.pubkey,"base64"));'
+          node scripts/release-governance/verify-evidence.mjs \
+            --record candidate/rc-record.json \
+            --assets-dir candidate \
+            --signature-evidence candidate/signature-verification.json \
+            --install-evidence "$RUNNER_TEMP/mr-upgrade/install-verification.json" \
+            --public-key evidence/configured.pub \
+            --channel windows \
+            --commit "$TAG_COMMIT"
+
+      - name: Write run manifest
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          INSTALLER: ${{ steps.candidate.outputs.installer }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+          ARTIFACT_SHA: ${{ steps.candidate.outputs.sha256 }}
+          PREVIOUS_INSTALLER: ${{ steps.previous.outputs.installer }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha256 }}
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          export TAG PREVIOUS_TAG INSTALLER VERSION ARTIFACT_SHA PREVIOUS_INSTALLER PREVIOUS_VERSION PREVIOUS_SHA TAG_COMMIT
+          node - <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const sha = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+          const runId = process.env.GITHUB_RUN_ID;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const server = process.env.GITHUB_SERVER_URL || "https://github.com";
+          const files = {};
+          for (const [key, file] of Object.entries({
+            installVerification: `${process.env.RUNNER_TEMP}/mr-upgrade/install-verification.json`,
+            freshInstallVerification: `${process.env.RUNNER_TEMP}/mr-fresh/fresh-install-verification.json`,
+            fixture: `${process.env.RUNNER_TEMP}/mr-upgrade/fixture.json`,
+            rcRecord: "candidate/rc-record.json",
+            candidateMeta: "candidate-meta/candidate.json",
+          })) {
+            if (fs.existsSync(file)) files[key] = { path: path.basename(file), sha256: sha(file) };
+          }
+          const manifest = {
+            tag: process.env.TAG,
+            commit: process.env.TAG_COMMIT,
+            version: process.env.VERSION,
+            artifactName: process.env.INSTALLER,
+            artifactSha256: process.env.ARTIFACT_SHA,
+            previousTag: process.env.PREVIOUS_TAG,
+            previousVersion: process.env.PREVIOUS_VERSION,
+            previousArtifactName: process.env.PREVIOUS_INSTALLER,
+            previousArtifactSha256: process.env.PREVIOUS_SHA,
+            runner: {
+              imageOs: process.env.ImageOS,
+              imageVersion: process.env.ImageVersion,
+              runnerName: process.env.RUNNER_NAME,
+              runId,
+              runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+              runUrl: `${server}/${repository}/actions/runs/${runId}`,
+              workflow: process.env.GITHUB_WORKFLOW_REF,
+              actor: process.env.GITHUB_ACTOR,
+              event: process.env.GITHUB_EVENT_NAME,
+            },
+            generatedAt: new Date().toISOString(),
+            files,
+          };
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/run-manifest.json`, JSON.stringify(manifest, null, 2));
+          NODE
+
+      - name: Summarize clean-VM evidence
+        if: always()
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+          INSTALLER: ${{ steps.candidate.outputs.installer }}
+          ARTIFACT_SHA: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          {
+            echo "### Clean Windows VM install verification"
+            echo ""
+            echo "- Tag: \`$TAG\`"
+            echo "- Candidate commit: \`$TAG_COMMIT\`"
+            echo "- Installer: \`$INSTALLER\`"
+            echo "- Installer SHA-256: \`$ARTIFACT_SHA\`"
+            echo "- Runner image: \`$ImageOS / $ImageVersion\`"
+            echo "- Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            if [ -f "$RUNNER_TEMP/mr-upgrade/install-verification.json" ]; then
+              node -e 'const fs=require("fs");const e=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/mr-upgrade/install-verification.json","utf8"));console.log("- Verdict: "+e.verdict);console.log("- Clean environment: "+e.machine.cleanEnvironment);console.log("- Provenance: "+e.machine.provenance.kind+" "+e.machine.provenance.runUrl);console.log("- Library: "+JSON.stringify({books:e.library?.bookCount,pages:e.library?.readingLogPages,currentPage:e.library?.books?.[0]?.currentPage,ipc:e.library?.ipc?.ok}));'
+            else
+              echo "- Install verification evidence: NOT FOUND"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload clean-VM evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clean-vm-evidence-${{ inputs.tag }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/mr-fresh/fresh-install-verification.json
+            ${{ runner.temp }}/mr-fresh/fresh.log
+            ${{ runner.temp }}/mr-upgrade/install-verification.json
+            ${{ runner.temp }}/mr-upgrade/upgrade.log
+            ${{ runner.temp }}/mr-upgrade/fixture.json
+            ${{ runner.temp }}/mr-upgrade/verify-upgrade.json
+            ${{ runner.temp }}/mr-upgrade/verify-rollback.json
+            ${{ runner.temp }}/mr-upgrade/ipc-upgrade.json
+            ${{ runner.temp }}/mr-upgrade/ipc-rollback.json
+            ${{ runner.temp }}/run-manifest.json
+            candidate-meta/candidate.json
+            candidate/rc-record.json

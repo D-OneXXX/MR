@@ -2,6 +2,12 @@
 
 > 审计时间：2026-10-26。本文只记录事实与建议，**不构成远程设置变更**。
 > Environment、Secrets、Ruleset、仓库权限的任何变更都需要维护者单独确认。
+>
+> **2026-10-27 复核修正**：§4 方案 A 的 App 权限已修正为 **`Contents: read` only**，
+> 并新增写 deploy key、workflow 路径 ruleset 与 `v*` Tag creation 规则。**不得**给
+> 自动化身份 `Contents: write`：它可以直接 `PATCH` Draft 为公开 Release，绕过
+> Environment。完整验收、迁移顺序与未执行项见
+> [`PERMISSION_ISOLATION_ACCEPTANCE.md`](./PERMISSION_ISOLATION_ACCEPTANCE.md)。
 
 ## 1. 结论
 
@@ -24,7 +30,7 @@ github.com
   ✓ Logged in to github.com account D-OneXXX (keyring)
   - Active account: true
   - Git operations protocol: https
-  - Token: gho_************************************
+  - Token: <redacted>（本报告不记录令牌值）
   - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
 ```
 
@@ -100,32 +106,62 @@ trigger actor 与 approver 时，系统不会阻止。publish 流程将来同样
 
 ### 方案 A（推荐）：自动化身份 + 人类 reviewer 技术隔离
 
-目标：Agent 以**非 reviewer 身份**触发；维护者以自己的身份批准；Agent 无法批准。
+目标：Agent 以**非 reviewer 身份**触发；维护者以自己的身份批准；Agent 无法批准，
+也无法绕过 workflow 直接发布。
 
-1. 为自动化创建 GitHub App（或一个只用于自动化的 bot 账号），安装到仓库。
-   - 权限尽量小：`Contents: read/write`（Release 资产/分支）、`Actions: write`
-     （手动触发 workflow）、`Issues: write`、`Pull requests: write`、`Metadata: read`。
-   - **不要**给 `Administration`、`Environments`、`Deployments` 写权限。
-   - App 不能作为 Environment required reviewer（GitHub 的 reviewer 是 user/team），
-     所以它天然无法批准 deployment。
-2. `release-windows` / `release-linux`：
+**硬约束：不要给自动化身份 `Contents: write`。** GitHub 没有独立的 Releases 权限，
+Release 创建/编辑由 Contents write 覆盖；拥有该权限的身份可以调用
+`PATCH /repos/{owner}/{repo}/releases/{id}` 把 `draft=false`，不经过 workflow 或
+Environment。`Contents: write` 同时也允许改 workflow 文件和 Tag，因此不能靠
+“严格 PR review”来抵消 API 直发。
+
+1. 为自动化创建 GitHub App（或一个只用于自动化的 bot 账号），只安装到本仓库。
+   - `Metadata: read`（必需）
+   - `Contents: read`（只读；**不要 write**）
+   - `Actions: read/write`（触发 `workflow_dispatch`、读取 run/artifact）
+   - `Issues: read/write`、`Pull requests: read/write`
+   - **不要**给 `Contents` write、`Workflows` write、`Administration`、
+     `Environments`、`Secrets`、`Deployments` 写权限。
+   - App 不能作为 Environment required reviewer（GitHub 的 reviewer 类型只有
+     User/Team）；REST 的 `POST .../pending_deployments` 在 OpenAPI 中还标记为
+     `enabledForGitHubApps=false`。两条独立信号都指向“App 不能批准”，但仍需用
+     一次性 pending deployment 实测（见验收报告 N1）。
+2. 写代码使用**独立的 write deploy key**（SSH），只推送 `ai/*` 分支；deploy key
+   不是 API token，不能发布 Release 或批准 deployment。它必须不在任何 ruleset
+   bypass 中。
+3. 在授予 App `Actions: write` / deploy key 之前，先增加：
+   - `v*` Tag 的 **creation** 规则（当前 ruleset 只有 deletion/update）；
+   - target `push` 的 `file_path_restriction` ruleset，覆盖
+     `.github/workflows/**`、`.github/actions/**`、`scripts/release-governance/**`；
+   - bypass 仅维护者 `D-OneXXX`，App/deploy key 不得 bypass。
+   否则 App 可以在分支上改掉 publish workflow 的 `environment:` 再触发，绕过审批。
+   如果当前仓库计划不支持上述规则，**不要**同时授予 Actions write 与写分支能力；
+   退回“AI 只读代码 + 维护者推送/触发”。
+4. `release-windows` / `release-linux`（在 App 已能触发后）：
    - required reviewer 保持 `D-OneXXX`（或维护者控制的团队）；
    - `prevent_self_review=true`；
    - `can_admins_bypass=false`；
-   - deployment branch policy 保持 protected branches。
-3. Agent 改用 App installation token（短生命周期）执行触发/上传等操作；维护者
-   的 `gho_` token 不再提供给 Agent。
-4. 新的发布流程：
-   - Agent（App 身份）触发 `release-publish.yml`；
+   - deployment branch policy 设为仅 `main`（或保持当前仅受保护分支；当前只有
+     `main` 受保护）。
+5. Agent 改用 App installation token（短生命周期）执行触发；维护者的个人 token
+   不再提供给 Agent。App 没有 Contents write，因此不能上传 Draft 证据；证据上传
+   必须走一个只写 `install-verification.json` 的最小 workflow，或由维护者本人完成。
+6. 新的发布流程：
+   - Agent（App 身份）触发 `release-candidate.yml` / `release-publish.yml`；
    - 维护者在 GitHub UI 批准 `release-windows`（actor=App ≠ approver=D-OneXXX）；
-   - Agent 无法批准（App 不是 reviewer），维护者的个人 token 不在 Agent 手里。
+   - 候选/发布 job 用 job 级 `GITHUB_TOKEN` 创建 Draft 和 `gh release edit --draft=false`；
+   - Agent 不持有该 token，不能批准 deployment，也不能直接 PATCH Release。
 
 影响：
 
 - PR/候选/QA CI 不经过 Environment，不需要改动，不受影响。
-- 只有 publish 的触发身份变化；维护者仍需本人批准。
-- 需要维护者创建 App/安装/配置，并把 installation token 交给 Agent 的方式确定下来
-  （短期 token 由维护者生成，或用受控的 CI 步骤）。
+- 只有候选/发布的触发身份变化；维护者仍需本人批准。
+- `prevent_self_review=true` 不能再让维护者批准自己触发的 run；必须由 App 触发
+  候选/发布，或另设第二个人类 reviewer。顺序不能颠倒，否则现有候选流程立刻中断。
+- `can_admins_bypass` 不在 REST 的 Environment PUT body 中（OpenAPI 里该字段出现
+  0 次，仅 GET 可见），只能在 GitHub UI 取消勾选。
+- 需要维护者创建 App/安装/配置，并建立 AI 的独立 OS 凭据环境；同一 Windows
+  账号下 keyring 仍可能被 AI 读取，这是残余风险。
 
 ### 方案 B（次选）：第二个人类 reviewer 账号
 
@@ -136,16 +172,15 @@ trigger actor 与 approver 时，系统不会阻止。publish 流程将来同样
 
 优点：不需要 GitHub App。缺点：多一个账号的凭据管理；主账号不能批准，操作上更繁琐。
 
-### 方案 C（补充）：Agent 使用细粒度 PAT
+### 方案 C（仅补充）：Agent 使用细粒度 PAT
 
-1. 为 Agent 新建 fine-grained PAT：Contents read/write、Issues/PR write、
-   Actions read（如需触发再评估 Actions write）；**不含** Deployments/Environments/
-   Administration 写权限。
-2. 从 Agent 环境移除维护者的 `gho_` token。
-3. 验证该 PAT 不能调用 deployment approve API；如果 GitHub 把 approve 归到
-   `Actions: write`，则 Agent 不能触发 workflow，由维护者手动触发。
-
-这是“降低权限面”的补充，不是完整的身份隔离；最好与 A/B 组合。
+1. fine-grained PAT 属于某个用户，不是独立机器人身份；它仍可能被加为 reviewer，
+   审计上也仍是一个人类账号。它不能替代 A/B 的身份隔离。
+2. **带 Contents write 的 PAT 仍可直接 PATCH Draft 发布**；不带 Contents write
+   又无法推送代码/上传 Draft 证据。因此它不能同时满足“可开发”和“不能发布”。
+3. 只有在没有条件创建 App 时，才考虑“PAT 只读/Actions write + 维护者手动发布”，
+   并把 Deployments/Environments/Administration/Secrets 全部排除。
+4. 旧 PAT 不应长期驻留；新身份验证通过后再撤销。
 
 ### 方案 D（不推荐作为唯一措施）
 
@@ -166,26 +201,61 @@ trigger actor 与 approver 时，系统不会阻止。publish 流程将来同样
 
 ## 6. 维护者需要亲自完成的最小操作（建议顺序）
 
-1. 决定采用 A、B 或 C；如果采用 A/B，创建对应的 App/第二账号并配置 Environment：
+**顺序不能颠倒**：先建 App/deploy key 与 ruleset，再让 App 触发候选/发布，确认维护者
+能批准 App 触发的 run，最后才开启 `prevent_self_review` 和关闭 admin bypass。否则
+维护者将无法批准自己触发的候选/发布 run，现有流程会立即中断。
+
+1. 决定采用 A、B 或 C；优先 A。创建 App/第二账号，只授予最小权限；App 不要
+   Contents write，不加入任何 bypass 列表。
+2. 创建写 deploy key；先验证 push 分支、`main`、Tag、workflow 路径规则的行为。
+3. 增加 `v*` Tag creation 规则和 workflow 路径 `file_path_restriction` ruleset；
+   bypass 仅维护者。
+4. 把 AI 本地 CLI 切到 App installation token；在 AI 的独立 OS 用户/VM 或独立
+   `GH_CONFIG_DIR` 中运行，确认它不能读取维护者的个人 token。
+5. 重新跑一次候选/演练，验证：
+   - Agent 触发候选/publish 后，维护者能批准；
+   - Agent 自己调用 approve 时被拒绝（用测试 deployment 验证，不要用正式发布试）；
+   - Agent 直接 PATCH Draft、改 Environment/Secret/Ruleset、推送受保护 ref 均被拒绝。
+6. 确认无误后再配置 Environment：
    - required reviewer 指向人类身份；
-   - `prevent_self_review=true`；
-   - `can_admins_bypass=false`。
-2. 从 Agent 环境移除维护者个人 `gho_` token，换成 App/PAT 身份；确认 Agent 不能调用
-   deployment approve。
-3. 重新跑一次候选/演练，验证：
-   - Agent 触发 publish 后，维护者能批准；
-   - Agent 自己调用 approve 时被拒绝（用测试 deployment 验证，不要用正式发布试）。
-4. 在完成前，正式发布只能由维护者本人从 GitHub UI 触发并批准；Agent 不触发、
-   不批准 publish deployment。
+   - 在 UI 勾选 `Prevent self-review`；
+   - 在 UI 取消 `Allow administrators to bypass configured protection rules`；
+   - deployment branch policy 设为 `main`。
+   `can_admins_bypass` 没有文档化的 REST 写字段，不能靠 API 自动完成。
+7. 解决证据上传（最小 `install-verification.json` 上传 workflow，或维护者手动上传）。
+8. 通过后才从 AI 环境移除旧个人 OAuth token；不要删除维护者用于 GitHub UI 审批的
+   人类会话。正式发布仍需维护者单独授权；Agent 不触发、不批准 publish deployment。
 
 ## 7. 复核命令（只读）
 
 ```bash
-gh auth status
+# 身份与 scopes（不要输出 token）
+gh api user --jq '{login,type,id,site_admin}'
+gh api -i user 2>/dev/null | grep -i '^X-OAuth-Scopes:'
+
+# Environment / 分支保护 / ruleset
 gh api repos/:owner/:repo/environments/release-windows
 gh api repos/:owner/:repo/environments/release-linux
+gh api repos/:owner/:repo/branches/main/protection
+gh api repos/:owner/:repo/rulesets
+
+# 审批记录与发布面
 gh api repos/:owner/:repo/actions/runs/<run-id>/approvals
-git diff -- .github/workflows/release-publish.yml
+gh release view v0.17.2 --json isDraft,publishedAt,assets
 ```
 
 不要输出 token 明文；不要把 approval API 的写操作放进 Agent 的自动化脚本。
+
+## 8. 2026-10-27 复核补充
+
+- 当前仍是单账号 + 允许 self-review + 允许管理员绕过；GitHub 侧方案尚未实施。
+- GitHub App 的 `Contents: write` 可直接发布 Draft；新版方案改为 **Contents read +
+  write deploy key + workflow 路径/Tag creation ruleset**。
+- `can_admins_bypass` 只能通过 UI 设置；REST 的 Environment PUT body 没有该字段。
+- `POST .../pending_deployments` 在 OpenAPI 中标记 `enabledForGitHubApps=false`，
+  但 docs 权限表与 prose 有冲突；App 批准拒绝行为必须用一次性 deployment 实测。
+- 当前 main 的父级 branch protection 没有 `required_pull_request_reviews`，且近期 PR
+  在 0 review 下合并；不能把 PR review 当作防止 workflow 改写的技术门禁。
+- PR #82 已合并；v0.17.2 Draft、rehearsal 资源、公开清单均未改变。
+- 完整证据、验收矩阵、迁移/回滚与 UI 步骤见
+  [`PERMISSION_ISOLATION_ACCEPTANCE.md`](./PERMISSION_ISOLATION_ACCEPTANCE.md)。

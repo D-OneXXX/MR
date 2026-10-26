@@ -1,6 +1,6 @@
 # MangaReader 项目状态
 
-> 生成时间：2026-10-26T10:46:51.946Z
+> 生成时间：2026-10-26T11:12:29.832Z
 > 本文件由 `npm run status` 生成，请勿手工编辑。
 > `UNKNOWN` 表示当前环境无法验证，不代表正常。
 
@@ -10,22 +10,22 @@
 |---|---|
 | package.json | `0.17.1` |
 | 最新 Release | `v0.17.1-linux-sec1`（0.17.1） |
-| 最新 Windows Release | `v0.17.1`（0.17.1）；HEAD 领先 38 个提交 |
-| 最新 Linux critical Release | `v0.17.1-linux-sec1`（0.17.1）；HEAD 领先 35 个提交 |
-| HEAD 距最新 Release | 35 个提交 |
+| 最新 Windows Release | `v0.17.1`（0.17.1）；HEAD 领先 39 个提交 |
+| 最新 Linux critical Release | `v0.17.1-linux-sec1`（0.17.1）；HEAD 领先 36 个提交 |
+| HEAD 距最新 Release | 36 个提交 |
 | 当前阶段 | 开发中（与最新发布同版本） |
-| 判定依据 | HEAD 领先最新发布 35 个提交，但版本号仍为 0.17.1。下一次发布前必须 bump。 |
+| 判定依据 | HEAD 领先最新发布 36 个提交，但版本号仍为 0.17.1。下一次发布前必须 bump。 |
 
 ## 2. 仓库与工作区
 
 | 项目 | 值 |
 |---|---|
 | 分支 | `main` |
-| HEAD | `9ae4264c26ac` |
-| 提交 | feat(release): 签名与安装升级验证纳入强制发布门禁 (#68) |
-| 提交时间 | 2026-10-26T18:46:13+08:00 |
+| HEAD | `a73b833da1c5` |
+| 提交 | docs(release): 最终发布就绪报告 (#68) |
+| 提交时间 | 2026-10-26T19:12:00+08:00 |
 | 工作区 | 干净 |
-| 本地分支 | `chore/13-phase-1-governance`, `chore/15-vite-lru-security`, `chore/18-glib-risk-acceptance`, `chore/19-pr-governance`, `chore/24-phase2-closeout`, `chore/28-rust-security-audit`, `chore/30-full-qa-evidence`, `chore/36-local-qa-attestation`, `chore/38-actions-sha`, `chore/39-upgrade-compat`, `chore/40-final-status-snapshot`, `chore/40-phase3-report`, `chore/40-status-refresh`, `chore/48-version-attribution`, `chore/49-version-attribution`, `chore/57-phase4-final`, `chore/57-phase4-remote-report`, `feat/57-phase4-release-governance`, `feat/61-rehearsal-mode`, `feat/68-evidence-gate`, `fix/21-status-required-checks`, `fix/23-chaos-cdp-retry`, `fix/30-full-qa-retry`, `fix/30-full-qa-retry-v2`, `fix/32-arch-webtoon-ci-diag`, `fix/32-arch-webtoon-flake`, `fix/42-chaos-rage-click`, `fix/51-cache-quiescence`, `fix/61-candidate-tauri-action`, `fix/61-rehearsal-commit-binding`, `fix/61-rehearsal-version-var`, `main`, `wip/main-telegram-20261023` |
+| 本地分支 | `chore/13-phase-1-governance`, `chore/15-vite-lru-security`, `chore/18-glib-risk-acceptance`, `chore/19-pr-governance`, `chore/24-phase2-closeout`, `chore/28-rust-security-audit`, `chore/30-full-qa-evidence`, `chore/36-local-qa-attestation`, `chore/38-actions-sha`, `chore/39-upgrade-compat`, `chore/40-final-status-snapshot`, `chore/40-phase3-report`, `chore/40-status-refresh`, `chore/48-version-attribution`, `chore/49-version-attribution`, `chore/57-phase4-final`, `chore/57-phase4-remote-report`, `chore/68-release-readiness`, `feat/57-phase4-release-governance`, `feat/61-rehearsal-mode`, `feat/68-evidence-gate`, `fix/21-status-required-checks`, `fix/23-chaos-cdp-retry`, `fix/30-full-qa-retry`, `fix/30-full-qa-retry-v2`, `fix/32-arch-webtoon-ci-diag`, `fix/32-arch-webtoon-flake`, `fix/42-chaos-rage-click`, `fix/51-cache-quiescence`, `fix/61-candidate-tauri-action`, `fix/61-rehearsal-commit-binding`, `fix/61-rehearsal-version-var`, `main`, `wip/main-telegram-20261023` |
 | 已注册 Worktree | `manga-reader-tauri`（main） |
 
 ## 3. 质量门禁
@@ -35,9 +35,9 @@
 | 检查 | 必需 | 状态 | 结论 |
 |---|---|---|---|
 | Analyze (javascript-typescript) | 否 | in_progress | — |
-| Analyze (actions) | 否 | completed | success |
-| cargo check + frontend build (ubuntu-22.04) | 是 | in_progress | — |
+| Analyze (actions) | 否 | in_progress | — |
 | Release governance rehearsal (no secrets) | 否 | completed | success |
+| cargo check + frontend build (ubuntu-22.04) | 是 | in_progress | — |
 | tsc + cargo test + static QA (windows-latest) | 是 | in_progress | — |
 
 - 分支保护：enforce_admins=true
@@ -49,9 +49,7 @@
 
 ## 4. 活跃 Issue
 
-| # | 标题 | 状态 | 严重度 | 负责人 |
-|---|---|---|---|---|
-| #68 | Phase 4: 签名与安装升级验证纳入强制发布门禁 | status:in-progress | severity:p1 | — |
+无开放 Issue。
 
 ## 5. 开放 PR
 
@@ -63,9 +61,9 @@
 |---|---|---|---|---|
 | Push on main | dynamic | main | in_progress | — |
 | Linux check | push | main | in_progress | — |
-| Windows check | push | main | in_progress | — |
 | Release governance rehearsal | push | main | completed | success |
-| Windows check | pull_request | feat/68-evidence-gate | completed | success |
+| Windows check | push | main | in_progress | — |
+| PR governance | pull_request | chore/68-release-readiness | completed | success |
 
 ## 7. 最近 Release
 
@@ -81,8 +79,8 @@
 ### 治理告警
 
 - 最新版本已发布但 HEAD 仍有未发布提交；下一次发布前必须 bump。
-- Windows 常规通道落后 HEAD 38 个提交。
-- Linux critical 通道落后 HEAD 35 个提交。
+- Windows 常规通道落后 HEAD 39 个提交。
+- Linux critical 通道落后 HEAD 36 个提交。
 
 ### 阻塞项
 
@@ -90,7 +88,7 @@
 
 ### 下一步任务
 
-#68 Phase 4: 签名与安装升级验证纳入强制发布门禁
+无开放 Issue；由维护者选择下一任务。
 
 ## 9. 恢复检查清单
 

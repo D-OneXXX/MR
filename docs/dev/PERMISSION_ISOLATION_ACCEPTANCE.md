@@ -4,9 +4,13 @@
 > 仓库：`D-OneXXX/MR`（public，user-owned）
 > 范围：AI 自动化身份、GitHub Environment 审批、Release 触发与发布边界。
 >
-> **结论**：GitHub 侧的技术隔离方案已经明确，但**尚未实施**；正式发布仍为 **BLOCKED**。
-> 本轮没有修改任何 Environment、Secrets、Ruleset、仓库权限或正式更新清单，也没有触发
-> 正式发布。v0.17.2 Draft 与 `v0.0.0-rehearsal` 资源保持不变。
+> **2026-10-27 发布后结论**：`v0.17.2` 已在维护者个人批准后公开。AI 侧采用
+> **local-only 最小隔离**：不持有 GitHub API/git 写凭据，只保留本地代码、测试和本地分支
+> 能力；维护者负责远端 push、PR、CI 触发和发布审批。`tag creation` ruleset 已启用；
+> write deploy key 因该 public user-owned 仓库不支持 push ruleset 而**未创建**；
+> GitHub App 需要维护者 UI/私钥/独立 OS，未实施。API/git 边界已实现，远程 PR/CI
+> 自动化与浏览器/OS 级隔离仍为 **BLOCKED/NOT_VERIFIED**。
+> 本轮未修改 Environment、Secrets、签名密钥或 updater 配置，也未发布新版本。
 
 ## 0. 本轮完成情况
 
@@ -19,7 +23,7 @@
 
 ## 1. 当前事实（VERIFIED）
 
-### 1.1 AI 当前使用的身份
+### 1.1 AI 实施前的身份（2026-10-26 审计）
 
 | 项目 | 观测值 |
 |---|---|
@@ -34,6 +38,9 @@
 
 风险含义：`repo` scope + admin 使当前身份可以修改 Environment、Ruleset、分支保护、
 Release 和 workflow；审计日志无法区分“维护者本人操作”和“AI 操作”。
+
+> 2026-10-27 实施后：AI 不再持有该用户 token；只保留本地代码/测试/本地分支能力。
+> 远端 push、PR、CI 触发和发布审批由维护者完成。见 §11。
 
 ### 1.2 Environment 保护
 
@@ -78,19 +85,21 @@ Release 和 workflow；审计日志无法区分“维护者本人操作”和“
 - 因此迁移时要把“AI 本地身份”与“Actions 内部 GITHUB_TOKEN”分开处理；
   现有 CI/QA/candidate 的 Actions 认证本身不需要替换。
 
-### 1.5 发布状态（未改变）
+### 1.5 发布状态（2026-10-27 更新）
 
-- `v0.17.2` Release 仍为 Draft，7 个资产，`publishedAt=null`；
-  `install-verification.json` 摘要仍为
+- `v0.17.2` 已公开发布：`publishedAt=2026-10-26T21:10:06Z`，publish run
+  `40385949803` success；8 个资产，原 7 个候选资产字节不变。
+- `install-verification.json` 摘要仍为
   `sha256:b2f0084855a5dac7b44675dc34f1630907489671c4f50a879a3a3059b5c1bb56`。
-- `v0.0.0-rehearsal` Draft 与 Tag 保留。
-- 公开更新清单未变：
-  - `latest.json`：`64f6038e4dec5c9f12373be3163610d72a8ade72082f7fe4c487d90f0cb11a45`
+- 公开更新清单：
+  - `latest.json`：`d9c4324318087f424eab1a462d04947aa67d7a7950a69939778f658b057ad51a`
   - `latest-linux-critical.json`：`2bdb3af5271cc1b5e9dfeb61584a060dcb9d8e0ca8dba4809db9188db682b8e3`
-- 最新公开 Release 仍是 `v0.17.1-linux-sec1`（published `2026-10-25T10:15:11Z`）；
-  本轮没有 Linux 发布运行。
+- `v0.17.1` 仍公开可回滚；Linux 通道未升级，仍为 `v0.17.1-linux-sec1`。
+- `v0.0.0-rehearsal` Draft 与 Tag 保留；没有新的 Linux 发布运行。
 
 ## 2. 关键风险
+
+> 以下为 2026-10-26 的实施前风险快照；2026-10-27 的实际状态见 §11。
 
 ### 2.1 同身份自审
 
@@ -153,7 +162,10 @@ AI 仍可能读取它。真正的隔离需要：
 
 这是本轮最重要的 **BLOCKED** 项之一。
 
-## 3. 目标设计（未实施）
+## 3. 目标设计（可选方案，未采用）
+
+> 以下是 2026-10-26 的 GitHub App + deploy-key 设计，作为未来可选方案保留。
+> 2026-10-27 实际采用的是 **local-only 最小隔离**，原因见 §11。
 
 ### 3.1 身份拆分
 
@@ -291,7 +303,9 @@ GitHub App 建议权限：
 - 如果发生意外发布：立即把 Release 改回 Draft、冻结发布、轮换 App/deploy key，
   保留日志并单独报告，不得静默处理。
 
-## 6. 状态判定
+## 6. 状态判定（2026-10-26 设计审计）
+
+> 当前状态以 §11 为准；本节保留设计阶段的证据。
 
 ### VERIFIED
 
@@ -343,7 +357,9 @@ GitHub App 建议权限：
 - Linux 通道：从未产生 deployment，未做安装/升级/审批测试；保持独立，不随
   Windows 自动发布。
 
-## 7. 需要维护者在 GitHub UI 亲自完成的步骤
+## 7. 需要维护者在 GitHub UI 亲自完成的步骤（仅在选择 App 方案时）
+
+> 实际采用的 local-only 方案不需要创建 App/deploy key；本节保留为可选方案步骤。
 
 1. **创建 App**：GitHub → Settings → Developer settings → GitHub Apps →
    New GitHub App。按 3.1 权限矩阵授权；Webhook 关闭；只安装到 `D-OneXXX/MR`。
@@ -412,3 +428,93 @@ gh release view v0.0.0-rehearsal --json isDraft,publishedAt
   `x-github.enabledForGitHubApps=false`；`file_path_restriction` schema）。
 - 相关文档：`docs/dev/RELEASE_APPROVAL_BOUNDARY.md`、`docs/dev/RELEASE.md`、
   `docs/ENGINEERING_WORKFLOW.md`。
+
+## 11. 2026-10-27 发布后实施与当前状态
+
+### 11.1 实际采用的最小方案：local-only AI
+
+- AI 不再持有 GitHub API token 或可写的 git 凭据；只保留本地代码修改、测试和本地分支
+  能力。远端 push、PR、CI 触发、Draft/证据上传、Environment/发布审批全部由维护者完成。
+- 这是该 public user-owned 单维护者仓库上可实际验证的最小边界；没有为了“自动化方便”
+  创建长期 write deploy key 或 Contents-write App。
+- `v0.17.2` 已于 2026-10-26T21:10:06Z 公开；发布后资产/签名/updater/回滚/Linux 独立性
+  已独立验证。Issue #73 状态标签更新为 `status:released`，但**保持 OPEN**，未标记 verified
+  或 closed。
+
+### 11.2 为什么没有采用 write deploy key / GitHub App
+
+1. **write deploy key 不安全**：该仓库是 public user-owned，GitHub API 明确拒绝 push
+   ruleset：
+   `422 Source public repos cannot have push rules; Source only org-owned repos can have push rules`。
+   没有 `file_path_restriction`，deploy key 可以推送一个包含新 workflow 的分支；该分支
+   的 push 可触发新 workflow，并可能请求 `contents: write`，形成绕过 Environment 的
+   P0 路径。因此**没有创建 deploy key**（当前 deploy keys = 0）。
+2. **GitHub App 仍需 UI/独立环境**：App 创建、安装、私钥保存需要维护者在 GitHub UI
+   完成；普通 GitHub App 不能作为 Environment reviewer。若 App 持有 Contents write，
+   可直接发布 Draft；若只给 Contents read，则不能推送代码。即使创建 App，当前 AI 与
+   维护者仍在同一 Windows 账号/keyring/浏览器环境，无法证明浏览器级隔离。
+3. **Environment 设置暂不改**：没有自动化身份可触发/审批，`prevent_self_review=true`
+   只会阻止维护者批准自己触发的 run；`can_admins_bypass` 仍是 UI-only。当前 AI 无
+   API token，不能调用 approval API。
+
+### 11.3 已实施的控制
+
+- **Tag creation ruleset**：`Protect release tag creation`（id `25915443`），target `tag`，
+  `refs/tags/v*`，规则 `creation`，bypass 仅 `D-OneXXX`（User, always）。
+  现有 `Protect release tags`（id `25802721`）继续禁止 update/delete，`bypass_actors=[]`。
+- **无 write deploy key**、无 GitHub App、无 repo secret、无签名/updater 改动。
+- **无 Environment/`can_admins_bypass`/`prevent_self_review` 改动**。
+- 维护者的个人 token 未撤销；迁移的最后一步是从 AI 的 `gh`/GCM 环境移除本地 token，
+  保留维护者浏览器/UI 审批能力。该步骤在本文件对应的文档 PR 合并后执行；执行后 AI
+  不再能调用 GitHub 写 API。
+
+### 11.4 验证证据（2026-10-27）
+
+- 本地：`test:governance` 33/33；`test:release` 88/88；static QA 23/23（P0–P3=0）；
+  `version:check` OK。
+- tokenless 模拟（空 `GH_CONFIG_DIR` + 空 `GH_TOKEN`）：`gh api user` 退出 4，
+  提示需要登录；不会返回已认证用户。
+- 无凭据 push 模拟（`GIT_TERMINAL_PROMPT=0`、空 credential helper）：
+  `git push --dry-run` 退出 128，无法认证。
+- `deploy keys = 0`；tag creation ruleset 详情 `bypass_actors=[D-OneXXX]`，
+  `current_user_can_bypass=always`（当前用户可绕过；AI token 移除后不再可用）。
+- 公开面：`v0.17.2` 仍 public，tag `9e09bce…→f331782…`；
+  public `latest.json` `d9c43243…`，`latest-linux-critical.json` `2bdb3af5…`；
+  `v0.17.1` 仍可回滚；Linux 无新发布。
+- 现有 main CI 与 v0.17.2 publish run `40385949803` 均成功；没有新 release/tag/manifest 变化。
+
+### 11.5 当前状态
+
+**VERIFIED（API/git 边界）**
+
+- AI 无 GitHub API token、无 deploy key、无 App token；不能在 API/git 层批准 deployment、
+  发布 Draft、创建 tag、修改 Environment/Ruleset/分支保护，或推送远端分支。
+- Tag creation rule 已存在且只允许维护者绕过；main/required checks、签名/证据/发布门禁
+  未改变；Windows/Linux 独立。
+
+**BLOCKED（远程自动化/浏览器级）**
+
+- AI 不能创建远端分支/PR，也不能触发 CI/candidate/publish；这些仍由维护者完成。
+- 若要恢复这些能力，需要维护者创建并安装 GitHub App（Contents read、Actions read/write、
+  Issues/PR write、无 Contents write/Environments/Secrets/Administration），并在独立
+  Windows 账号/VM 中保存私钥；同时需要决定是否接受同一 OS 的浏览器残余风险。
+- public user-owned 仓库不支持 push ruleset；在该限制解除前，不要创建 write deploy key。
+- Vercel GitHub App（id 8329）仍安装且请求 contents/administration/workflows write；
+  是否保留需维护者确认。本轮未改动。
+- 公开 Release 说明仍含“Draft/未公开”旧文案；本轮未修改 release artifact。
+
+**NOT_VERIFIED**
+
+- Tag creation rule 对非 bypass 身份的实际拒绝（当前没有第二个可测试身份）。
+- 浏览器/OS/computer-use 级别的自审批防护；需要独立执行账号/VM。
+- Vercel App 的实际 token 权限与是否需要移除。
+- 完整 UI/live updater 客户端升级、minisign 上游二进制签名。
+
+### 11.6 若维护者希望恢复 AI 远程 PR/CI 自动化
+
+1. 创建 GitHub App：Metadata R、Contents **R**、Actions R/W、Issues R/W、PR R/W；
+   **不要** Contents write/Environments/Secrets/Administration/Deployments。
+2. 在独立 Windows 账号/VM 中保存 App 私钥；AI 只在该环境运行。
+3. 维护者 push 分支（或单独提供受限 deploy key 到无敏感 workflow 的沙箱仓库）；
+   AI 用 App token 创建 PR/触发 CI；App 不是 reviewer，不能批准 deployment。
+4. 先用 rehearsal tag/Draft 做正/负测试，再移除旧个人 token；在此之前保留旧凭据。

@@ -8,11 +8,13 @@
 >
 > 本文件不构成发布授权。正式发布必须由维护者本人在全部门禁通过后单独批准。
 >
-> **2026-10-27 最终更新**：干净 Windows VM 验证已由 GitHub-hosted
+> **2026-10-27 发布后更新**：干净 Windows VM 验证已由 GitHub-hosted
 > `release-install-verify.yml` 完成（run `40374494977`，ImageVersion
-> `20261022.344.1`，证据 SHA-256 `b2f00848…`）；Draft 的旧共享宿主回执已被替换。
-> 正式发布仍等待维护者明确授权；审批边界技术隔离仍需维护者配置。最终报告见
-> `PHASE5_WINDOWS_RELEASE_ACCEPTANCE.md`；本文 §6/§7 的“干净 VM BLOCKED”已被最终报告替代。
+> `20261022.344.1`，证据 SHA-256 `b2f00848…`）。**`v0.17.2` 已在维护者个人批准后
+> 公开发布**（publish run `40385949803`，publishedAt `2026-10-26T21:10:06Z`）；
+> 发布后资产/签名/updater/回滚验证通过，Linux 未升级。最终报告见
+> `PHASE5_WINDOWS_RELEASE_ACCEPTANCE.md`；权限隔离现状见
+> `PERMISSION_ISOLATION_ACCEPTANCE.md`；本文 §6/§7 的“干净 VM BLOCKED”已被最终报告替代。
 
 **Goal:** 把 `main` 从 0.17.1 推进到 0.17.2，产出绑定「版本 + Commit + 平台 + QA 证据 +
 制品 SHA-256」的 Windows Release Candidate（Draft），并用真实证据验证签名与安装升级链路。

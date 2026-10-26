@@ -37,8 +37,12 @@ update endpoints, the Linux updater-manifest generator (including its failure pa
 the public manifest verifier (`scripts/verify-updater-manifest.mjs`). SQLite
 upgrade/rollback compatibility is covered by `cargo test --lib`
 (`legacy_library_file_migrates_without_data_loss`, `newer_schema_version_is_not_downgraded`).
-Real NSIS install/upgrade/rollback needs a clean Windows VM and stays BLOCKED in CI —
-see [dev/RELEASE.md](dev/RELEASE.md).
+Real NSIS install/upgrade/rollback is covered by
+`.github/workflows/release-install-verify.yml` on a GitHub-hosted `windows-2022`
+ephemeral VM; the v0.17.2 evidence is recorded in
+[dev/PHASE5_WINDOWS_RELEASE_ACCEPTANCE.md](dev/PHASE5_WINDOWS_RELEASE_ACCEPTANCE.md).
+A local interactive desktop VM remains BLOCKED on this host — see
+[dev/RELEASE.md](dev/RELEASE.md).
 
 `npm run status` writes `docs/PROJECT_STATE.md`; it is generated and must not be
 hand-edited. `npm run labels:check` never changes remote labels; use

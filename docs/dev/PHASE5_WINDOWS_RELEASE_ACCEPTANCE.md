@@ -1,22 +1,28 @@
 # v0.17.2 Windows 发布验收报告（最终）
 
 > 2026-10-27。授权范围：版本准备、候选构建、自动化测试、安装升级验证、Release Draft；
-> **不包含正式公开发布**。本报告不构成发布授权，正式发布必须由维护者本人明确授权，
-> AI 不得代为批准 publish deployment。
+> **后续维护者单独授权了正式发布**。本报告 §1/§2/§5/§6 中“Draft/未公开/BLOCKED”
+> 是发布前快照；发布后状态见本节与 §10。
+>
+> **2026-10-27 发布后更新**：`v0.17.2` 已公开（`publishedAt=2026-10-26T21:10:06Z`，
+> publish run `40385949803` success）。公开资产、minisign、`latest.json`、
+> `latest-linux-critical.json`、v0.17.1 回滚面已独立验证；Linux 通道未升级，仍为
+> `v0.17.1-linux-sec1`。AI 权限隔离采用 local-only 最小方案，详见
+> `PERMISSION_ISOLATION_ACCEPTANCE.md`。
 
 ## 1. 结论摘要
 
 - **VERIFIED**：v0.17.2 候选身份、QA/Draft/制品 SHA-256 绑定；GitHub-hosted `windows-2022`
   干净 VM 上的全新安装、0.17.1 → 0.17.2 升级、回滚、合成书库/阅读进度/真实 `list_books`
-  IPC；provenance、签名、证据总闸、更新清单；公开面未变、Linux 未触发、无正式发布。
-- **BLOCKED**：正式发布（等待维护者明确授权）；发布审批身份的技术隔离（当前单账号 +
-  self-review + admin bypass，AI 技术上仍可自批）；本地交互式 VM（本机没有可用的本地
-  VM 管理工具：Hyper-V `vmms` 未安装、无 VMware/VirtualBox/QEMU，当前会话非管理员；
-  本次使用 hosted VM）；Linux 通道的安装证据（Linux 保持独立）。
+  IPC；provenance、签名、证据总闸、更新清单；**v0.17.2 已公开**，发布后资产/签名/
+  updater/回滚/Linux 独立性复核通过（见 §9）。
+- **BLOCKED**：AI 远程 PR/CI 自动化（local-only，无 GitHub API/git 写凭据）；浏览器/OS
+  级隔离需要独立执行账号/VM；本地交互式 VM（本机没有可用的本地 VM 管理工具）；
+  Linux 通道的安装证据（Linux 保持独立）。
 - **NOT_VERIFIED**：hosted runner 镜像的完整供应链（仅 ImageVersion + run URL 可核实）；
   **release 构建的完整 UI**（本次验证启动 + IPC + 数据库，完整 UI QA 在 debug 构建上）；
-  正式公开 publish 路径（未执行）；minisign 上游二进制自身签名；AI 凭据“无法自批”
-  （技术上不成立，见 §5）。
+  live updater 客户端实际升级；minisign 上游二进制自身签名；Vercel App 权限；
+  tag creation rule 对非 bypass 身份的拒绝（无第二身份可测）。
 
 ## 2. 候选身份
 
@@ -26,11 +32,11 @@
 | 安装包 | `MangaReader_0.17.2_x64-setup.exe`，5,306,377 bytes |
 | 安装包 SHA-256 | `b6d7048894a4b16382ce25b5762c881dba79e03f1642acf3452ceb4f11f1db82` |
 | 签名 | `MangaReader_0.17.2_x64-setup.exe.sig`，SHA-256 `ee09d934b07717187353740325ab2200c757e03fbbb797e1ba983192c58f1801` |
-| 更新清单（Draft） | `latest.json`，SHA-256 `d9c4324318087f424eab1a462d04947aa67d7a7950a69939778f658b057ad51a` |
+| 更新清单 | `latest.json`，SHA-256 `d9c4324318087f424eab1a462d04947aa67d7a7950a69939778f658b057ad51a` |
 | RC 记录 | `rc-record.json`，SHA-256 `79ba88ac24b2d88f5d60f03024500ce51c57e66bfb28f001fb7c84ba26bcfeca` |
 | QA 证据 | run `40324223701`，success，headSha `f331782…`，230/230 |
-| Draft | `v0.17.2`，`isDraft=true`，target `f331782…`，7 个资产 |
-| 当前 Latest | `v0.17.1-linux-sec1`，published_at `2026-10-25T10:15:11Z` |
+| 发布前 Draft | `v0.17.2`，`isDraft=true`，target `f331782…`，7 个资产（历史快照） |
+| 当前 Latest | `v0.17.2`，published_at `2026-10-26T21:10:06Z`；Linux 通道仍 `v0.17.1-linux-sec1` |
 
 ## 3. 干净 Windows VM 验证（最终证据）
 
@@ -266,15 +272,16 @@ Commit；未用新的 app 源码替换。`visual:theme-token` 本轮未复现，
   合成书库/阅读进度、真实 `list_books` IPC。
 - provenance、签名、`verify-draft`、`verify-evidence`、updater manifest 五个官方闸门
   在 Draft 实际资产上全部通过。
-- 公开面逐字节未变；Latest Release 未变；Draft 仍为 Draft；演练 Tag/Draft 保留；
-  Linux 发布通道未触发；无正式发布。
+- **v0.17.2 已公开**：publish run `40385949803`；发布后资产/签名/updater/回滚面
+  独立验证通过；`v0.0.0-rehearsal` 保留；Linux 通道未升级。
 - 四个 harness/CI 缺陷已修复，未跳过/放宽断言。
 
 ### BLOCKED
 
-- **正式发布**：等待维护者明确授权；AI 不得代为批准。
-- **审批边界技术隔离**：当前单账号 + self-review + admin bypass；需维护者配置
-  App/第二 reviewer/细粒度 PAT，或明确接受流程约束。
+- **AI 远程 PR/CI 自动化**：已实施 local-only 隔离（无 GitHub API/git 写凭据）；
+  远端 push/PR/CI/发布由维护者完成。若恢复自动化，需 GitHub App + 独立 OS。
+- **浏览器/OS 级隔离**：AI 与维护者在同一 Windows 账号；需要独立执行账号/VM 才能
+  证明 browser/computer-use 级别的自审批防护。
 - **本地交互式 VM**：本机没有可用的本地 VM 管理工具（Hyper-V `vmms` 未安装、无
   VMware/VirtualBox/QEMU，当前会话非管理员）；本次使用 hosted ephemeral VM。若政策要求
   本地桌面 VM，需维护者按 RELEASE.md §4.2 重跑并人工核验。
@@ -288,29 +295,28 @@ Commit；未用新的 app 源码替换。`visual:theme-token` 本轮未复现，
 - **release 构建的完整 UI**：本次只验证启动 + `list_books` IPC + 数据库；完整的
   visual/reader/online/cache/privacy/chaos QA 跑在 debug 构建上（230/230），
   不能证明 release 构建的每个界面行为。
-- 正式公开 publish 路径：未执行 `release-publish.yml`；只做了本地模拟与真实
-  Draft 资产上的门禁重跑。
+- 正式公开 publish 路径已执行（run `40385949803`），但 live updater 客户端实际升级
+  与完整 release UI 仍未验证；见 §9。
 - minisign 上游二进制自身签名：按仓库固定摘要下载；未单独核验 minisign 发布者的
   上游签名。
-- **AI 技术无法自批**：不成立；见 §5。
+- **AI 技术无法自批**：API/git 层已通过 local-only 实现；浏览器/OS 级仍未验证。
 - `visual:theme-token` 的长期稳定性：本轮未复现，保持观察。
 
 ## 7. 维护者需亲自完成的最小操作
 
-1. 决定并配置审批身份技术隔离（推荐 App + `prevent_self_review=true` +
-   `can_admins_bypass=false`），或明确接受当前流程约束。
+1. 已发布 `v0.17.2`；后续发布仍由维护者本人触发/批准，Agent 不触发/不批准。
 2. 审查最终证据与 run（链接见下）；如要求本地桌面 VM，按 RELEASE.md §4.2 重跑并
    人工核验镜像 SHA-256/日志。
-3. 明确授权正式发布后，由维护者本人触发 `release-publish.yml --ref main -f tag=v0.17.2`
-   并在 `release-windows` Environment 亲自批准；Agent 不触发/不批准。
-4. Linux 通道独立决策；本轮不发布 Linux。
+3. AI 权限隔离已采用 local-only；若要恢复远程 PR/CI，按
+   `PERMISSION_ISOLATION_ACCEPTANCE.md` §11.6 创建 App + 独立 OS，先测试再移除旧凭据。
+4. Linux 通道独立决策；本轮未发布 Linux。
 5. 决定 `v0.0.0-rehearsal` Tag/Draft 的后续处理（ruleset 保护，未擅自清理）。
 
 ## 8. 证据链接与复核
 
 - 最终 hosted run：https://github.com/D-OneXXX/MR/actions/runs/40374494977
 - 最终证据 artifact：`clean-vm-evidence-v0.17.2-40374494977`
-- Draft：https://github.com/D-OneXXX/MR/releases/tag/v0.17.2 （仍为 Draft）
+- Public Release：https://github.com/D-OneXXX/MR/releases/tag/v0.17.2 （已公开）
 - QA run：https://github.com/D-OneXXX/MR/actions/runs/40324223701
 - 审批边界审计：`docs/dev/RELEASE_APPROVAL_BOUNDARY.md`
 - 安装验证契约/用法：`docs/dev/RELEASE.md` §4.2
@@ -336,3 +342,25 @@ node scripts/verify-updater-manifest.mjs draft-final/latest.json \
 ```
 
 > 公开 `latest.json` / `latest-linux-critical.json` 的字节未变；本报告不构成发布授权。
+
+## 9. 2026-10-27 发布后验证（当前状态）
+
+- `v0.17.2` 公开：https://github.com/D-OneXXX/MR/releases/tag/v0.17.2，
+  `publishedAt=2026-10-26T21:10:06Z`；publish run `40385949803` success；公开 API
+  匿名访问返回 200。
+- 8 个资产：原 7 个候选资产 SHA-256 全部不变（安装包 `b6d70488…`、签名
+  `ee09d934…`、`latest.json` `d9c43243…`、RC 记录 `79ba88ac…`、安装证据
+  `b2f00848…`、摘要 `524234c0…`、签名证据 `b3c4ca50…`），另加 Linux 接力清单
+  `2bdb3af5…`。
+- 公开 `releases/latest/download/latest.json` = `d9c43243…`，version 0.17.2，
+  Windows 平台；其 URL 下载到安装包 SHA-256 `b6d70488…`。
+- 公开 `latest-linux-critical.json` = `2bdb3af5…`，version 0.17.1，Linux 平台；
+  Linux Release 仍为 `v0.17.1-linux-sec1`，无新 Linux 运行/deployment。
+- `v0.17.1` 仍公开：安装包 `3e90ece5…`、签名 `a579e827…`、`latest.json`
+  `64f6038e…`，可用于回滚。
+- 发布工作流 `Channel hand-off` 把 Linux 清单带入 v0.17.2；这是同一字节的通道
+  接力，不是 Linux 发布。发布后目录级 `verify-draft` 会因该额外资产报错；对 7 个
+  候选资产单独运行 `verify-draft` 通过。
+- 已知残余：公开 Release 说明仍含“Draft/未公开”旧文案（P2，未修改 release
+  artifact）；AI 权限隔离已在 API/git 层 local-only，但远程 PR/CI 自动化与浏览器/
+  OS 隔离仍 BLOCKED，见 `PERMISSION_ISOLATION_ACCEPTANCE.md`。

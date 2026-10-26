@@ -354,6 +354,8 @@ GitHub-hosted `windows-2022` 一次性 runner 通过
   配置或 release workflow；没有发布新版本。
 - 旧的个人 token 在文档/状态 PR 合并后从 AI 的 `gh`/GCM 环境移除；移除后 AI 不能调用
   GitHub 写 API。不要在没有独立 OS/App 验收的情况下重新把 token 放回 AI 环境。
+- `npm run status` / `PROJECT_STATE.md` 刷新需要 GitHub API；local-only AI 不再执行，
+  由维护者在已认证的维护者环境运行。
 - 如果以后要恢复 AI 的 PR/CI 自动化，采用 GitHub App（Contents read、Actions write、
   Issues/PR write；无 Contents write/Environments/Secrets/Administration），在独立
   Windows 账号/VM 中保存私钥，并用 rehearsal 做正/负测试。

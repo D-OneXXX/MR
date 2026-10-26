@@ -1,0 +1,53 @@
+name: Release governance rehearsal
+
+# Phase 4 发布链路的**隔离演练**：
+# - 不联网发布、不创建任何 Release、不接触任何 Secret；
+# - 用进程内假后端跑通「候选 → Draft → 审批绑定 → 发布 → 失败恢复 → 并发 → 清单安全」；
+# - 同时跑发布治理单元测试。
+#
+# 任何一项失败都会让本工作流变红：发布状态机回归必须立刻可见。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rehearsal:
+    name: Release governance rehearsal (no secrets)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Release governance unit tests
+        run: node --test scripts/release-governance/rc-record.test.mjs
+
+      - name: Isolated release rehearsal
+        env:
+          REHEARSAL_OUT_DIR: rehearsal
+        run: node scripts/release-governance/rehearse.mjs --json
+
+      - name: Upload rehearsal report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-rehearsal-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: rehearsal/rehearsal.json

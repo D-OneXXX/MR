@@ -77,149 +77,132 @@
 - 若本机目录丢失，必须重新生成密钥对、更新 `pubkey`，并同步更新 GitHub Secrets；
   旧私钥无法为新的公钥签名，更新会全部失败。
 
-## 3. GitHub Secrets
+## 3. GitHub Secrets（Phase 4：Environment 作用域）
 
-在仓库 `Settings → Secrets and variables → Actions` 添加：
+签名私钥**只允许放在 Environment 作用域**，让「候选构建」这一条路径能读到它，
+发布 job 与其它工作流读不到。
 
-| Secret | 值 |
-|---|---|
-| `TAURI_SIGNING_PRIVATE_KEY` | `updater.key` 的完整文本内容（不是路径） |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `password.txt` 的完整内容 |
+| 位置 | Secret | 值 |
+|---|---|---|
+| Environment `release-windows` | `TAURI_SIGNING_PRIVATE_KEY` | `updater.key` 的完整文本内容（不是路径） |
+| Environment `release-windows` | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `password.txt` 的完整文本内容 |
+| Environment `release-linux` | 同上两项 | 同上（Linux 通道需要同一把 minisign 私钥） |
 
 `GITHUB_TOKEN` 由 Actions 自动提供，不需要手动添加。
 
-## 4. 发布步骤
+### 3.1 迁移顺序（先配置 → 再验证 → 后删除旧副本）
 
-> **Phase 1–3：以下步骤暂停执行。** 不要推送 Tag，不要创建公开 Release；Phase 4 将替换为
-> “固定 Commit → 全量 QA → 上传 Draft → 人工审批 → 发布”的流程。
+1. **先配置**：在 `release-windows` 与 `release-linux` 两个 Environment 里新增上述 Secret。
+   值只能由持有本机私钥的维护者提供——GitHub 不提供 Secret 明文读取，
+   **Agent 既读不到也绝不会输出任何密钥内容**。
+2. **再验证**：用一次**候选**工作流（演练标签）确认 Environment 级 Secret 可用：
+   签名产物 `.sig` 存在、`latest.json` 的签名非空、且能通过
+   `node scripts/verify-updater-manifest.mjs`。
+3. **后删除**：验证通过后，才删除**仓库级**同名 Secret。删除后仓库内任何工作流
+   （包括候选工作流）都拿不到私钥——这是预期的收敛方向。
 
-0. **发布契约门禁（本地可执行，必须先绿）**：
+> 迁移期间仓库级与 Environment 级副本会短暂共存；这是有意的安全窗口，
+> 不要在第 2 步验证通过之前删除仓库级副本。
+
+## 4. 发布步骤（Phase 4 新流程：候选 → Draft → 审批 → 发布）
+
+> **仓库内已没有任何 Tag 触发的发版工作流**：推送 `v*` 标签不会再自动构建或公开发布。
+> 正式发布必须由维护者手动触发「候选」与「发布」两个工作流，且两次都要通过
+> Environment 人工审批。完整说明与验收证据见
+> [PHASE4_RELEASE_GOVERNANCE.md](PHASE4_RELEASE_GOVERNANCE.md)。
+
+### 4.0 前置门禁（本地可执行，必须先绿）
+
+```bat
+npm run test:release          :: 发行面契约 + 更新清单校验 + 发布治理单测
+npm run release:rehearse      :: 隔离发布演练（不联网、不创建 Release）
+npm run format:check          :: Rust 格式
+node tests\qa
+un-qa.mjs --suite=static   :: 含 static:release-governance 守卫
+```
+
+### 4.1 候选（Draft）
+
+1. 修改版本（单一事实源为 `package.json`）并合并到 `main`：
 
    ```bat
-   npm run test:release   # 发行面静态契约 + Linux 清单生成契约 + 更新清单校验器
-   ```
-
-   该门禁覆盖：`productName` / `identifier` / NSIS 目标与六语安装向导 / `bundle.targets`
-   不含 `msi` / updater 公钥存在且为 minisign 公钥 / Windows 与 Linux 更新通道端点互相独立 /
-   `latest-linux-critical.json` 生成成功且缺签名即失败 / 公开清单结构（版本、平台、签名、https 链接）。
-
-   SQLite 数据兼容性由 `cargo test --lib` 覆盖：`legacy_library_file_migrates_without_data_loss`
-   （旧库文件无损升级）与 `newer_schema_version_is_not_downgraded`（高版本库不被降级写回）。
-
-1. 修改版本（单一事实源为 `package.json`）：
-
-   ```bat
-   npm run version:sync -- 0.17.1
+   npm run version:sync -- 0.17.2
    npm run version:check
    npm run test:version
    ```
 
-2. 本地验证：
+2. 打标签并推送（**不会触发任何发版流程**）：
 
    ```bat
-   npx tsc --noEmit
-   cd src-tauri && cargo test --lib && cargo check && cd ..
-   npm run build
-   node tests\qa\run-qa.mjs --suite=static
+   git tag v0.17.2
+   git push origin v0.17.2
    ```
 
-3. 提交并推送 `main`，然后打标签：
+3. 跑一次全量 QA 并记录 run id（必须 `success` 且 `head_sha` 等于标签提交）：
 
    ```bat
-   git tag v0.17.1
-   git push origin v0.17.1
+   gh workflow run qa-full.yml -f ref=v0.17.2
    ```
 
-4. `.github/workflows/release-windows.yml` 会：
-   - 校验 tag 与 `package.json` 版本一致（`-linux*` 标签自动跳过）；
-   - `npm ci` + Tauri 构建（`--bundles nsis`，注入 `MR_BUILD_ORIGIN=official`）；
-   - 用 Secrets 中的私钥签名更新包；
-   - 通过 `tauri-action@v1` 创建**已发布**的 GitHub Release，并上传
-     `latest.json` 与安装包；
-   - 接力携带上一版 Release 的 `latest-linux-critical.json`。
-
-   > **本地全量 QA 证明发布（例外）**：当 GitHub-hosted Windows runner 因已知
-   > WebView2 131 环境问题阻塞全量 QA，且本机已运行 `node tests/qa/run-qa.mjs`
-   > 得到 226/226、P0–P3=0，可由维护者手动触发：
-   > ```bat
-   > gh workflow run release-windows.yml --ref v0.17.1 -f skip_full_qa=true -f local_qa_total=226
-   > ```
-   > `local_qa_total` 会原样写进发布说明的 QA 行；**每次受控发布都必须按当次本地
-   > 全量 QA 的实际通过数传入**，不要沿用上一版的数字。
-   > 发布说明必须写明“本地全量 QA 已通过、CI 全量 QA 因环境原因跳过”；
-   > 这是例外，不是默认发布流程。
-
-5. **Linux 高危补丁发布**（仅安全/崩溃级修复，先同步 `package.json` 到补丁版本）。
-   deb/rpm 系统安装不会在应用内自我替换：更新面板只提供下载页/发行说明，
-   由用户用包管理器安装；AppImage 运行态才允许自动替换。
+4. 触发候选工作流（Windows 常规通道 / Linux 高危通道各一个）：
 
    ```bat
-   npm run version:sync -- 0.17.1
-   :: 提交后：
-   git tag v0.17.1-linux-sec1
-   git push origin v0.17.1-linux-sec1
+   gh workflow run release-candidate.yml --ref main ^
+     -f tag=v0.17.2 -f qa_run_id=<run id>
+
+   gh workflow run release-candidate-linux.yml --ref main ^
+     -f tag=v0.17.2-linux-sec1 -f qa_run_id=<run id>
    ```
 
-   `.github/workflows/release-linux-critical.yml` 在 `ubuntu-22.04` 构建
-   deb/rpm/AppImage，生成并上传 `latest-linux-critical.json`（也接力携带
-   `latest.json`）。也可在 Actions 页面手动 `workflow_dispatch` 指定标签。
+   候选 job 会：校验标签与版本一致且提交在 `main` 上 → 查证 QA run 的结论与
+   `head_sha` → 跑本地门禁 → 构建并签名 → **创建 Draft**（绝不公开）→ 上传制品、
+   `latest.json` / `latest-linux-critical.json`、签名文件与 `rc-record.json`
+   （记录版本 + Commit + 每个制品的 SHA-256 + 平台）。
 
-   > **平台 overlay 必须显式生效**：Linux 构建命令带
-   > `--config src-tauri/tauri.linux.conf.json`，它把打包目标固定为
-   > deb/rpm/appimage，并把 updater 端点覆盖为 `latest-linux-critical.json`。
-   > 少了这个 `--config`，产物会带着 Windows 的 `latest.json` 端点，
-   > Linux 客户端永远看不到更新。`static:release-surface` 会守住这条。
-   > 手动 `workflow_dispatch` 必须按 `inputs.tag` 检出（Checkout 的 `ref`），
-   > Release 目标提交取构建时的 `git rev-parse HEAD`；早期版本误用
-   > `$GITHUB_SHA`，在 dispatch 下会指向默认分支而不是标签。
+### 4.2 安装验证（正式发布的强制条件）
 
-6. 验证：
-   - Windows Release 资源中存在 `latest.json` 与 `.nsis.zip` / `.sig`；
-   - Linux 补丁 Release 资源中存在 `latest-linux-critical.json` 与
-     `.AppImage` / `.AppImage.sig`；
-   - `https://github.com/D-OneXXX/MR/releases/latest/download/latest.json` 与
-     `.../latest-linux-critical.json` 均可直接访问（双通道接力保证）；
-   - 安装上一版本，打开「设置 → 关于与维护 → GitHub 自动更新」检查并安装；
-   - 安装完成后按提示重启（Windows 安装器会自动退出/重启，属于用户点击后的预期行为）。
-
-### 4.1 安装 / 覆盖升级 / 回滚验证（需要干净 Windows VM）
-
-> **当前状态：BLOCKED。** GitHub-hosted runner 不是干净用户环境，也没有可交互桌面会话，
-> 因此这一步**无法在 CI 内执行**，也**没有伪造通过记录**。下面是维护者在一次性
-> Windows 虚拟机上按脚本执行的固定流程。
-
-脚本：`scripts/release-smoke/windows-install-upgrade.ps1`（PowerShell 5.1+ / pwsh）。
+在**一次性干净 Windows 虚拟机**上执行：
 
 ```powershell
-pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 `
-  -PreviousInstaller D:\artifacts\MangaReader_0.17.1_x64-setup.exe `
-  -Installer D:\artifacts\MangaReader_0.17.2_x64-setup.exe `
-  -ExpectedVersion 0.17.2
+pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 ^
+  -PreviousInstaller <旧版安装包> -Installer <新版本安装包> -ExpectedVersion 0.17.2
 ```
 
-脚本依次验证（任何一项失败即以非零码退出）：
+脚本会输出安装验证回执（JSON）。把它作为候选/发布输入（base64）或直接作为
+Draft 资产 `install-verification.json` 上传。**没有这份回执，发布工作流会拒绝发布**
+（这是设计，不是可绕过的例外）。
 
-1. 安装包存在并打印 SHA-256；
-2. 旧版本静默安装（`/S`）后注册到卸载列表（HKCU/HKLM）；
-3. 新版本**覆盖安装**后注册到卸载列表、版本号与预期一致；
-4. 安装后的主程序能启动并在 12 秒后仍在运行；
-5. 升级前后 `library.db` 存在且体积未被截断（数据不丢）；
-6. 回滚：重新安装旧版本后主程序仍可启动、`library.db` 仍在；
-7. 清理：卸载后卸载列表不再包含 MangaReader。
+### 4.3 发布（人工审批后）
 
-约束：只在一次性 VM 上运行；脚本不读取、不上传任何用户数据；不接触签名私钥、
-不创建 Release、不推送 Tag；结束进程属于测试清理，不是产品的静默重启。
+```bat
+gh workflow run release-publish.yml --ref main -f tag=v0.17.2
+```
 
-已可在无 VM 环境验证的部分（自动化门禁）：
+发布 job 会：确认目标是 **Draft**（已发布则幂等跳过）→ 下载 Draft 全部制品 →
+逐项比对「版本 / Commit / 每个制品 SHA-256 / 平台 / QA 证据 / 安装验证回执」→
+通过后把 Draft 变为公开 Release → 接力携带另一通道的清单 → 发布后验证
+（重新下载并校验公开清单）。
 
-| 环节 | 覆盖方式 | 状态 |
-|---|---|---|
-| 旧库文件升级 | `cargo test --lib legacy_library_file_migrates_without_data_loss` | VERIFIED |
-| 高版本库不被降级 | `cargo test --lib newer_schema_version_is_not_downgraded` | VERIFIED |
-| 发行面/安装器配置 | `npm run test:release` | VERIFIED |
-| 公开更新清单结构 | `npm run test:release` + 发版工作流内的校验步骤 | VERIFIED |
-| NSIS 真实安装/覆盖/回滚 | `windows-install-upgrade.ps1`（需干净 VM） | BLOCKED |
-| 真实用户目录下的升级与数据迁移 | 需真实用户样本（隐私边界内不可自动化） | BLOCKED |
+任一不一致都会**拒绝发布**并给出具体原因。
+
+### 4.4 Linux 高危补丁通道
+
+Linux 通道只发安全/崩溃级修复，标签形态固定为 `vX.Y.Z-linux-secN`，走
+`release-candidate-linux.yml` / `release-publish-linux.yml`，端点固定
+`latest-linux-critical.json`，与 Windows 通道互不影响。
+
+> **平台 overlay 必须显式生效**：Linux 构建命令带
+> `--config src-tauri/tauri.linux.conf.json`，它把打包目标固定为
+> deb/rpm/appimage，并把 updater 端点覆盖为 `latest-linux-critical.json`。
+> 少了这个 `--config`，产物会带着 Windows 的 `latest.json` 端点，
+> Linux 客户端永远看不到更新。`static:release-surface` 会守住这条。
+
+### 4.5 已移除的旧路径（不要再用）
+
+- ~~`on: push: tags: v*` 触发发版~~ → 仓库内已无 Tag 触发器。
+- ~~`skip_full_qa` / `local_qa_total` 跳过 hosted QA 直接发布~~ → 已删除，无绕过开关。
+- ~~`releaseDraft: false` 直接创建已发布 Release~~ → 候选阶段只建 Draft。
+- ~~发布 job 持有签名私钥~~ → 签名只在候选阶段，发布 job 不接触私钥。
 
 ## 5. 更新失败的常见原因
 

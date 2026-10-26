@@ -85,7 +85,8 @@ jobs:
               exit 1
             fi
             VERSION="0.0.0"
-            COMMIT="$(git rev-parse origin/main)"
+            # 演练构建的是标签指向的提交：记录里的 Commit 必须与实际构建一致。
+            COMMIT="$(git rev-parse HEAD)"
           else
             if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
               echo "标签必须形如 vX.Y.Z（常规通道不带 -linux 后缀）：$TAG" >&2

@@ -177,9 +177,20 @@ async function main(argv = process.argv.slice(2)) {
     writeResult(outPath, failure);
     console.error(`[library-ui-check] FAIL ${JSON.stringify(failure)}`);
     return 1;
+  } finally {
+    // 必须关闭 CDP WebSocket：否则 Node 事件循环不会退出，安装脚本会一直
+    // 等待 `& node` 返回，表现为升级步骤挂起（第二次 hosted run 的实际故障）。
+    if (page) {
+      try {
+        await page.close();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 
 if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]))) {
-  process.exitCode = await main();
+  // 结果文件已写盘；显式退出，避免任何残留句柄拖住安装脚本。
+  process.exit(await main());
 }

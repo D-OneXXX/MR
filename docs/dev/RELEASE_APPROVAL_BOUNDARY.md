@@ -3,17 +3,21 @@
 > 审计时间：2026-10-26。本文只记录事实与建议，**不构成远程设置变更**。
 > Environment、Secrets、Ruleset、仓库权限的任何变更都需要维护者单独确认。
 >
-> **2026-10-27 复核修正**：§4 方案 A 的 App 权限已修正为 **`Contents: read` only**，
-> 并新增写 deploy key、workflow 路径 ruleset 与 `v*` Tag creation 规则。**不得**给
-> 自动化身份 `Contents: write`：它可以直接 `PATCH` Draft 为公开 Release，绕过
-> Environment。完整验收、迁移顺序与未执行项见
-> [`PERMISSION_ISOLATION_ACCEPTANCE.md`](./PERMISSION_ISOLATION_ACCEPTANCE.md)。
+> **2026-10-27 发布后实施更新**：`v0.17.2` 已在维护者个人批准后公开。AI 侧改为
+> **local-only**（不持有 GitHub API/git 写凭据），并启用 `v*` Tag creation ruleset；
+> write deploy key 因 public user-owned 仓库不支持 push ruleset（API 422）未创建；
+> GitHub App 未实施。**不得**给自动化身份 `Contents: write`：它可以直接 `PATCH`
+> Draft 为公开 Release，绕过 Environment。完整状态见
+> [`PERMISSION_ISOLATION_ACCEPTANCE.md`](./PERMISSION_ISOLATION_ACCEPTANCE.md) §11。
 
 ## 1. 结论
 
-当前正式发布审批**没有技术隔离**：Agent 使用的 GitHub 身份与维护者相同，且
-`release-windows` 允许 self-review、允许管理员绕过。因此 Agent 技术上可以触发
-`release-publish.yml` 并批准自己的 deployment。当前只有“Agent 不批准”的流程约束；
+历史上的正式发布审批**没有技术隔离**：Agent 使用的 GitHub 身份与维护者相同，且
+`release-windows` 允许 self-review、允许管理员绕过。因此当时 Agent 技术上可以触发
+`release-publish.yml` 并批准自己的 deployment。`v0.17.2` 发布也使用了这条路径。
+2026-10-27 实施后 AI 改为 local-only，不再持有 GitHub token；上述 API/git 自批能力
+已被移除。Environment 仍允许维护者 human self-review（未修改）；浏览器/OS 级隔离仍
+需要独立执行账号/VM。
 它不是密码学或权限系统上的保证。
 
 Windows 安装/升级门禁可以与审批边界分开验收：前者看干净 VM 证据，后者看审批身份。
@@ -126,9 +130,10 @@ Environment。`Contents: write` 同时也允许改 workflow 文件和 Tag，因�
      User/Team）；REST 的 `POST .../pending_deployments` 在 OpenAPI 中还标记为
      `enabledForGitHubApps=false`。两条独立信号都指向“App 不能批准”，但仍需用
      一次性 pending deployment 实测（见验收报告 N1）。
-2. 写代码使用**独立的 write deploy key**（SSH），只推送 `ai/*` 分支；deploy key
-   不是 API token，不能发布 Release 或批准 deployment。它必须不在任何 ruleset
-   bypass 中。
+2. 写代码使用**独立的 write deploy key**（SSH）**仅当仓库支持 push ruleset**；
+   deploy key 不是 API token，不能发布 Release 或批准 deployment，必须不在任何
+   ruleset bypass 中。**本仓库是 public user-owned，push ruleset 返回 422，禁止
+   在此仓库创建 write deploy key**；退回维护者推送/触发。
 3. 在授予 App `Actions: write` / deploy key 之前，先增加：
    - `v*` Tag 的 **creation** 规则（当前 ruleset 只有 deletion/update）；
    - target `push` 的 `file_path_restriction` ruleset，覆盖
@@ -246,16 +251,22 @@ gh release view v0.17.2 --json isDraft,publishedAt,assets
 
 不要输出 token 明文；不要把 approval API 的写操作放进 Agent 的自动化脚本。
 
-## 8. 2026-10-27 复核补充
+## 8. 2026-10-27 发布后实施补充
 
-- 当前仍是单账号 + 允许 self-review + 允许管理员绕过；GitHub 侧方案尚未实施。
-- GitHub App 的 `Contents: write` 可直接发布 Draft；新版方案改为 **Contents read +
-  write deploy key + workflow 路径/Tag creation ruleset**。
+- `v0.17.2` 已公开（`publishedAt=2026-10-26T21:10:06Z`，run `40385949803`）；
+  发布时 actor/approver 仍为 `D-OneXXX`，这条历史自审风险已记录。
+- 当前 AI 改为 **local-only**：无 GitHub API token、无 deploy key、无 App token；
+  远端 push/PR/CI/发布由维护者完成。维护者仍需在 UI 自行审批后续发布。
+- 已增加 `Protect release tag creation` ruleset（id `25915443`，`refs/tags/v*`，
+  bypass 仅 `D-OneXXX`）；现有 tag update/delete ruleset 保持。
+- **write deploy key 未采用**：public user-owned 仓库不支持 push ruleset（API 422）；
+  deploy key 分支可注入新 workflow，形成绕过 Environment 的 P0 路径。
+- GitHub App 未采用：创建/安装/私钥需要维护者 UI；且当前同一 Windows 账号无法证明
+  浏览器/OS 级隔离。App 仍作为未来可选方案。
 - `can_admins_bypass` 只能通过 UI 设置；REST 的 Environment PUT body 没有该字段。
-- `POST .../pending_deployments` 在 OpenAPI 中标记 `enabledForGitHubApps=false`，
-  但 docs 权限表与 prose 有冲突；App 批准拒绝行为必须用一次性 deployment 实测。
-- 当前 main 的父级 branch protection 没有 `required_pull_request_reviews`，且近期 PR
-  在 0 review 下合并；不能把 PR review 当作防止 workflow 改写的技术门禁。
-- PR #82 已合并；v0.17.2 Draft、rehearsal 资源、公开清单均未改变。
-- 完整证据、验收矩阵、迁移/回滚与 UI 步骤见
+- `POST .../pending_deployments` 对 App 的行为仍需未来 App 方案实测。
+- 当前 main 的父级 branch protection 没有 `required_pull_request_reviews`，近期 PR
+  在 0 review 下合并；local-only AI 无 merge 权限，人工合并仍由维护者负责。
+- 公开 Release 说明仍含旧“Draft”文案（P2，未修改 release artifact）；完整状态、
+  测试矩阵、迁移/回滚见
   [`PERMISSION_ISOLATION_ACCEPTANCE.md`](./PERMISSION_ISOLATION_ACCEPTANCE.md)。

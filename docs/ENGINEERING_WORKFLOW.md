@@ -4,8 +4,9 @@
 > `AGENTS.md` 负责架构、隐私、数据与产品不变量；本文件负责任务、分支、质量门禁与发布治理。
 > 两者冲突时，以更严格、更保护用户数据与发布安全的一方为准。
 >
-> 当前状态：Phase 5（v0.17.2 发布候选准备与验证）。仓库内已无 Tag 触发的发版工作流；
-> 正式发布仍需维护者本人审批，且必须先满足干净环境安装/升级验证等强制门禁。
+> 当前状态：**v0.17.2 已公开发布**（2026-10-26T21:10:06Z），Phase 5 进入发布后稳定化。
+> 仓库内仍无 Tag 触发的发版工作流；正式发布仍需维护者本人审批。AI 采用 local-only
+> 最小隔离：不持有 GitHub API/git 写凭据；远端 push、PR、CI 与发布由维护者完成。
 
 ---
 
@@ -256,7 +257,8 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 「版本 + Commit + 制品 SHA-256 + 平台 + QA 证据 + 签名证据 + 干净环境安装回执」
 的绑定校验。
 
-Phase 5（v0.17.2 候选准备）进行中，正式发布仍需维护者本人单独批准。
+Phase 5：`v0.17.2` 已公开（publish run `40385949803`），发布后验证通过；正式发布
+仍按维护者本人审批执行。AI 权限最小边界见 §10.3。
 
 允许：本地构建、CI 验证、静态 QA、生成候选制品到 Draft。
 禁止：绕过证据门禁发布、未经审批公开发布、修改公开更新清单。
@@ -281,6 +283,11 @@ GitHub-hosted `windows-2022` 一次性 runner 通过
 
 ### 10.2 审批边界（2026-10-26 审计，2026-10-27 复核修正）
 
+> **2026-10-27 实施结果**：没有采用文中的 GitHub App/deploy-key 方案；实际采用
+> **local-only AI**（无 GitHub API/git 写凭据），并增加 tag creation ruleset。
+> push ruleset 在该 public user-owned 仓库不可用（API 422），write deploy key 未创建。
+> 详见 §10.3 与 `docs/dev/PERMISSION_ISOLATION_ACCEPTANCE.md`。
+
 当前事实：
 
 - Agent 使用的 `gh` 是维护者本人的用户 OAuth token（scopes：`gist`、`read:org`、
@@ -295,7 +302,8 @@ GitHub-hosted `windows-2022` 一次性 runner 通过
 1. **推荐**：为自动化创建 GitHub App（`Contents: read`、`Actions: read/write`、
    `Issues`/`Pull requests` write、`Metadata: read`；**不要 Contents write**，
    不要 Deployments/Environments/Secrets/Administration/Workflows write），
-   不作为 Environment reviewer；写代码用独立 write deploy key。Agent 使用 App
+   不作为 Environment reviewer；写代码用独立 write deploy key **仅当仓库支持 push
+   ruleset；本 public user-owned 仓库不支持，故不要创建**。Agent 使用 App
    installation token；Environment 保持 `D-OneXXX` 为 reviewer，启用
    `prevent_self_review=true`、`can_admins_bypass=false`。效果：Agent 触发 run 时
    actor=App，维护者本人批准，AI 无法自批；现有 PR/候选/QA CI 不受影响。
@@ -321,13 +329,36 @@ GitHub-hosted `windows-2022` 一次性 runner 通过
 `docs/dev/PERMISSION_ISOLATION_ACCEPTANCE.md`。在完成技术隔离前，正式发布必须由
 维护者本人操作，Agent 不得触发或批准 publish deployment。
 
-当前已知发布阻塞（正式发布前必须解除）：
+当前已知阻塞/残余（2026-10-27）：
 
-- 干净 Windows VM 上的 NSIS 全新安装 / 覆盖升级 / 回滚 / 数据完整性验证：
-  必须产出带 provenance + library + IPC 的可核实回执；共享宿主回执不满足。
-- 审批边界技术隔离：当前单账号 + 允许 self-review，AI 与维护者无法技术区分；
-  需维护者配置 GitHub App/第二身份或明确接受流程约束。
-- Linux 通道的安装/升级证据（尚无 Linux 主机）；Linux 保持独立，不随 Windows 自动发布。
+- **AI 远程 PR/CI 自动化**：local-only 隔离下 AI 无 GitHub API/git 写凭据，不能创建
+  远端分支、PR 或触发 CI/候选；这些由维护者完成。若要恢复，需 GitHub App + 独立 OS。
+- **write deploy key 不安全**：该 public user-owned 仓库不支持 push ruleset（API 422）；
+  deploy key 分支可包含新 workflow 并在 push 时运行，形成绕过 Environment 的 P0 路径。
+  在平台支持/替代控制前，不要创建 write deploy key。
+- **浏览器/OS 级隔离**：AI 与维护者在同一 Windows 账号；真正隔离需要独立执行账号/VM。
+- **Linux 安装/升级证据**（尚无 Linux 主机）；Linux 保持独立，不随 Windows 自动发布。
+- **Vercel GitHub App（id 8329）**仍请求 contents/administration/workflows write；
+  是否保留由维护者确认，本轮未改动。
+- 公开 Release 说明仍有“Draft/未公开”旧文案；本轮未把它当作发布 artifact 修改。
+
+### 10.3 AI 权限最小边界（2026-10-27 实施）
+
+- AI 只保留本地代码修改、测试和本地分支；**不持有** GitHub API token、deploy key、
+  GitHub App token 或 Environment secret。
+- 维护者负责：远端 push、创建/合并 PR、触发 CI/候选/发布、上传 Draft 证据、审批
+  deployment。Windows 与 Linux 继续独立。
+- 已增加 `Protect release tag creation` ruleset（id `25915443`，`refs/tags/v*`，
+  `creation`，bypass 仅 `D-OneXXX`）；现有 tag update/delete ruleset 保持。
+- 未修改 Environment、`prevent_self_review`、`can_admins_bypass`、签名密钥、updater
+  配置或 release workflow；没有发布新版本。
+- 旧的个人 token 在文档/状态 PR 合并后从 AI 的 `gh`/GCM 环境移除；移除后 AI 不能调用
+  GitHub 写 API。不要在没有独立 OS/App 验收的情况下重新把 token 放回 AI 环境。
+- `npm run status` / `PROJECT_STATE.md` 刷新需要 GitHub API；local-only AI 不再执行，
+  由维护者在已认证的维护者环境运行。
+- 如果以后要恢复 AI 的 PR/CI 自动化，采用 GitHub App（Contents read、Actions write、
+  Issues/PR write；无 Contents write/Environments/Secrets/Administration），在独立
+  Windows 账号/VM 中保存私钥，并用 rehearsal 做正/负测试。
 
 ---
 
@@ -368,7 +399,7 @@ GitHub-hosted `windows-2022` 一次性 runner 通过
 | 2 | Bug 生命周期与自动修复流程 | 已完成门禁与单 Bug 演练（PR #20/#22、#21） |
 | 3 | 质量门禁与安全扫描 | **完成**：安全/供应链/格式/夹具/发布契约门禁全部进 CI；hosted 全量 QA 已在 windows-2022 连续跑出全绿证据（main 上 run 40267990890，229/229）；#42/#51 两个偶发失败已按证据修复 |
 | 4 | RC / Draft / 审批 / 双通道发布 | **已完成**：无 Tag 触发、候选→Draft→审批→发布、制品绑定校验、权限收敛、双通道独立；Environment 与签名 Secret 已配置，审批门禁与验签均已真实验证；演练 31/31；签名与安装证据纳入强制发布门禁 |
-| 5 | 发布后验证、Hotfix 与回滚 | 进行中：v0.17.2 Windows 干净 VM 证据已完成（hosted run 40374494977）；正式发布待维护者明确授权；审批边界技术隔离待维护者配置。最终报告见 `docs/dev/PHASE5_WINDOWS_RELEASE_ACCEPTANCE.md` |
+| 5 | 发布后验证、Hotfix 与回滚 | **v0.17.2 已公开**（publish run `40385949803`，publishedAt `2026-10-26T21:10:06Z`）；发布后资产/签名/updater/回滚验证通过；Linux 未升级，仍 `v0.17.1-linux-sec1`。AI 采用 local-only 最小隔离；远程 PR/CI 自动化与浏览器/OS 隔离仍 BLOCKED。报告见 `docs/dev/PHASE5_WINDOWS_RELEASE_ACCEPTANCE.md`；权限状态见 `docs/dev/PERMISSION_ISOLATION_ACCEPTANCE.md` |
 | 6 | 隔离演练，不触发真实发布 | 待开始 |
 
 Phase 2 收尾于 2026-10-26：PR 元数据 required check 已生效；#18（glib 风险接受）与 #23（chaos/CDP flake）已处置。Phase 3 已于 2026-10-26 收尾：安全、供应链（Actions SHA 固定）、格式、夹具、发布契约五类门禁全部进 CI；hosted 全量 QA 在 windows-2022 连续跑出全绿证据（main 上 run 40267990890，229/229）；两个偶发失败（#32 断言判据无效、#42/#51 测试前置条件缺失）均已按证据定位并修复。唯一未完成项是需要干净 Windows VM 的真实安装/升级/回滚验证（BLOCKED）。发布候选仍按 `docs/dev/LOCAL_QA_ATTESTATION.md` 走本地 attestation，直到 Phase 4 的 Draft + 审批流落地。

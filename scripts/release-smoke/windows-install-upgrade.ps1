@@ -271,7 +271,7 @@ function Test-AppLaunch {
         $UiCheckOut = Join-Path $DataDirectory "ipc-check.json"
       }
       Write-Host "   运行 list_books IPC 校验（port=$Port）"
-      & node $UiCheckScript --port $Port --fixture $FixturePath --out $UiCheckOut
+      & node $UiCheckScript --port $Port --fixture $FixturePath --out $UiCheckOut | Out-Host
       $uiExit = $LASTEXITCODE
       if (Test-Path $UiCheckOut) {
         try { $ui = Get-Content $UiCheckOut -Raw | ConvertFrom-Json } catch { $ui = $null }
@@ -310,7 +310,7 @@ function Invoke-LibrarySeed {
     [string]$OutPath
   )
   Write-Host "   写入合成书库与阅读进度"
-  & node $Script seed --data-dir $DataDirectory --fixture $FixturePath --out $OutPath
+  & node $Script seed --data-dir $DataDirectory --fixture $FixturePath --out $OutPath | Out-Host
   $exit = $LASTEXITCODE
   if ($exit -ne 0) {
     Assert-True $false "合成书库写入失败（exit $exit）"
@@ -333,7 +333,7 @@ function Invoke-LibraryVerify {
   )
   Write-Host "   校验书库完整性与阅读进度"
   & node $Script verify --data-dir $DataDirectory --fixture $FixturePath --out $OutPath `
-    --schema-version-before $SchemaVersionBefore
+    --schema-version-before $SchemaVersionBefore | Out-Host
   $exit = $LASTEXITCODE
   $result = $null
   if (Test-Path $OutPath) {

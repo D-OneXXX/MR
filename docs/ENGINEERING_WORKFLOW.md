@@ -279,11 +279,11 @@ GitHub-hosted `windows-2022` 一次性 runner 通过
 人工核验要求。旧共享宿主回执（`cleanEnvironment=false`、无 provenance/library）
 会被 `verify-draft` / `verify-evidence` 拒绝。
 
-### 10.2 审批边界（2026-10-26 审计）
+### 10.2 审批边界（2026-10-26 审计，2026-10-27 复核修正）
 
 当前事实：
 
-- Agent 使用的 `gh` 是维护者本人的 `gho_` OAuth token（scopes：`gist`、`read:org`、
+- Agent 使用的 `gh` 是维护者本人的用户 OAuth token（scopes：`gist`、`read:org`、
   `repo`、`workflow`）；Agent 与维护者在 GitHub 上是**同一身份**。
 - `release-windows` / `release-linux` 的 required reviewer 都是 `D-OneXXX`；
   `prevent_self_review=false`，`can_admins_bypass=true`。
@@ -292,17 +292,33 @@ GitHub-hosted `windows-2022` 一次性 runner 通过
 
 推荐变更（需维护者单独确认后执行，本轮未改任何远程设置）：
 
-1. **推荐**：为自动化创建 GitHub App（仅 Contents/Actions/Issues/PR 必要权限，
-   不作为 Environment reviewer），Agent 使用 App installation token；Environment
-   保持 `D-OneXXX` 为 reviewer，启用 `prevent_self_review=true`、
-   `can_admins_bypass=false`。效果：Agent 触发 run 时 actor=App，维护者本人批准，
-   AI 无法自批；现有 PR/候选/QA CI 不受影响。
+1. **推荐**：为自动化创建 GitHub App（`Contents: read`、`Actions: read/write`、
+   `Issues`/`Pull requests` write、`Metadata: read`；**不要 Contents write**，
+   不要 Deployments/Environments/Secrets/Administration/Workflows write），
+   不作为 Environment reviewer；写代码用独立 write deploy key。Agent 使用 App
+   installation token；Environment 保持 `D-OneXXX` 为 reviewer，启用
+   `prevent_self_review=true`、`can_admins_bypass=false`。效果：Agent 触发 run 时
+   actor=App，维护者本人批准，AI 无法自批；现有 PR/候选/QA CI 不受影响。
 2. 备选：维护者控制的第二个 GitHub 账号作为 reviewer，启用
    `prevent_self_review=true`、`can_admins_bypass=false`。
-3. 备选：Agent 使用细粒度 PAT（不含 Deployments/Environments/Administration 写权限），
-   publish 由维护者手动触发并批准；需先确认 deployment approval 的最小权限。
+3. 备选：Agent 使用细粒度 PAT（不含 Deployments/Environments/Administration/Secrets
+   写权限）；但带 Contents write 的 PAT 仍可直接发布 Draft，不能单独作为解决方案。
 
-详见 `docs/dev/RELEASE_APPROVAL_BOUNDARY.md`。在完成技术隔离前，正式发布必须由
+**2026-10-27 复核的硬约束**：
+
+- 不得给自动化身份 `Contents: write`；GitHub 没有独立 Releases 权限，Contents write
+  可直接 `PATCH` Draft 为公开 Release，绕过 Environment。
+- 在授予 Actions write 和写分支能力之前，必须先加 `v*` Tag creation 规则与
+  target `push` 的 `file_path_restriction` ruleset，覆盖 `.github/workflows/**`、
+  `.github/actions/**`、`scripts/release-governance/**`，bypass 仅维护者；否则可在
+  分支上改掉 publish workflow 的 `environment:` 再触发。
+- `can_admins_bypass` 不在 REST Environment PUT body 中，只能在 GitHub UI 取消。
+- `prevent_self_review=true` 必须在 App 能触发候选/发布之后启用；否则维护者无法批准
+  自己触发的 run。
+- 同一 Windows 账号下 AI 仍可能读取维护者 keyring；真正隔离需要独立 OS 用户/VM。
+
+详见 `docs/dev/RELEASE_APPROVAL_BOUNDARY.md` 与
+`docs/dev/PERMISSION_ISOLATION_ACCEPTANCE.md`。在完成技术隔离前，正式发布必须由
 维护者本人操作，Agent 不得触发或批准 publish deployment。
 
 当前已知发布阻塞（正式发布前必须解除）：

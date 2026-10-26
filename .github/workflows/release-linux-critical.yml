@@ -132,6 +132,16 @@ jobs:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: node scripts/make-linux-critical-manifest.mjs
 
+      # 发布前门禁：公开更新清单必须结构完整、版本一致、平台齐全、签名非空。
+      # 清单是客户端唯一的数据源，坏了不会报错，只会「静默没有更新」。
+      - name: Verify Linux updater manifest before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST="src-tauri/target/release/bundle/appimage/latest-linux-critical.json"
+          VERSION="$(node -p "require('./package.json').version")"
+          node scripts/verify-updater-manifest.mjs "$MANIFEST" --expect-version "$VERSION" --require-platform linux-x86_64
+
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

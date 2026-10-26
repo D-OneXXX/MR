@@ -45,6 +45,9 @@ jobs:
       - name: QA fixture unit tests
         run: npm run test:fixtures
 
+      - name: Release contract tests
+        run: npm run test:release
+
       # 格式门禁：Rust 代码必须符合 rustfmt（只读检查，不改写工作区）。
       - name: Rust formatting (rustfmt)
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check

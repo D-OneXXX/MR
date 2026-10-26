@@ -1644,4 +1644,132 @@ mod tests {
         // 失败事务不得留下半迁移的新行。
         assert!(get_book(&conn, "x").unwrap().is_none());
     }
+
+    /* ---------------- 跨版本数据兼容（升级 / 回滚安全性） ---------------- */
+
+    /// 造一个「旧版本留下的」书库文件：books 缺列、reading_log 是 (date) 主键形态、
+    /// 没有在线相关表、user_version = 1。
+    fn legacy_library_file(path: &Path) {
+        let conn = Connection::open(path).expect("创建旧库");
+        conn.execute_batch(
+            "CREATE TABLE books(
+                 id TEXT PRIMARY KEY,
+                 path TEXT NOT NULL UNIQUE,
+                 title TEXT NOT NULL,
+                 page_count INTEGER NOT NULL DEFAULT 0,
+                 current_page INTEGER NOT NULL DEFAULT 0,
+                 updated_at TEXT NOT NULL DEFAULT ''
+             );
+             CREATE TABLE reading_log(
+                 date TEXT PRIMARY KEY,
+                 pages INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE settings(k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '');
+             CREATE TABLE app_meta(k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '');
+             INSERT INTO books(id, path, title, page_count, current_page, updated_at)
+                 VALUES('legacy-1', 'C:/Books/Legacy.cbz', '旧书', 12, 5, '2026-01-01');
+             INSERT INTO reading_log(date, pages) VALUES('2026-01-01', 7);
+             INSERT INTO settings(k, v) VALUES('theme', 'dark');
+             PRAGMA user_version = 1;",
+        )
+        .expect("写入旧库结构");
+    }
+
+    /// 升级路径：旧库文件必须被**无损**升级到当前 schema。
+    #[test]
+    fn legacy_library_file_migrates_without_data_loss() {
+        let path = unique_temp_db("legacy-upgrade");
+        legacy_library_file(&path);
+        {
+            // 生产入口：open（并发加固）+ init_schema（迁移）。
+            let conn = open(&path).expect("打开旧库");
+            init_schema(&conn).expect("迁移旧库");
+            assert_eq!(
+                schema_version(&conn).unwrap(),
+                SCHEMA_VERSION,
+                "迁移后 user_version 必须等于当前 schema 版本"
+            );
+            let row = get_book(&conn, "legacy-1").unwrap().expect("旧书仍在");
+            assert_eq!(row.path, "C:/Books/Legacy.cbz");
+            assert_eq!(row.page_count, 12);
+            assert_eq!(row.current_page, 5, "阅读进度不得在迁移中丢失");
+            let removed: i64 = conn
+                .query_row("SELECT removed FROM books WHERE id='legacy-1'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(removed, 0, "新增列必须取默认值");
+            assert!((row.scroll_pct - (-1.0)).abs() < f64::EPSILON);
+            assert_eq!(row.source_type, "local");
+            assert_eq!(row.meta_json, "{}");
+            // 旧 reading_log(date) 必须保留：迁移前没有 book_id 的历史落在
+            // NULL 桶里（AGENTS.md §5：可空外键承载迁移前全局旧史）。
+            let legacy_history: (Option<String>, i64) = conn
+                .query_row(
+                    "SELECT book_id, pages FROM reading_log WHERE date='2026-01-01'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                legacy_history,
+                (None, 7),
+                "旧阅读历史必须保留，且 book_id 保持 NULL（全局旧史桶）"
+            );
+            let global_days = reading_log_days(&conn, None, 3650).unwrap();
+            assert!(
+                global_days
+                    .iter()
+                    .any(|(date, pages)| date == "2026-01-01" && *pages == 7),
+                "迁移前旧史必须仍能在全局统计里查到：{global_days:?}"
+            );
+            assert_eq!(
+                get_setting(&conn, "theme").unwrap().as_deref(),
+                Some("dark")
+            );
+            assert!(quick_check(&conn).is_ok(), "迁移后必须通过 quick_check");
+            // 新增的唯一索引必须生效：(date, COALESCE(book_id,'')) 唯一。
+            let dup = conn.execute(
+                "INSERT INTO reading_log(date, book_id, pages) VALUES('2026-01-01', NULL, 1)",
+                [],
+            );
+            assert!(dup.is_err(), "迁移后同日重复记录必须被唯一索引拒绝");
+        }
+        // 再次打开仍然是同一份数据（幂等迁移）。
+        let conn = open(&path).expect("重开旧库");
+        init_schema(&conn).expect("重复迁移");
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert!(get_book(&conn, "legacy-1").unwrap().is_some());
+        drop(conn);
+        cleanup_db_files(&path);
+    }
+
+    /// 回滚安全性：库文件来自**更新的版本**时，旧版应用不得降级 schema，
+    /// 也不得损坏数据（只读兼容，交由用户升级处理）。
+    #[test]
+    fn newer_schema_version_is_not_downgraded() {
+        let path = unique_temp_db("future-version");
+        {
+            let conn = open(&path).expect("打开临时库");
+            init_schema(&conn).expect("建表");
+            upsert_book(&conn, "b1", "p/b1", "第一卷", 10).unwrap();
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION + 5)
+                .unwrap();
+        }
+        {
+            let conn = open(&path).expect("重开临时库");
+            init_schema(&conn).expect("迁移");
+            assert_eq!(
+                schema_version(&conn).unwrap(),
+                SCHEMA_VERSION + 5,
+                "不得把更高版本的库降级写回旧 schema 版本"
+            );
+            assert!(
+                get_book(&conn, "b1").unwrap().is_some(),
+                "更高版本库里的书不得丢失"
+            );
+            assert!(quick_check(&conn).is_ok());
+        }
+        cleanup_db_files(&path);
+    }
 }

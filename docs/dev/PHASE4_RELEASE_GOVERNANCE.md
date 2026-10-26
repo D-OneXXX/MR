@@ -196,3 +196,54 @@ grep -rn "push:" .github/workflows/    # 不得出现 tags 触发
 3. 用演练标签跑一次候选工作流，验证 Environment 审批与 Secret 可用性；
 4. 补做真实 Draft → 审批 → 发布的端到端演练（仍不公开正式版本）；
 5. 在干净 Windows VM 上完成 NSIS 安装/覆盖升级/数据完整性验证（正式发布强制条件）。
+
+---
+
+## 8. 远程配置验收报告（2026-10-26，用户授权后执行）
+
+### 8.1 实际执行的远程变更
+
+| 变更 | 状态 | 说明 |
+|---|---|---|
+| 创建 Environment `release-windows` | 已完成 | required reviewer = `D-OneXXX`（User 217948500）；`prevent_self_review=false`；deployment branch policy = 仅受保护分支（main） |
+| 创建 Environment `release-linux` | 已完成 | 同上 |
+| 写入 Environment 签名 Secret（2×2 项） | 已完成 → **随后删除** | 演练证明 Environment 级 Secret 可用（构建产出有效 minisign 签名）；但无法证明它与「已发布版本所使用的私钥」是同一把（见 8.3 阻塞），故按「宁可无密钥、不可错密钥」原则移除副本 |
+| 删除仓库级签名 Secret | **未执行** | 用户要求「验证失败不得删除原 Secret」；仓库级副本原样保留（`updated=2026-10-24`） |
+| 仓库默认工作流权限 → `read` | 已确认 | 修改前审计：4 个发布工作流均在 job 级显式声明 `contents: write`，其余工作流只需 `read`；修改后 CI 复跑全绿（Windows 40283927447 / Linux 40283930606） |
+| tag ruleset | **未改动** | 新流程不需要写标签引用，`Protect release tags` 保持原样（更严格） |
+| 创建隔离演练标签 `v0.0.0-rehearsal` | 已完成 | 指向 `b0820e2`；**推送后没有任何 workflow 被触发**（核心风险消除的真实验证） |
+| 创建演练 Draft Release | 已完成 | `v0.0.0-rehearsal`，`isDraft=true`，从未公开 |
+
+### 8.2 隔离演练证据
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| Tag 推送不触发发版 | PASS | 推送 `v0.0.0-rehearsal` 后运行列表无新增发版运行 |
+| Environment 审批真实生效 | PASS | deployment `7325926128` 状态 `waiting`；`required_reviewers=["User#D-OneXXX"]`；`current_user_can_approve=true`（单人维护者可审批）；job 在审批前不执行 |
+| 单人维护者可完成审批 | PASS | `prevent_self_review=false` → 维护者可批准自己触发的部署 |
+| 候选流程端到端 | PASS | run `40290561696` success：构建 → 签名 → 建 Draft → 生成 RC 记录 |
+| Environment 级 Secret 可用 | PASS | 构建日志显示 `TAURI_SIGNING_PRIVATE_KEY: ***`，产出 `MangaReader_0.17.1_x64-setup.exe.sig` 与 `latest.json`（签名非空） |
+| RC 记录绑定 | PASS | `rc-record.json` 含版本/Commit/平台/QA runId + 每个制品 SHA-256；实测摘要与真实资产逐一相符 |
+| 发布闸门拒绝演练候选 | PASS | `verify-draft.mjs` 对真实远端制品返回「演练候选永远不得发布」 |
+| 发布工作流拒绝演练标签 | PASS | run `40293390900`：审批后立即失败「演练标签永远不得发布：v0.0.0-rehearsal」 |
+| 公开更新清单未被改动 | PASS | 演练前后 `latest.json` = `64f6038e…`、`latest-linux-critical.json` = `2bdb3af5…`（字节一致） |
+| `releases/latest` 未变 | PASS | 仍为 `v0.17.1-linux-sec1`（id 423315120，published_at 未变） |
+| 演练中暴露并修复的真实缺陷 | PASS | ① 纯 `tauri build` 不产出 `latest.json`（已改回 tauri-action 产出清单）；② 演练模式 `VERSION` 未定义；③ 演练 Commit 取 main HEAD 与构建来源不一致；④ 治理文件被误判为「记录外制品」 |
+
+### 8.3 遗留风险与阻塞
+
+| 项 | 结论 | 说明 |
+|---|---|---|
+| 签名私钥与配置 `pubkey` 的一致性 | **NOT_VERIFIED** | 本机 `updater.key` 是 rsign 加密密钥（公钥不明文内嵌），离线无法与 `tauri.conf.json` 的公钥（ID `67CB304460E08E4A`）比对；环境无 minisign。**处置**：Environment 副本已删除、仓库级副本保留；正式发布前必须由维护者用权威密钥材料写入 Environment Secret，并用 minisign 验签 |
+| NSIS 真实安装 / 覆盖升级 / 数据完整性 | **BLOCKED** | 需要干净 Windows VM；脚本就绪但本环境无法执行。正式发布强制条件未满足 |
+| 演练 Draft 清理 | 待决 | `v0.0.0-rehearsal` Draft 保留作为证据（未公开、不影响 `releases/latest`）；删除需维护者确认（ruleset 保护 `v*` 标签的删除） |
+| 版本与正式发布 | 未授权 | 仍为 `0.17.1`；未推 `v0.17.2`；未创建/修改任何正式 Release |
+
+### 8.4 是否具备正式发布条件
+
+**尚不具备。** 至少需要先解决两项：
+
+1. 签名私钥一致性（NOT_VERIFIED → 需要维护者用权威密钥材料重装 Environment Secret 并验签）；
+2. 干净 Windows VM 上的 NSIS 安装 / 覆盖升级 / 用户数据完整性验证（BLOCKED）。
+
+其余发布链路（候选→Draft→审批→发布、制品绑定、权限收敛、通道独立、无绕过路径）已具备可验证证据。

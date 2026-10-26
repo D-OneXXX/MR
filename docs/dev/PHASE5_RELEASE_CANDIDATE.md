@@ -439,4 +439,60 @@ npm run status
 
 | # | 任务 | 结果 | 证据 |
 |---|---|---|---|
-| 1 | 预检与版本规范核对 | DONE | 见 Task 1；执行记录见第 7 节首行 |
+| 1 | 预检与版本规范核对 | DONE | main 干净、版本 0.17.1；`v0.17.1..main` 41 个提交；0.17.1→0.17.2 = `patch / patch-preferred` |
+| 2 | 安装证据干净环境硬约束 | DONE | `machine.cleanEnvironment` + `machine.image` 双端校验；单测 43/43；演练 31/31；静态守卫生效 |
+| 3 | 版本同步到 0.17.2 | DONE | `version:sync` 写 5 个文件；`version:check` OK 0.17.2；`test:version` 6/6 |
+| 4 | 本地完整质量门禁 | DONE | 见第 8 节「本地门禁证据」 |
+| 5 | PR 提交与合并 | PENDING | — |
+| 6 | 打标签 v0.17.2 | PENDING | — |
+| 7 | hosted 全量 QA | PENDING | — |
+| 8 | 候选 Draft | PENDING | — |
+| 9 | 验签与安装升级验证 | PARTIAL | 已发布 v0.17.1 制品用官方 minisign 0.12 验签通过（公钥 ID `67CB304460E08E4A`）；0.17.2 候选待产出 |
+| 10 | 发布闸门与 Draft 隔离 | PENDING | — |
+| 11 | visual:theme-token 观察 | DONE | 本轮 12/12 全过（6 语 × 明暗）；hosted qa-full 历史未复现 |
+| 12 | 验收报告与状态快照 | PENDING | — |
+
+## 8. 本地门禁证据（2026-10-26）
+
+| 门禁 | 结果 |
+|---|---|
+| `npm run version:check` | OK 0.17.2（package.json / tauri.conf.json / Cargo.toml / Cargo.lock / package-lock.json 一致） |
+| `npm run test:version` | 6/6 |
+| `npm run test:governance` | 33/33 |
+| `npm run test:fixtures` | 3/3 |
+| `npm run test:release` | 43/43（含新增 5 项 minisign 工具链回归） |
+| `npm run release:rehearse` | 31/31 |
+| `npx tsc --noEmit` | exit 0 |
+| `npm run build` | ✓ built |
+| `cargo test --lib` | 325 passed / 0 failed |
+| `cargo test --test e2e_stage1 --test memory_budget` | 全绿 |
+| `cargo clippy --all-targets -- -D warnings` | 无告警 |
+| `npm run format:check` | 无差异 |
+| `npm audit --omit=dev --audit-level=high` | 0 vulnerabilities |
+| `node tests/qa/run-qa.mjs --suite=static` | 23/23，P0=P1=P2=P3=0 |
+| `node tests/qa/run-qa.mjs`（全量） | 见 8.1 |
+| `node tests/qa/run-qa.mjs --suite=chaos` | 33/33，P0=0 |
+
+### 8.1 全量 QA 的 chaos P0：已知 flake 取证（Issue #23 同类）
+
+首次全量 QA 得到 223/225，2 个 P0：`chaos:recovery-window`、`chaos:freeze-suite`。
+
+| 取证动作 | 结果 |
+|---|---|
+| 失败详情 | 恢复窗内容为 WebView2 错误页 `ERR_CONNECTION_REFUSED`（访问 `localhost:1420` 失败），随后 `freeze-suite` 因找不到「Reload view only」按钮而中断 |
+| 本次变更是否触及该链路 | **否**：本轮改动只有版本号、发布证据契约、静态守卫；未触碰 `resilience.rs` / `RecoveryApp.tsx` / chaos 套件 / Vite 配置 |
+| 单独跑 chaos 套件 | **33/33 全过，P0=0**（与 Issue #23 的特征一致：全量中偶发、单独跑必过） |
+| 已发布 v0.17.1 制品验签 | 通过（官方 minisign 0.12，`Signature and comment signature verified`，公钥 ID `67CB304460E08E4A`） |
+| 处置 | 按 #23 的既定方法处理：不清断言、不跳过套件；用干净工作树复跑全量 QA 取第二次证据；hosted `qa-full` 作为最终判定 |
+
+### 8.2 本轮实测发现并修复的两个发布链路真实缺陷
+
+两者都发生在**门禁之前**，因此发布门禁自己发现不了，必须单测锁死：
+
+| 缺陷 | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| `fetch-minisign.mjs` 在 Windows 上必然失败 | `Expand-Archive: NotSupportedArchiveFileExtension` → minisign 永远装不上 → 发布流水线在第一步就崩 | 压缩包临时文件名丢掉了 `.zip` 扩展名，而 PowerShell `Expand-Archive` 只接受 `.zip` | 按 URL 保留真实扩展名（新增 `resolveArchiveName`），并检查解压命令退出码 |
+| `verify-signature.mjs` 定位不到 minisign | 报「找不到 minisign」→ 验签步骤失败 → 发布被拒 | 官方包解压后位于 `tools/minisign/minisign-win64/x86_64/minisign.exe`，脚本只找扁平的 `tools/minisign/minisign.exe` | 递归查找 `tools/minisign`，并**优先宿主架构**（先命中 aarch64 会静默拿到跑不起来的二进制） |
+
+新增回归：`scripts/release-governance/minisign-tooling.test.mjs`（5 项），已并入 `npm run test:release`。
+

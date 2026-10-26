@@ -7,6 +7,12 @@
 > 不修改公开更新清单、不绕过任何发布门禁、不动 Linux 通道。
 >
 > 本文件不构成发布授权。正式发布必须由维护者本人在全部门禁通过后单独批准。
+>
+> **2026-10-27 最终更新**：干净 Windows VM 验证已由 GitHub-hosted
+> `release-install-verify.yml` 完成（run `40374494977`，ImageVersion
+> `20261022.344.1`，证据 SHA-256 `b2f00848…`）；Draft 的旧共享宿主回执已被替换。
+> 正式发布仍等待维护者明确授权；审批边界技术隔离仍需维护者配置。最终报告见
+> `PHASE5_WINDOWS_RELEASE_ACCEPTANCE.md`；本文 §6/§7 的“干净 VM BLOCKED”已被最终报告替代。
 
 **Goal:** 把 `main` 从 0.17.1 推进到 0.17.2，产出绑定「版本 + Commit + 平台 + QA 证据 +
 制品 SHA-256」的 Windows Release Candidate（Draft），并用真实证据验证签名与安装升级链路。
@@ -55,7 +61,7 @@ GitHub Actions + Environments / Node 22（QA harness）
 | 6 打标签 v0.17.2 | ✅ DONE | 标签指向 `f331782`；推送后**零 workflow 被触发** |
 | 7 hosted 全量 QA | ✅ DONE | run `40324223701` success，head_sha = `f331782`，230/230 |
 | 8 候选 Draft | ✅ DONE | run `40325710339` success；`v0.17.2` Draft，7 个资产，`isDraft=true` |
-| 9 验签与安装升级验证 | ✅ DONE（宿主） / 🚧 BLOCKED（干净 VM） | 见第 6 节 |
+| 9 验签与安装升级验证 | ✅ DONE（hosted 干净 VM，run 40374494977） | 见最终报告 `PHASE5_WINDOWS_RELEASE_ACCEPTANCE.md` |
 | 10 发布闸门与 Draft 隔离 | ✅ DONE | 三道闸门对真实远端 Draft 均拒绝；公开面字节未变 |
 | 11 visual:theme-token 观察 | ✅ DONE（未复现） | 本地与 hosted 均 12/12；观察记录已写入 `docs/TESTING.md` |
 | 12 验收报告与状态快照 | ✅ DONE | 本文件 + `docs/PROJECT_STATE.md` + `docs/ENGINEERING_WORKFLOW.md` |

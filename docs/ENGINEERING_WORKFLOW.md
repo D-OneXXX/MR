@@ -352,7 +352,7 @@ GitHub-hosted `windows-2022` 一次性 runner 通过
 | 2 | Bug 生命周期与自动修复流程 | 已完成门禁与单 Bug 演练（PR #20/#22、#21） |
 | 3 | 质量门禁与安全扫描 | **完成**：安全/供应链/格式/夹具/发布契约门禁全部进 CI；hosted 全量 QA 已在 windows-2022 连续跑出全绿证据（main 上 run 40267990890，229/229）；#42/#51 两个偶发失败已按证据修复 |
 | 4 | RC / Draft / 审批 / 双通道发布 | **已完成**：无 Tag 触发、候选→Draft→审批→发布、制品绑定校验、权限收敛、双通道独立；Environment 与签名 Secret 已配置，审批门禁与验签均已真实验证；演练 31/31；签名与安装证据纳入强制发布门禁 |
-| 5 | 发布后验证、Hotfix 与回滚 | 进行中：v0.17.2 候选准备与验证（Phase 5，见 `docs/dev/PHASE5_RELEASE_CANDIDATE.md`）；发布后验证与 Hotfix 流程待正式发布后开始 |
+| 5 | 发布后验证、Hotfix 与回滚 | 进行中：v0.17.2 Windows 干净 VM 证据已完成（hosted run 40374494977）；正式发布待维护者明确授权；审批边界技术隔离待维护者配置。最终报告见 `docs/dev/PHASE5_WINDOWS_RELEASE_ACCEPTANCE.md` |
 | 6 | 隔离演练，不触发真实发布 | 待开始 |
 
 Phase 2 收尾于 2026-10-26：PR 元数据 required check 已生效；#18（glib 风险接受）与 #23（chaos/CDP flake）已处置。Phase 3 已于 2026-10-26 收尾：安全、供应链（Actions SHA 固定）、格式、夹具、发布契约五类门禁全部进 CI；hosted 全量 QA 在 windows-2022 连续跑出全绿证据（main 上 run 40267990890，229/229）；两个偶发失败（#32 断言判据无效、#42/#51 测试前置条件缺失）均已按证据定位并修复。唯一未完成项是需要干净 Windows VM 的真实安装/升级/回滚验证（BLOCKED）。发布候选仍按 `docs/dev/LOCAL_QA_ATTESTATION.md` 走本地 attestation，直到 Phase 4 的 Draft + 审批流落地。

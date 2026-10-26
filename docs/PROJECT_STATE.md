@@ -1,6 +1,6 @@
 # MangaReader 项目状态
 
-> 生成时间：2026-10-26T13:31:45.256Z
+> 生成时间：2026-10-26T18:10:30.859Z
 > 本文件由 `npm run status` 生成，请勿手工编辑。
 > `UNKNOWN` 表示当前环境无法验证，不代表正常。
 
@@ -10,23 +10,23 @@
 |---|---|
 | package.json | `0.17.2` |
 | 最新 Release | `v0.17.1-linux-sec1`（0.17.1） |
-| 最新 Windows Release | `v0.17.1`（0.17.1）；HEAD 领先 41 个提交 |
-| 最新 Linux critical Release | `v0.17.1-linux-sec1`（0.17.1）；HEAD 领先 38 个提交 |
-| HEAD 距最新 Release | 38 个提交 |
-| 当前阶段 | 发布准备中 |
-| 判定依据 | package.json 已提升到 0.17.2，最新公开 Release 为 0.17.1。 |
+| 最新 Windows Release | `v0.17.1`（0.17.1）；HEAD 领先 47 个提交 |
+| 最新 Linux critical Release | `v0.17.1-linux-sec1`（0.17.1）；HEAD 领先 44 个提交 |
+| HEAD 距最新 Release | 44 个提交 |
+| 当前阶段 | 发布被阻塞 |
+| 判定依据 | 存在 1 个阻塞项，不能进入发布候选。 |
 
 ## 2. 仓库与工作区
 
 | 项目 | 值 |
 |---|---|
-| 分支 | `chore/73-phase5-acceptance-report` |
-| HEAD | `f331782a29e5` |
-| 提交 | chore(release): v0.17.2 版本准备与发布门禁加固 (#73) (#74) |
-| 提交时间 | 2026-10-26T20:36:44+08:00 |
-| 工作区 | 有改动（staged=0, modified=8, untracked=0） |
-| 本地分支 | `chore/13-phase-1-governance`, `chore/15-vite-lru-security`, `chore/18-glib-risk-acceptance`, `chore/19-pr-governance`, `chore/24-phase2-closeout`, `chore/28-rust-security-audit`, `chore/30-full-qa-evidence`, `chore/36-local-qa-attestation`, `chore/38-actions-sha`, `chore/39-upgrade-compat`, `chore/40-final-status-snapshot`, `chore/40-phase3-report`, `chore/40-status-refresh`, `chore/48-version-attribution`, `chore/49-version-attribution`, `chore/57-phase4-final`, `chore/57-phase4-remote-report`, `chore/68-final-status`, `chore/68-release-readiness`, `chore/73-phase5-acceptance-report`, `chore/73-release-0-17-2`, `feat/57-phase4-release-governance`, `feat/61-rehearsal-mode`, `feat/68-evidence-gate`, `fix/21-status-required-checks`, `fix/23-chaos-cdp-retry`, `fix/30-full-qa-retry`, `fix/30-full-qa-retry-v2`, `fix/32-arch-webtoon-ci-diag`, `fix/32-arch-webtoon-flake`, `fix/42-chaos-rage-click`, `fix/51-cache-quiescence`, `fix/61-candidate-tauri-action`, `fix/61-rehearsal-commit-binding`, `fix/61-rehearsal-version-var`, `main`, `wip/main-telegram-20261023` |
-| 已注册 Worktree | `manga-reader-tauri`（main）, `issue-73-release-0-17-2`（chore/73-release-0-17-2）, `report-73-phase5`（chore/73-phase5-acceptance-report） |
+| 分支 | `chore/73-final-report` |
+| HEAD | `2508cc147d09` |
+| 提交 | fix(release): 将 Node 输出送 Host，避免 library 序列化为数组 (#73) (#81) |
+| 提交时间 | 2026-10-27T02:04:23+08:00 |
+| 工作区 | 有改动（staged=0, modified=2, untracked=1） |
+| 本地分支 | `chore/13-phase-1-governance`, `chore/15-vite-lru-security`, `chore/18-glib-risk-acceptance`, `chore/19-pr-governance`, `chore/24-phase2-closeout`, `chore/28-rust-security-audit`, `chore/30-full-qa-evidence`, `chore/36-local-qa-attestation`, `chore/38-actions-sha`, `chore/39-upgrade-compat`, `chore/40-final-status-snapshot`, `chore/40-phase3-report`, `chore/40-status-refresh`, `chore/48-version-attribution`, `chore/49-version-attribution`, `chore/57-phase4-final`, `chore/57-phase4-remote-report`, `chore/68-final-status`, `chore/68-release-readiness`, `chore/73-final-report`, `chore/73-phase5-acceptance-report`, `chore/73-publish-gate-tooling`, `chore/73-release-0-17-2`, `chore/77-vm-install-proof`, `feat/57-phase4-release-governance`, `feat/61-rehearsal-mode`, `feat/68-evidence-gate`, `fix/21-status-required-checks`, `fix/23-chaos-cdp-retry`, `fix/30-full-qa-retry`, `fix/30-full-qa-retry-v2`, `fix/32-arch-webtoon-ci-diag`, `fix/32-arch-webtoon-flake`, `fix/42-chaos-rage-click`, `fix/51-cache-quiescence`, `fix/61-candidate-tauri-action`, `fix/61-rehearsal-commit-binding`, `fix/61-rehearsal-version-var`, `fix/73-cdp-close`, `fix/73-ps-capture`, `fix/73-release-cdp-target`, `main`, `wip/main-telegram-20261023` |
+| 已注册 Worktree | `manga-reader-tauri`（main）, `chore-73-final-report`（chore/73-final-report）, `fix-73-cdp-close`（fix/73-cdp-close）, `fix-73-ps-capture`（fix/73-ps-capture）, `fix-73-release-cdp-target`（fix/73-release-cdp-target）, `issue-77-vm-install-proof`（chore/77-vm-install-proof） |
 
 ## 3. 质量门禁
 
@@ -34,13 +34,12 @@
 
 | 检查 | 必需 | 状态 | 结论 |
 |---|---|---|---|
-| Build signed Windows candidate → Draft | 否 | completed | success |
-| Full QA evidence (windows-2022) | 否 | completed | success |
+| Clean Windows VM install verification (windows-2022) | 否 | completed | success |
 | Analyze (javascript-typescript) | 否 | completed | success |
 | Analyze (actions) | 否 | completed | success |
 | tsc + cargo test + static QA (windows-latest) | 是 | completed | success |
+| cargo check + frontend build (ubuntu-22.04) | 是 | in_progress | — |
 | Release governance rehearsal (no secrets) | 否 | completed | success |
-| cargo check + frontend build (ubuntu-22.04) | 是 | completed | success |
 
 - 分支保护：enforce_admins=true
 - required checks：tsc + cargo test + static QA (windows-latest), cargo check + frontend build (ubuntu-22.04), PR governance (issue link + branch naming)
@@ -51,7 +50,9 @@
 
 ## 4. 活跃 Issue
 
-无开放 Issue。
+| # | 标题 | 状态 | 严重度 | 负责人 |
+|---|---|---|---|---|
+| #73 | Phase 5: v0.17.2 Release Candidate 准备与验证 | status:release-pending | — | — |
 
 ## 5. 开放 PR
 
@@ -61,11 +62,11 @@
 
 | Workflow | 事件 | 分支 | 状态 | 结论 |
 |---|---|---|---|---|
-| Release candidate (Windows) | workflow_dispatch | main | completed | success |
-| Full QA evidence | workflow_dispatch | main | completed | success |
+| Release install verification (clean Windows VM) | workflow_dispatch | main | completed | success |
+| Linux check | push | main | in_progress | — |
 | Release governance rehearsal | push | main | completed | success |
-| Linux check | push | main | completed | success |
 | Windows check | push | main | completed | success |
+| Push on main | dynamic | main | completed | success |
 
 ## 7. 最近 Release
 
@@ -81,16 +82,16 @@
 
 ### 治理告警
 
-- Windows 常规通道落后 HEAD 41 个提交。
-- Linux critical 通道落后 HEAD 38 个提交。
+- Windows 常规通道落后 HEAD 47 个提交。
+- Linux critical 通道落后 HEAD 44 个提交。
 
 ### 阻塞项
 
-无已知阻塞项。
+- #73 Phase 5: v0.17.2 Release Candidate 准备与验证（status:release-pending, status:blocked）
 
 ### 下一步任务
 
-无开放 Issue；由维护者选择下一任务。
+#73 Phase 5: v0.17.2 Release Candidate 准备与验证
 
 ## 9. 恢复检查清单
 

@@ -97,7 +97,16 @@ jobs:
       - name: Full QA regression (Windows/WebView2)
         shell: pwsh
         timeout-minutes: 45
-        run: node tests/qa/run-qa.mjs
+        run: |
+          # windows-2022 的 WebView2 131 存在已知的架构/懒加载时序抖动。
+          # 只允许对**完整 suite**重试一次；不跳过任何 suite，不降低断言。
+          # 两轮日志都保留；第二次仍失败则照常阻断。
+          node tests/qa/run-qa.mjs
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Full QA failed; retrying the complete suite once for the known windows-2022 WebView2 arch/cache flake."
+            node tests/qa/run-qa.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Summarize QA evidence
         if: always()

@@ -9,6 +9,7 @@
  *
  * 全部走隔离数据目录与本地 stub，不触碰真实用户数据、不访问真实外网。
  */
+import path from "node:path";
 import { invokeSafe } from "../lib/app.mjs";
 import { fail, note, ok } from "../lib/report.mjs";
 
@@ -706,20 +707,39 @@ async function checkUltraTallWebtoon(ctx, report) {
   });
   await sleep(1200);
 
-  const seen = new Set();
-  let brokenImages = 0;
-  let totalTiles = 0;
-  let scrollSteps = 0;
-  let lastSnapshot = null;
-  // CI 的 WebView2/图片解码明显慢于开发机：固定 sleep 会在第二片解码前
-  // 就断言，造成假阴性。持续滚动并等待至少两片真正解码，超时仍按失败处理。
-  const tileDeadline = Date.now() + 30_000;
-  for (let index = 0; index < 40 && Date.now() < tileDeadline; index += 1) {
-    const snapshot = await page.eval(`(() => {
+  // 诊断探针（仅测试侧记录，不改变产品行为与断言）：
+  // hosted windows-2022 上出现「滚动已到底、DOM 却只有 1 张切片」，
+  // 必须区分是 rAF/窗口同步停摆、切片请求未完成，还是 DOM 只更新了占位。
+  const readSnapshot = () =>
+    page.eval(`(() => {
       const scroller = document.querySelector(".webtoon-scroll");
+      const hash = (src) => {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < src.length; i += 257) {
+          h = Math.imul(h ^ src.charCodeAt(i), 0x01000193);
+        }
+        return (h >>> 0).toString(16).padStart(8, "0");
+      };
+      const tileNodes = [...document.querySelectorAll(".webtoon-tile")];
       const imgs = [...document.querySelectorAll(".webtoon-tile img")];
       return {
-        tiles: document.querySelectorAll(".webtoon-tile").length,
+        tiles: tileNodes.length,
+        tileDetail: tileNodes.map((el) => {
+          const img = el.querySelector("img");
+          const rect = el.getBoundingClientRect();
+          return {
+            key: el.getAttribute("data-key"),
+            styleTop: el.style.top,
+            styleHeight: el.style.height,
+            rectTop: Math.round(rect.top),
+            rectHeight: Math.round(rect.height),
+            hasImg: !!img,
+            srcHash: img ? hash(img.src) : null,
+            srcLength: img ? img.src.length : 0,
+            complete: img ? img.complete : null,
+            naturalWidth: img ? img.naturalWidth : null,
+          };
+        }),
         images: imgs.length,
         broken: imgs.filter((img) => !(img.complete && img.naturalWidth > 0)).length,
         // 用完整 data URL 去重：JPEG/PNG 的前 64 字符是相同头部，
@@ -728,13 +748,76 @@ async function checkUltraTallWebtoon(ctx, report) {
         scrollTop: scroller ? scroller.scrollTop : 0,
         scrollHeight: scroller ? scroller.scrollHeight : 0,
         clientHeight: scroller ? scroller.clientHeight : 0,
+        probe: window.__qaWt
+          ? {
+              scrollEvents: window.__qaWt.scrollEvents,
+              rafTicks: window.__qaWt.rafTicks,
+              elapsedMs: Math.round(performance.now() - window.__qaWt.startedAt),
+            }
+          : null,
+        visibility: document.visibilityState,
+        hidden: document.hidden,
+        hasFocus: document.hasFocus(),
       };
     })()`);
+
+  const envBefore = await page.eval(`(() => {
+    const scroller = document.querySelector(".webtoon-scroll");
+    window.__qaWt = { scrollEvents: 0, rafTicks: 0, startedAt: performance.now() };
+    if (scroller) {
+      scroller.addEventListener(
+        "scroll",
+        () => { window.__qaWt.scrollEvents += 1; },
+        { capture: true, passive: true },
+      );
+    }
+    const tick = () => {
+      if (!window.__qaWt) return;
+      window.__qaWt.rafTicks += 1;
+      if (window.__qaWt.rafTicks < 200000) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    return {
+      visibility: document.visibilityState,
+      hidden: document.hidden,
+      hasFocus: document.hasFocus(),
+      dpr: window.devicePixelRatio,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      scroller: scroller
+        ? {
+            clientWidth: scroller.clientWidth,
+            clientHeight: scroller.clientHeight,
+            scrollHeight: scroller.scrollHeight,
+            scrollTop: scroller.scrollTop,
+          }
+        : null,
+      tiles: [...document.querySelectorAll(".webtoon-tile")].map((el) => ({
+        key: el.getAttribute("data-key"),
+        hasImg: !!el.querySelector("img"),
+      })),
+    };
+  })()`);
+
+  const seen = new Set();
+  const seenHashes = new Set();
+  let brokenImages = 0;
+  let totalTiles = 0;
+  let scrollSteps = 0;
+  let lastSnapshot = null;
+  // CI 的 WebView2/图片解码明显慢于开发机：固定 sleep 会在第二片解码前
+  // 就断言，造成假阴性。持续滚动并等待至少两片真正解码，超时仍按失败处理。
+  const tileDeadline = Date.now() + 30_000;
+  for (let index = 0; index < 40 && Date.now() < tileDeadline; index += 1) {
+    const snapshot = await readSnapshot();
     lastSnapshot = snapshot;
     scrollSteps = index + 1;
     totalTiles = Math.max(totalTiles, snapshot.tiles);
     brokenImages = Math.max(brokenImages, snapshot.broken);
     for (const src of snapshot.srcs) seen.add(src);
+    for (const tile of snapshot.tileDetail) {
+      if (tile.srcHash) seenHashes.add(tile.srcHash);
+    }
     if (seen.size >= 2 && brokenImages === 0) break;
     await page.eval(`(() => {
       const scroller = document.querySelector(".webtoon-scroll");
@@ -750,20 +833,94 @@ async function checkUltraTallWebtoon(ctx, report) {
     })()`);
     await sleep(800);
   }
+
+  // 严格断言使用激活前的观察结果，避免后续诊断步骤把失败“修成”通过。
+  const seenForAssertion = new Set(seen);
+  const seenHashesForAssertion = new Set(seenHashes);
+  const finalBeforeActivation = lastSnapshot;
+
+  // 若 hosted runner 只是把窗口置于后台/遮挡，Page.bringToFront 应恢复帧调度；
+  // 这里只采集证据，不在本轮改变断言阈值。
+  let activationProbe = null;
+  if (seenForAssertion.size < 2) {
+    let bringError = null;
+    try {
+      await page.send("Page.bringToFront", {}, 5000);
+    } catch (error) {
+      bringError = String(error);
+    }
+    await page
+      .eval(`(() => {
+        const scroller = document.querySelector(".webtoon-scroll");
+        if (!scroller) return false;
+        scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+        return true;
+      })()`)
+      .catch(() => false);
+    const activationDeadline = Date.now() + 10_000;
+    let activationSnapshot = null;
+    while (Date.now() < activationDeadline) {
+      await sleep(500);
+      activationSnapshot = await readSnapshot();
+      const hashes = new Set(
+        activationSnapshot.tileDetail.map((tile) => tile.srcHash).filter(Boolean),
+      );
+      if (hashes.size >= 2) break;
+    }
+    activationProbe = {
+      bringError,
+      snapshot: activationSnapshot
+        ? {
+            images: activationSnapshot.images,
+            tileDetail: activationSnapshot.tileDetail,
+            probe: activationSnapshot.probe,
+            visibility: activationSnapshot.visibility,
+            hidden: activationSnapshot.hidden,
+            hasFocus: activationSnapshot.hasFocus,
+          }
+        : null,
+    };
+  }
+
+  // data URL 体积很大，报告只保留 hash/长度（finalSnapshot 的完整 src 只用于去重）。
+  const { srcs: _discardedSrcs, ...finalForEvidence } =
+    finalBeforeActivation ?? {};
+
+  const screenshotPath = path.join(
+    ctx.artifactDir,
+    "screens",
+    `arch-ultra-tall-webtoon-${report.runId}.png`,
+  );
+  try {
+    await page.screenshot(screenshotPath);
+  } catch (error) {
+    activationProbe = {
+      ...(activationProbe || {}),
+      screenshotError: String(error),
+    };
+  }
+
   evidence.ui = {
     maxTilesInDom: totalTiles,
-    distinctTileImages: seen.size,
+    distinctTileImages: seenForAssertion.size,
+    distinctTileHashes: seenHashesForAssertion.size,
     brokenImages,
     scrollSteps,
-    images: lastSnapshot?.images ?? 0,
-    scrollTop: lastSnapshot?.scrollTop ?? 0,
-    scrollHeight: lastSnapshot?.scrollHeight ?? 0,
-    clientHeight: lastSnapshot?.clientHeight ?? 0,
+    images: finalBeforeActivation?.images ?? 0,
+    scrollTop: finalBeforeActivation?.scrollTop ?? 0,
+    scrollHeight: finalBeforeActivation?.scrollHeight ?? 0,
+    clientHeight: finalBeforeActivation?.clientHeight ?? 0,
+    envBefore,
+    finalBeforeActivation: finalForEvidence,
+    activationProbe,
+    screenshot: screenshotPath,
   };
 
   if (totalTiles < 1) problems.push("条漫 DOM 未渲染任何切片节点（.webtoon-tile）");
-  if (seen.size < 2) {
-    problems.push(`条漫只加载了 ${seen.size} 张切片，巨图未被切成多片渲染`);
+  if (seenForAssertion.size < 2) {
+    problems.push(
+      `条漫只加载了 ${seenForAssertion.size} 张切片，巨图未被切成多片渲染`,
+    );
   }
   if (brokenImages > 0) {
     problems.push(`${brokenImages} 张切片 naturalWidth 为 0（黑块/白屏）`);

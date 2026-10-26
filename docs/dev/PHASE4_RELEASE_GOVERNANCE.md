@@ -173,3 +173,26 @@ gh api repos/D-OneXXX/MR/environments --jq .total_count
 gh api repos/D-OneXXX/MR/branches/main/protection --jq .required_status_checks
 grep -rn "push:" .github/workflows/    # 不得出现 tags 触发
 ```
+
+---
+
+## 7. 合并与验收状态（2026-10-26）
+
+| 项 | 结果 |
+|---|---|
+| 合入 `main` | `b3ddabf`（PR #59，Issue #57） |
+| PR 门禁 | Windows ✅ / Linux ✅ / PR governance ✅ / **Release governance rehearsal ✅** / CodeQL ✅ / Analyze ✅ |
+| 本地全量 QA | **230/230**，P0–P3=0（`buildCommit=b3ddabf60240`，与 HEAD 一致） |
+| `main` 上的 Tag 触发器 | **0 个**（`git grep "tags:" origin/main -- .github/workflows/` 无命中） |
+| `main` 上的绕过开关 | **0 个**（`releaseDraft: false` / `skip_full_qa` 均已消失） |
+| 旧发版文件 | `release-windows.yml` / `release-linux-critical.yml` 已删除 |
+| 版本 / Tag / Release | 仍为 `0.17.1`；未创建 Tag，未创建或修改任何 Release，未改动正式更新清单 |
+| 远端 Environment / Secret | **未改动**（等待用户确认，见第 4 节） |
+
+下一步（需用户确认后才执行）：
+
+1. 创建 `release-windows` / `release-linux` Environment + required reviewer；
+2. 按「先配置 → 再验证 → 后删除」迁移签名 Secret；
+3. 用演练标签跑一次候选工作流，验证 Environment 审批与 Secret 可用性；
+4. 补做真实 Draft → 审批 → 发布的端到端演练（仍不公开正式版本）；
+5. 在干净 Windows VM 上完成 NSIS 安装/覆盖升级/数据完整性验证（正式发布强制条件）。

@@ -14,10 +14,33 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { connectMain, waitForTarget } from "../../tests/qa/lib/cdp.mjs";
+import { CdpPage, waitForTarget } from "../../tests/qa/lib/cdp.mjs";
 import { invoke, waitForApp } from "../../tests/qa/lib/app.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 发布构建的主窗口 target 判定。
+ *
+ * QA harness 的 `connectMain` 只认 debug 的 `localhost:1420/`；安装验证跑的是
+ * **release 构建**，Tauri/WebView2 的页面 URL 是 `http://tauri.localhost/` 或
+ * `tauri://localhost`。这里同时兼容 debug（本地回退测试）与 release。
+ */
+export function isMainTarget(entry) {
+  if (!entry || entry.type !== "page") return false;
+  const url = String(entry.url || "");
+  if (!url) return false;
+  if (url.includes("recovery.html")) return false;
+  if (url.startsWith("devtools://") || url.startsWith("about:")) return false;
+  return /(?:tauri\.localhost|tauri:\/\/|localhost:1420|127\.0\.0\.1:1420)/i.test(url);
+}
+
+async function connectReleaseMain(port, timeoutMs) {
+  const target = await waitForTarget(port, isMainTarget, { timeout: timeoutMs });
+  const page = await CdpPage.connect(target, port);
+  await waitForApp(page, Math.min(timeoutMs, 60_000));
+  return page;
+}
 
 export function validateListBooks(books, fixture) {
   const problems = [];
@@ -98,9 +121,7 @@ async function main(argv = process.argv.slice(2)) {
   const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
   let page = null;
   try {
-    await waitForTarget(port, () => true, { timeout: timeoutMs });
-    page = await connectMain(port);
-    await waitForApp(page, Math.min(timeoutMs, 60_000));
+    page = await connectReleaseMain(port, timeoutMs);
 
     const deadline = Date.now() + timeoutMs;
     let lastBooks = [];

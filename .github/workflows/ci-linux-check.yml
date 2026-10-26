@@ -32,9 +32,21 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install WebKitGTK build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          # GitHub-hosted ubuntu-22.04 的 azure 镜像偶发卡住；回退到官方 archive。
+          if grep -q 'azure.archive.ubuntu.com' /etc/apt/sources.list 2>/dev/null; then
+            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list
+          fi
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y \
+            -o Dpkg::Options::="--force-confdef" \
+            -o Dpkg::Options::="--force-confold" \
             libwebkit2gtk-4.1-dev \
             build-essential \
             curl \

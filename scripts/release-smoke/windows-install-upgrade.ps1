@@ -554,7 +554,10 @@ if ($newInstall) {
 Write-Step "数据存活检查（升级后）"
 if ($libraryResult) {
   Assert-True ($libraryResult.ok -eq $true) "升级后合成书库与阅读进度完整"
-  Assert-True ($libraryResult.ipc.ok -eq $true) "升级后 list_books IPC 回读一致"
+  # 直接使用本次启动的 IPC 结果；不要对 ConvertFrom-Json 的属性做二次布尔断言，
+  # 否则 UI check 失败时属性可能是数组/嵌套对象，触发参数转换异常而丢失证据。
+  $ipcOk = [bool]($newLaunch -and $newLaunch.UiCheck -and $newLaunch.UiCheck.ok -eq $true)
+  Assert-True $ipcOk "升级后 list_books IPC 回读一致"
 } else {
   $afterState = Get-LibraryState $DataDir
   if ($beforeState.Exists) {

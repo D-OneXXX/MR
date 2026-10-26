@@ -116,6 +116,58 @@ jobs:
             --manifest draft-assets/latest-linux-critical.json \
             --platform linux-x86_64
 
+      # ---------- 强制验收：签名验证 + 真实安装/升级验证 ----------
+      # 缺少任一证据、证据过期、版本/Commit/制品哈希/平台不一致，全部拒绝发布。
+      # 这三步没有开关：不能通过参数、状态文件或跳过 Job 绕过。
+      - name: Fetch pinned minisign (official, digest-verified)
+        shell: bash
+        run: node scripts/release-governance/fetch-minisign.mjs
+
+      - name: Verify candidate artifact signature
+        shell: bash
+        env:
+          TAG: ${{ steps.identity.outputs.tag }}
+          COMMIT: ${{ steps.identity.outputs.commit }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf evidence && mkdir -p evidence
+          # 公钥来自仓库当前配置（信任锚点），不是任何外部输入。
+          node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json","utf8"));fs.writeFileSync("evidence/configured.pub",Buffer.from(c.plugins.updater.pubkey,"base64"));'
+          INSTALLER="$(ls draft-assets/*.AppImage | head -1)"
+          SIGNATURE="$(ls draft-assets/*.AppImage.sig | head -1)"
+          if [ -z "${INSTALLER}" ] || [ -z "${SIGNATURE}" ]; then
+            echo "Draft 缺少安装包或签名文件，无法验签：拒绝发布" >&2
+            exit 1
+          fi
+          node scripts/release-governance/verify-signature.mjs \
+            --artifact "$INSTALLER" \
+            --signature "$SIGNATURE" \
+            --public-key evidence/configured.pub \
+            --version "$VERSION" \
+            --commit "$COMMIT" \
+            --platform linux-x86_64 \
+            --out evidence/signature-verification.json
+
+      - name: Verify release evidence (signature + install/upgrade)
+        shell: bash
+        env:
+          TAG: ${{ steps.identity.outputs.tag }}
+          COMMIT: ${{ steps.identity.outputs.commit }}
+        run: |
+          set -euo pipefail
+          if [ ! -f draft-assets/install-verification.json ]; then
+            echo "缺少 install-verification.json：干净环境的真实安装/升级/数据完整性验证是发布的强制条件" >&2
+            exit 1
+          fi
+          node scripts/release-governance/verify-evidence.mjs \
+            --record draft-assets/rc-record.json \
+            --assets-dir draft-assets \
+            --signature-evidence evidence/signature-verification.json \
+            --install-evidence draft-assets/install-verification.json \
+            --public-key evidence/configured.pub \
+            --channel linux-critical \
+            --commit "$COMMIT"
       - name: Publish the Draft
         if: steps.state.outputs.published != 'true'
         shell: bash

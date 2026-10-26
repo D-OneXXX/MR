@@ -180,10 +180,19 @@ gh workflow run release-publish.yml --ref main -f tag=v0.17.2
 
 发布 job 会：确认目标是 **Draft**（已发布则幂等跳过）→ 下载 Draft 全部制品 →
 逐项比对「版本 / Commit / 每个制品 SHA-256 / 平台 / QA 证据 / 安装验证回执」→
-通过后把 Draft 变为公开 Release → 接力携带另一通道的清单 → 发布后验证
+**强制验收（无开关可绕）**：
+
+1. 拉取**官方 minisign**（按仓库固定摘要校验）→ 用**仓库当前配置的 updater 公钥**
+   验签候选安装包 → 生成 `signature-verification.json`；
+2. 要求 Draft 里存在干净环境的 `install-verification.json`（安装/升级/数据完整性/恢复）；
+3. `verify-evidence.mjs` 总闸：两份证据都必须与候选的版本、Commit、平台、
+   制品 SHA-256 一致且未过期，签名证据还必须锚定到配置的公钥 ID。
+
+→ 通过后把 Draft 变为公开 Release → 接力携带另一通道的清单 → 发布后验证
 （重新下载并校验公开清单）。
 
-任一不一致都会**拒绝发布**并给出具体原因。
+任一不一致、缺证据、证据过期或验签失败都会**拒绝发布**并给出具体原因；
+这条链路没有布尔开关、状态文件或可跳过的 Job。
 
 ### 4.4 Linux 高危补丁通道
 

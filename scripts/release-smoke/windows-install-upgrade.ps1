@@ -36,7 +36,16 @@ param(
   [string]$DataDir = "$env:APPDATA\com.local.manga-reader",
 
   [Parameter(Mandatory = $false)]
-  [switch]$KeepInstalled
+  [switch]$KeepInstalled,
+
+  [Parameter(Mandatory = $false)]
+  [string]$Commit = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$EmitEvidence = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$DataDirForApp = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -133,6 +142,10 @@ Assert-True (Test-Path $Installer) "安装包存在：$Installer"
 $beforeState = Get-LibraryState $DataDir
 Write-Host "   数据目录：$DataDir（库存在：$($beforeState.Exists)）"
 
+$freshInstallOk = $false
+$upgradeOk = $false
+$recoveryOk = $false
+
 if ($PreviousInstaller) {
   Write-Step "安装旧版本（建立升级起点）"
   Invoke-Installer $PreviousInstaller
@@ -155,6 +168,7 @@ if ($newInstall) {
     Assert-True ($newInstall.DisplayVersion -eq $ExpectedVersion) "安装版本 = $ExpectedVersion"
   }
   Test-AppLaunch $newInstall.InstallLocation
+  if ($PreviousInstaller) { $upgradeOk = $true } else { $freshInstallOk = $true }
 }
 
 Write-Step "数据存活检查（升级后）"
@@ -177,6 +191,7 @@ if ($PreviousInstaller) {
   }
   $afterRollback = Get-LibraryState $DataDir
   Assert-True $afterRollback.Exists "回滚后 library.db 仍然存在"
+  $recoveryOk = $afterRollback.Exists
 }
 
 if (-not $KeepInstalled) {
@@ -190,6 +205,49 @@ if (-not $KeepInstalled) {
     }
   }
   Assert-True ($null -eq (Get-InstalledMangaReader)) "卸载后卸载列表不再包含 MangaReader"
+}
+
+# ---------------------------------------------------------------------------
+# 产出安装验证证据（供发布门禁消费）：
+#   kind/version/commit/platform/artifactSha256 + 四项检查 + 环境 + 时间
+# 缺任何一项都不算通过；脚本失败时 verdict=FAIL。
+# ---------------------------------------------------------------------------
+function Get-SqliteHeaderOk([string]$DbPath) {
+  if (-not (Test-Path $DbPath)) { return $false }
+  $bytes = [System.IO.File]::ReadAllBytes($DbPath)
+  if ($bytes.Length -lt 16) { return $false }
+  $header = [System.Text.Encoding]::ASCII.GetString($bytes, 0, 16)
+  return $header.StartsWith("SQLite format 3")
+}
+
+if ($EmitEvidence) {
+  $installerName = Split-Path -Leaf $Installer
+  $installerSha = (Get-FileHash -Algorithm SHA256 $Installer).Hash.ToLower()
+  $dbPath = Join-Path $DataDirForApp "library.db"
+  $dataIntegrity = if (Get-SqliteHeaderOk $dbPath) { "pass" } else { "fail" }
+  $evidence = [ordered]@{
+    kind = "manga-reader.install-verification"
+    verdict = if ($script:Failures.Count -eq 0 -and $dataIntegrity -eq "pass") { "PASS" } else { "FAIL" }
+    version = $ExpectedVersion
+    commit = $Commit
+    platform = "windows-x86_64"
+    artifactName = $installerName
+    artifactSha256 = $installerSha
+    checks = [ordered]@{
+      freshInstall = if ($freshInstallOk) { "pass" } else { "fail" }
+      upgrade = if ($upgradeOk) { "pass" } else { "fail" }
+      dataIntegrity = $dataIntegrity
+      recovery = if ($recoveryOk) { "pass" } else { "fail" }
+    }
+    machine = [ordered]@{
+      os = (Get-CimInstance Win32_OperatingSystem).Caption
+      image = $env:IMAGE_NAME
+      host = $env:COMPUTERNAME
+    }
+    verifiedAt = (Get-Date).ToUniversalTime().ToString("o")
+  }
+  Set-Content -Path $EmitEvidence -Value ($evidence | ConvertTo-Json -Depth 6) -Encoding UTF8
+  Write-Host "已写出安装验证证据：$EmitEvidence（verdict=$($evidence.verdict)）"
 }
 
 Write-Step "结果"

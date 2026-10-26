@@ -7,6 +7,41 @@ function number(value, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+/**
+ * 等待缓存写入进入静默：轮询 `get_memory_stats`，计数连续多次不变即认为没有在途写入。
+ *
+ * 用途：`get_page` 会后台预取邻页，预取落盘发生在清理之后时，
+ * 「清空后磁盘缓存必须为 0」会误判为失败。固定 sleep 在慢速 runner 上不可靠，
+ * 因此改为条件等待（Issue #51）。
+ */
+async function waitForCacheQuiescence(page, { timeoutMs = 30_000, intervalMs = 400, stableRounds = 3 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let previous = null;
+  let stable = 0;
+  while (Date.now() < deadline) {
+    let key = "unavailable";
+    try {
+      const stats = await invoke(page, "get_memory_stats");
+      key = [
+        number(stats?.diskCacheBytes, -1),
+        number(stats?.renderCacheBytes, -1),
+        number(stats?.onlineCacheBytes, -1),
+      ].join(":");
+    } catch {
+      /* 采样失败按「未静默」处理，继续等 */
+    }
+    if (key === previous) {
+      stable += 1;
+      if (stable >= stableRounds) return true;
+    } else {
+      stable = 0;
+      previous = key;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
 export async function runCacheSuite(ctx, report) {
   const page = ctx.page;
   const fixture = ctx.onlineFixture;
@@ -124,8 +159,11 @@ export async function runCacheSuite(ctx, report) {
     }
 
     // ---------- 一键清空：只清派生缓存，进度与书库必须保留 ----------
-    // get_page 会后台预取邻页；等它落地再清理，避免把在途写入误判为清理失败。
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    // get_page 会后台预取邻页；必须等这些在途写入**落盘完毕**再清理，
+    // 否则预取可能在 clear_temp_cache 之后才写回，afterDisk 残留 → 假失败。
+    // 这里用条件等待（缓存计数连续多次不变即视为静默），不使用固定 sleep：
+    // hosted 慢速 runner 上 600ms 不足以覆盖预取耗时（Issue #51）。
+    const quiesced = await waitForCacheQuiescence(page);
     const beforeClear = await invoke(page, "get_memory_stats");
     const cleared = await invoke(page, "clear_temp_cache");
     const afterClear = await invoke(page, "get_memory_stats");
@@ -153,6 +191,7 @@ export async function runCacheSuite(ctx, report) {
           afterDisk: afterClear.diskCacheBytes,
           afterOnline: afterClear.onlineCacheBytes,
           currentPage: bookAfter.currentPage,
+          quiesced,
         }),
       });
     } else {

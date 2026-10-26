@@ -127,6 +127,22 @@ export async function runChaosSuite(ctx, report) {
 
   note(report, "chaos stage: rage-click");
   // ---------- Rage click ----------
+  // 前置条件：书库必须**加载完成**。
+  // 产品契约是「5 次连点且期间没有状态变化」才触发恢复窗；书库骨架屏
+  // （data-slot="skeleton"）在加载中，点击它属于「页面正在变化」，
+  // 检测器按设计不会触发恢复窗。hosted runner 上库加载更慢，早期版本因此
+  // 偶发失败（注入点落在骨架占位上，随加载被替换）。
+  const skeletonState = await page
+    .eval(`(() => ({
+      skeletons: document.querySelectorAll('[data-slot="skeleton"]').length,
+    }))()`)
+    .catch(() => ({ skeletons: -1 }));
+  await page
+    .waitFor('document.querySelectorAll(\'[data-slot="skeleton"]\').length === 0', {
+      timeout: 20_000,
+      label: "library skeleton settled",
+    })
+    .catch(() => {});
   const point = await page.eval(`(() => {
     for (let y = 300; y < 600; y += 30) {
       for (let x = 100; x < 800; x += 40) {
@@ -136,7 +152,15 @@ export async function runChaosSuite(ctx, report) {
         const style = getComputedStyle(el);
         if (style.cursor === "pointer" || style.cursor === "grab") continue;
         if (el.closest("[data-rage-ignore]")) continue;
-        return { x, y, tag: el.tagName };
+        return {
+          x,
+          y,
+          tag: el.tagName,
+          // 诊断：注入点的稳定身份（判断是否落在骨架占位/卡片上）。
+          inSkeleton: !!el.closest('[data-slot="skeleton"]'),
+          className: String(el.className || "").slice(0, 80),
+          parentTag: el.parentElement ? el.parentElement.tagName : null,
+        };
       }
     }
     return null;
@@ -148,7 +172,7 @@ export async function runChaosSuite(ctx, report) {
       layer: "chaos",
       title: "找不到可注入连点的非交互区域",
       severity: "P1",
-      details: "visual test environment",
+      details: `visual test environment（骨架屏数量=${skeletonState.skeletons}）`,
       location: "tests/qa/suites/chaos.mjs",
     });
   } else {
@@ -225,6 +249,10 @@ export async function runChaosSuite(ctx, report) {
       .catch(() => null);
     const rageEvidence = {
       point,
+      skeletonsAtStart: skeletonState.skeletons,
+      skeletonsNow: await page
+        .eval(`document.querySelectorAll('[data-slot="skeleton"]').length`)
+        .catch(() => -1),
       dispatchMs: clickTimeline,
       probe: rageProbe,
     };

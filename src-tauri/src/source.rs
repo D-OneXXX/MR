@@ -71,33 +71,32 @@ pub fn is_image_name(name: &str) -> bool {
     })
 }
 
-/// zip 条目名对：`display` 用于展示与自然序排序，`lookup` 用于
-/// `ZipArchive::by_name` 查找（必须与 zip crate 内部解码一致）。
+/// zip 条目名：`display` 用于展示与自然序排序，`index` 用于按中央目录
+/// 索引读取（不依赖 zip crate 的名称解码结果）。
 ///
-/// 背景：条目未带 UTF-8 标志时 zip crate 按 CP437 解码，而中文 Windows
-/// 压缩工具（WinRAR/360压缩等）实际写入的是 GBK 字节，Linux/Windows
-/// 上展示层都会变成乱码。修复只影响展示名——即使猜测错误，
-/// `lookup` 仍保证按索引读页 100% 命中。
+/// 背景：条目未带 UTF-8 标志时，中文 Windows 压缩工具（WinRAR/360压缩等）
+/// 实际写入的是 GBK 字节，Linux/Windows 上展示层都会变成乱码。修复只影响
+/// 展示名——即使猜测错误，`index` 仍保证按索引读页 100% 命中。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZipEntryName {
+    pub index: usize,
     pub display: String,
-    pub lookup: String,
 }
 
 /// 非 UTF-8 ZIP 条目名修复（纯函数，任何平台都可测试）。
 ///
-/// 解码优先级：UTF-8 → GB18030 → Shift_JIS → zip crate 的 CP437 结果兜底。
-/// - 原始字节是合法 UTF-8 → 与 zip crate 解码一致，原样返回；
+/// 解码优先级：UTF-8 → GB18030 → Shift_JIS → zip crate 的 UTF-8/lossy 结果兜底。
+/// - 原始字节是合法 UTF-8 → 原样返回；
 /// - GB18030（GBK 超集，覆盖中文 Windows 打包工具写入的 CP936 字节）与
 ///   Shift_JIS（日文原版包 CP932）都常能无错解出（双字节编码大量重叠），
 ///   此时用**全角假名出现率**裁决：Shift_JIS 解码含平/片假名而 GB18030
 ///   不含 → 判定日文包；半角片假名（GBK 汉字按 SJIS 解出的典型噪声）
 ///   不作为日文证据；
-/// - 两种解码都出现替换字符 → 回退 zip crate 的 CP437 结果。
+/// - 两种解码都出现替换字符 → 回退调用方提供的 zip 解码/lossy 结果。
 ///
 /// 修复只影响展示名——纯汉字日文名与中文名在无假名时无法区分，会按
-/// GB18030 展示（可能仍乱码），但 `lookup` 保证按索引读页 100% 命中、
-/// 自然序不受影响。
+/// GB18030 展示（可能仍乱码），但读取按中央目录 `index` 进行，
+/// 页序与内容不受影响。
 fn fixup_entry_name(raw: &[u8], zip_decoded: &str) -> String {
     if std::str::from_utf8(raw).is_ok() {
         return zip_decoded.to_string();
@@ -186,7 +185,12 @@ fn zip_image_names(archive: &mut zip::ZipArchive<File>) -> Result<Vec<ZipEntryNa
                 "压缩包已加密或包含加密条目，请转为标准无密码 ZIP/CBZ 后再导入（archive-encrypted）".into(),
             ));
         }
-        if entry.is_dir() || !is_image_name(entry.name()) {
+        let raw = entry.name_raw();
+        let decoded = entry
+            .name()
+            .map(|name| name.into_owned())
+            .unwrap_or_else(|_| String::from_utf8_lossy(raw).into_owned());
+        if entry.is_dir() || !is_image_name(&decoded) {
             continue;
         }
         total = total.saturating_add(entry.size());
@@ -200,10 +204,10 @@ fn zip_image_names(archive: &mut zip::ZipArchive<File>) -> Result<Vec<ZipEntryNa
                 "压缩包总解压体积超过安全上限（4 GiB）".into(),
             ));
         }
-        let display = fixup_entry_name(entry.name_raw(), entry.name());
+        let display = fixup_entry_name(raw, &decoded);
         names.push(ZipEntryName {
+            index,
             display,
-            lookup: entry.name().to_string(),
         });
     }
     Ok(names)
@@ -333,7 +337,7 @@ impl ImageSource for ZipSource {
             .get(index)
             .ok_or_else(|| BackendError::Msg(format!("页码越界：{index}")))?;
         let mut archive = self.reopen()?;
-        let mut entry = archive.by_name(&name.lookup)?;
+        let mut entry = archive.by_index(name.index)?;
         // 安全：拒绝 ZipSlip（虽然只读内存不落盘，仍做校验）。
         if entry.enclosed_name().is_none() {
             return Err(BackendError::Zip(format!("非法条目名：{}", name.display)));
@@ -696,7 +700,7 @@ impl SourceHandle {
                     .get(index)
                     .ok_or_else(|| BackendError::Msg(format!("页码越界：{index}")))?;
                 let mut ar = archive.lock();
-                let mut entry = ar.by_name(&name.lookup)?;
+                let mut entry = ar.by_index(name.index)?;
                 if entry.enclosed_name().is_none() {
                     return Err(BackendError::Zip(format!("非法条目名：{}", name.display)));
                 }
@@ -746,7 +750,7 @@ impl SourceHandle {
                     .get(index)
                     .ok_or_else(|| BackendError::Msg(format!("页码越界：{index}")))?;
                 let mut ar = archive.lock();
-                let mut entry = ar.by_name(&name.lookup)?;
+                let mut entry = ar.by_index(name.index)?;
                 if entry.enclosed_name().is_none() {
                     return Err(BackendError::Zip(format!("非法条目名：{}", name.display)));
                 }

@@ -182,7 +182,7 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 - Linux `cargo check --all-targets`、clippy。
 - 静态 QA。
 - 治理脚本测试（`npm run test:governance`）。
-- 依赖审计可见；高危项需处置。
+- 依赖审计阻断：`npm audit --omit=dev --audit-level=high` 与 `cargo audit`；例外必须在 `docs/TECHNICAL.md` 记录路径证据与复审触发。
 - 数据/隐私/更新通道变更需对应静态守卫与回归测试。
 
 ### Release Candidate 门禁
@@ -266,17 +266,18 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 
 ## 11. 仓库设置基线
 
-以下设置涉及远程权限与安全，需用户授权后执行；未执行前，Agent 不得用管理员直推绕过门禁。
+以下为当前仓库设置基线；变更需用户授权。Agent 不得用管理员直推绕过门禁。
 
 | 设置 | 当前 | 目标 | 状态 |
 |---|---|---|---|
-| `main` required checks | Windows + Linux | 保留并补治理测试 | 已具备 |
-| `enforce_admins` | false | true（常规改动走 PR） | 待授权 |
-| required reviews | 无 | 不要求人工 review（AI 自动合并）；发布单独审批 | 待确认 |
+| `main` required checks | Windows + Linux + PR governance | 保持 | 已具备 |
+| `enforce_admins` | true | true（常规改动走 PR） | 已启用 |
+| required reviews | 无 | 不要求人工 review（AI 自动合并）；发布单独审批 | 已确认维持 |
 | 发布 Environment | 无 | `release` + required reviewer + 签名 Secret | Phase 4 |
-| Secret scanning / push protection | 关闭 | 开启 | 待授权 |
-| Dependabot security updates | 关闭 | 开启 | 待授权 |
-| Actions 引用 | 可变 Tag | 固定 SHA | Phase 3 |
+| Secret scanning / push protection | 开启 | 开启 | 已完成 |
+| Dependabot alerts / security updates | 开启 | 开启 | 已完成 |
+| Code scanning（CodeQL default setup） | actions + JS/TS 开启；Rust 不在默认支持列表 | 保持 | 已完成 |
+| Actions 引用 | 可变 Tag | 固定 SHA | Phase 3 待办 |
 | 发布 concurrency | 无 | 按通道加 concurrency | Phase 4 |
 
 ---

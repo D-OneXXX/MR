@@ -106,8 +106,11 @@ Remove personal paths, book titles, cookies, tokens, and full private URLs befor
 > Phase 1–3: the release workflows still publish directly from a tag push. Do not push
 > any `v*` tag until Phase 4 replaces them with Draft + approval.
 
-Dependency-audit steps are currently visible reports rather than hard blockers. Triage results
-before a release; do not disable a failing guard just to make the pipeline green.
+Production `npm audit --omit=dev --audit-level=high` is blocking in both CI jobs.
+`cargo audit` is blocking on Linux with documented exceptions for the updater's
+zip 4.6.1 extract advisories (NSIS updates do not use the `.zip` path) and the
+accepted glib 0.18.5 risk (#18). Unmaintained/unsound warnings remain visible.
+Do not add an ignore without a TECHNICAL/issue record and a review trigger.
 
 The manual Windows/Linux smoke checklist is kept at
 [docs/dev/smoke-test.md](dev/smoke-test.md).

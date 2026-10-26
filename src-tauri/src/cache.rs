@@ -86,7 +86,7 @@ impl<K: Hash + Eq + Clone> ByteLru<K> {
             .map(|(k, _)| k.clone())
             .collect();
         for k in keys {
-            // lru 0.12.5 的 pop 直接返回 V（非 (K,V)）。
+            // lru 0.19.0 的 pop 直接返回 V（非 (K,V)）。
             if let Some((_, s)) = self.inner.pop(&k) {
                 self.bytes = self.bytes.saturating_sub(s as u64);
             }

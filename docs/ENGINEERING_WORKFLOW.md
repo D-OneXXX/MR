@@ -188,7 +188,7 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 ### Release Candidate 门禁
 
 - 固定 Commit、固定依赖。
-- 完整 QA 在 CI 上运行，报告绑定 Commit，保存 artifact。
+- 完整 QA 通过 `.github/workflows/qa-full.yml` 在 CI 上运行；artifact 名为 `qa-evidence-<sha>`，必须与发布候选 Commit 一致。
 - Windows 安装/覆盖升级、Linux 包安装/启动、数据保留。
 - 签名、清单、SHA-256 校验。
 - Release Notes、Known Issues、回滚说明。

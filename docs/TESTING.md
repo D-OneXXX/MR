@@ -96,12 +96,29 @@ Remove personal paths, book titles, cookies, tokens, and full private URLs befor
 - `.github/workflows/ci-windows-check.yml` — version gate, TypeScript, production build,
   Rust unit and integration tests, governance tests, and static QA.
 - `.github/workflows/ci-linux-check.yml` — Linux `cfg` compilation, clippy, Rust tests,
-  xvfb-backed integration tests, governance tests, and visible dependency-audit reports.
+  xvfb-backed integration tests, governance tests, and blocking dependency audits.
 - `.github/workflows/ci-pr-governance.yml` — required PR metadata gate: linked issue,
   branch issue number, verification/data/release sections, and main-only base. Dependabot
   and Renovate PRs are skipped.
+- `.github/workflows/qa-full.yml` — reusable/dispatchable release-candidate full QA. It runs
+  version/governance/type/build/Rust/integration/clippy/audit gates and the Windows/WebView2
+  full QA, then uploads `qa-evidence-<sha>` with reports and logs.
 - `.github/workflows/release-windows.yml` — full QA before signing/publishing NSIS artifacts.
 - `.github/workflows/release-linux-critical.yml` — critical-fix Linux channel.
+
+## Full QA evidence
+
+Run the exact release-candidate commit:
+
+```bash
+gh workflow run qa-full.yml -f ref=<commit-sha>
+gh run watch <run-id>
+```
+
+The workflow checks out the requested ref, records its actual `git rev-parse HEAD`, and
+uploads `qa-evidence-<sha>` on success or failure. A release candidate must reference that
+artifact; do not substitute a hand-written local QA count. It has no access to signing
+secrets and cannot publish a Release.
 
 > Phase 1–3: the release workflows still publish directly from a tag push. Do not push
 > any `v*` tag until Phase 4 replaces them with Draft + approval.

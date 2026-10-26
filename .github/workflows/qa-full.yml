@@ -1,0 +1,131 @@
+name: Full QA evidence
+
+# 可复用、可审计的发布候选 QA：按指定 ref 运行，不依赖发布 Tag。
+# 失败时仍上传诊断 artifact；不接触 Secrets，不修改 Release。
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit / branch / tag to verify (exact source)"
+        required: true
+        default: main
+        type: string
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit / branch / tag to verify (exact source)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-full-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-qa:
+    name: Full QA evidence (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Resolve source commit
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Version gate
+        run: |
+          npm run version:check
+          npm run test:version
+
+      - name: Governance tests
+        run: npm run test:governance
+
+      - name: Typecheck and production build
+        run: |
+          npx tsc --noEmit
+          npm run build
+
+      - name: Rust unit tests
+        run: cargo test --lib --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust integration tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test e2e_stage1 --test memory_budget
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: NPM audit (production dependencies)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Cargo audit (blocking with documented exceptions)
+        run: cargo audit --file src-tauri/Cargo.lock --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369
+
+      - name: Build QA debug binary
+        run: cargo build --manifest-path src-tauri/Cargo.toml
+
+      - name: Full QA regression (Windows/WebView2)
+        shell: pwsh
+        timeout-minutes: 45
+        run: node tests/qa/run-qa.mjs
+
+      - name: Summarize QA evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Full QA evidence"
+            echo ""
+            echo "- Source: \`${{ steps.source.outputs.sha }}\`"
+            echo "- Workflow run: ${{ github.run_id }}"
+            if [ -f tests/qa/reports/latest.json ]; then
+              node -e 'const report=require("./tests/qa/reports/latest.json"); const checks=report.checks||[]; const failed=checks.filter((c)=>c.status==="fail"); const severity={}; for (const c of failed) severity[c.severity||"UNKNOWN"]=(severity[c.severity||"UNKNOWN"]||0)+1; console.log(`- Checks: ${checks.length}`); console.log(`- Failed: ${failed.length}`); console.log(`- Severity: ${JSON.stringify(severity)}`);'
+            else
+              echo "- QA report: NOT FOUND"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload QA evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-evidence-${{ steps.source.outputs.sha || github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            tests/qa/reports/latest.md
+            tests/qa/reports/latest.json
+            tests/qa/artifacts/current/qa-app.log
+            tests/qa/artifacts/current/vite.log
+            tests/qa/artifacts/current/data/logs/
+            tests/qa/artifacts/current/screens/

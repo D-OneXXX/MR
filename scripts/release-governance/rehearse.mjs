@@ -270,6 +270,28 @@ expectThrow(
   "回执平台与候选不一致",
 );
 
+// H. 演练候选不得发布
+const rehearsalRecord = buildRcRecord({
+  tag: "v0.0.0-rehearsal",
+  commit,
+  qa: { runId: "42", buildCommit: commit },
+  artifacts: [{ name: "rehearsal-app-setup.exe", sha256: sha256Bytes(Buffer.from("rehearsal")) }],
+});
+expectThrow(
+  "H1 演练候选（v0.0.0-rehearsal）→ 无条件拒绝发布",
+  () =>
+    verifyPublishPreconditions({
+      record: rehearsalRecord,
+      actualDigests: new Map([["rehearsal-app-setup.exe", sha256Bytes(Buffer.from("rehearsal"))]]),
+      attestation: makeAttestation(rehearsalRecord, sha256Bytes(Buffer.from("rehearsal")), {
+        version: "0.0.0",
+      }),
+      channel: "windows",
+      commit,
+    }),
+  "演练候选",
+);
+
 // G. 标签命名约束
 check("G1 常规通道拒绝 linux 后缀标签", parseTag("v0.17.2-linux-sec1")?.channel === "linux-critical");
 check("G2 常规通道标签解析正确", parseTag("v0.17.2")?.channel === "windows");
@@ -283,7 +305,7 @@ const summary = {
   total: results.length,
   passed: results.length - failures,
   failed: failures,
-  scenarios: ["A 候选→Draft", "B 审批绑定", "C 失败恢复", "D 并发控制", "E 清单安全", "F 跨通道", "G 标签约束"],
+  scenarios: ["A 候选→Draft", "B 审批绑定", "C 失败恢复", "D 并发控制", "E 清单安全", "F 跨通道", "G 标签约束", "H 演练不可发布"],
 };
 console.log("");
 console.log("=== 发布链路隔离演练 ===");

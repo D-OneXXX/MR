@@ -672,6 +672,9 @@ export function checkReleaseGovernance(root, report) {
     if (!source.includes("verify-draft.mjs")) {
       errors.push(`${name} 必须调用发布前绑定校验 verify-draft.mjs`);
     }
+    if (!source.includes("rehearsal")) {
+      errors.push(`${name} 必须显式拒绝演练标签（rehearsal）`);
+    }
     evidence.push(`${name}: 手动触发 + environment 门禁 + 绑定校验`);
   }
 
@@ -688,6 +691,11 @@ export function checkReleaseGovernance(root, report) {
     }
     if (!source.includes("rc-record.json")) {
       errors.push(`${name} 必须产出 rc-record.json（审批依据）`);
+    }
+    // 隔离演练模式：只允许 v0.0.0-rehearsal，产物带前缀且永不发布。
+    // 目前只在 Windows 候选工作流提供（NSIS 安装验证是正式发布的强制条件）。
+    if (name === "release-candidate.yml" && !source.includes("rehearsal")) {
+      errors.push(`${name} 必须提供隔离演练模式（rehearsal），否则无法做非正式发布演练`);
     }
     evidence.push(`${name}: 构建签名 → Draft + rc-record`);
   }

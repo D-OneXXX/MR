@@ -1,6 +1,6 @@
 # MangaReader 项目状态
 
-> 生成时间：2026-10-26T05:15:20.104Z
+> 生成时间：2026-10-26T05:51:10.369Z
 > 本文件由 `npm run status` 生成，请勿手工编辑。
 > `UNKNOWN` 表示当前环境无法验证，不代表正常。
 
@@ -10,23 +10,23 @@
 |---|---|
 | package.json | `0.17.1` |
 | 最新 Release | `v0.17.1-linux-sec1`（0.17.1） |
-| 最新 Windows Release | `v0.17.1`（0.17.1）；HEAD 领先 28 个提交 |
-| 最新 Linux critical Release | `v0.17.1-linux-sec1`（0.17.1）；HEAD 领先 25 个提交 |
-| HEAD 距最新 Release | 25 个提交 |
+| 最新 Windows Release | `v0.17.1`（0.17.1）；HEAD 领先 29 个提交 |
+| 最新 Linux critical Release | `v0.17.1-linux-sec1`（0.17.1）；HEAD 领先 26 个提交 |
+| HEAD 距最新 Release | 26 个提交 |
 | 当前阶段 | 开发中（与最新发布同版本） |
-| 判定依据 | HEAD 领先最新发布 25 个提交，但版本号仍为 0.17.1。下一次发布前必须 bump。 |
+| 判定依据 | HEAD 领先最新发布 26 个提交，但版本号仍为 0.17.1。下一次发布前必须 bump。 |
 
 ## 2. 仓库与工作区
 
 | 项目 | 值 |
 |---|---|
 | 分支 | `main` |
-| HEAD | `ffa767ea73d6` |
-| 提交 | docs(release): 收尾 Phase 3 验收结论并刷新状态快照 |
-| 提交时间 | 2026-10-26T13:14:40+08:00 |
+| HEAD | `b8b176d314ba` |
+| 提交 | docs(status): 刷新 Phase 3 收尾后的状态快照 |
+| 提交时间 | 2026-10-26T13:29:29+08:00 |
 | 工作区 | 干净 |
-| 本地分支 | `chore/13-phase-1-governance`, `chore/15-vite-lru-security`, `chore/18-glib-risk-acceptance`, `chore/19-pr-governance`, `chore/24-phase2-closeout`, `chore/28-rust-security-audit`, `chore/30-full-qa-evidence`, `chore/36-local-qa-attestation`, `chore/38-actions-sha`, `chore/39-upgrade-compat`, `chore/40-phase3-report`, `chore/48-version-attribution`, `chore/49-version-attribution`, `fix/21-status-required-checks`, `fix/23-chaos-cdp-retry`, `fix/30-full-qa-retry`, `fix/30-full-qa-retry-v2`, `fix/32-arch-webtoon-ci-diag`, `fix/32-arch-webtoon-flake`, `fix/42-chaos-rage-click`, `fix/51-cache-quiescence`, `main`, `wip/main-telegram-20261023` |
-| 已注册 Worktree | `manga-reader-tauri`（main）, `chore-38-actions-sha`（chore/38-actions-sha）, `chore-39-upgrade-compat`（chore/39-upgrade-compat）, `chore-40-phase3-report`（chore/40-phase3-report）, `chore-48-version-attribution`（chore/48-version-attribution）, `fix-32-arch-webtoon-ci-diag`（fix/32-arch-webtoon-ci-diag）, `fix-42-chaos-rage-click`（fix/42-chaos-rage-click）, `fix-51-cache-quiescence`（fix/51-cache-quiescence） |
+| 本地分支 | `chore/13-phase-1-governance`, `chore/15-vite-lru-security`, `chore/18-glib-risk-acceptance`, `chore/19-pr-governance`, `chore/24-phase2-closeout`, `chore/28-rust-security-audit`, `chore/30-full-qa-evidence`, `chore/36-local-qa-attestation`, `chore/38-actions-sha`, `chore/39-upgrade-compat`, `chore/40-final-status-snapshot`, `chore/40-phase3-report`, `chore/48-version-attribution`, `chore/49-version-attribution`, `fix/21-status-required-checks`, `fix/23-chaos-cdp-retry`, `fix/30-full-qa-retry`, `fix/30-full-qa-retry-v2`, `fix/32-arch-webtoon-ci-diag`, `fix/32-arch-webtoon-flake`, `fix/42-chaos-rage-click`, `fix/51-cache-quiescence`, `main`, `wip/main-telegram-20261023` |
+| 已注册 Worktree | `manga-reader-tauri`（main） |
 
 ## 3. 质量门禁
 
@@ -34,10 +34,10 @@
 
 | 检查 | 必需 | 状态 | 结论 |
 |---|---|---|---|
-| Analyze (javascript-typescript) | 否 | in_progress | — |
+| Analyze (javascript-typescript) | 否 | completed | success |
 | Analyze (actions) | 否 | completed | success |
-| cargo check + frontend build (ubuntu-22.04) | 是 | in_progress | — |
-| tsc + cargo test + static QA (windows-latest) | 是 | in_progress | — |
+| tsc + cargo test + static QA (windows-latest) | 是 | completed | success |
+| cargo check + frontend build (ubuntu-22.04) | 是 | completed | success |
 
 - 分支保护：enforce_admins=true
 - required checks：tsc + cargo test + static QA (windows-latest), cargo check + frontend build (ubuntu-22.04), PR governance (issue link + branch naming)
@@ -58,11 +58,11 @@
 
 | Workflow | 事件 | 分支 | 状态 | 结论 |
 |---|---|---|---|---|
-| Linux check | push | main | in_progress | — |
-| Windows check | push | main | in_progress | — |
-| Push on main | dynamic | main | in_progress | — |
-| PR governance | pull_request | chore/40-phase3-report | completed | success |
-| Windows check | pull_request | chore/40-phase3-report | completed | success |
+| Push on main | dynamic | main | completed | success |
+| Windows check | push | main | completed | success |
+| Linux check | push | main | completed | success |
+| PR governance | pull_request | chore/40-final-status-snapshot | completed | success |
+| Linux check | pull_request | chore/40-final-status-snapshot | completed | success |
 
 ## 7. 最近 Release
 
@@ -78,8 +78,8 @@
 
 - 未配置发布审批环境；Phase 1–3 禁止推送发布 Tag。
 - 最新版本已发布但 HEAD 仍有未发布提交；下一次发布前必须 bump。
-- Windows 常规通道落后 HEAD 28 个提交。
-- Linux critical 通道落后 HEAD 25 个提交。
+- Windows 常规通道落后 HEAD 29 个提交。
+- Linux critical 通道落后 HEAD 26 个提交。
 
 ### 阻塞项
 

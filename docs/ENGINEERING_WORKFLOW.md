@@ -302,7 +302,8 @@ GitHub-hosted `windows-2022` 一次性 runner 通过
 1. **推荐**：为自动化创建 GitHub App（`Contents: read`、`Actions: read/write`、
    `Issues`/`Pull requests` write、`Metadata: read`；**不要 Contents write**，
    不要 Deployments/Environments/Secrets/Administration/Workflows write），
-   不作为 Environment reviewer；写代码用独立 write deploy key。Agent 使用 App
+   不作为 Environment reviewer；写代码用独立 write deploy key **仅当仓库支持 push
+   ruleset；本 public user-owned 仓库不支持，故不要创建**。Agent 使用 App
    installation token；Environment 保持 `D-OneXXX` 为 reviewer，启用
    `prevent_self_review=true`、`can_admins_bypass=false`。效果：Agent 触发 run 时
    actor=App，维护者本人批准，AI 无法自批；现有 PR/候选/QA CI 不受影响。

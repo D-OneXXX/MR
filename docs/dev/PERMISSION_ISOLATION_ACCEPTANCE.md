@@ -280,6 +280,9 @@ GitHub App 建议权限：
 
 ### 5.1 顺序
 
+> 本节是 App/deploy-key 可选方案的迁移顺序；**本仓库 public user-owned 不支持
+> push ruleset，禁止创建 write deploy key**。实际采用 local-only，见 §11。
+
 0. 只读快照：Environment、rulesets、branch protection、Draft、Tag、PR #82 合并状态。
 1. 维护者创建 App 并按 3.1 授权；只安装到 `D-OneXXX/MR`。
 2. 生成 App 私钥/记录 App ID、installation ID；存入 AI 的独立安全存储。

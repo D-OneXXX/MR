@@ -130,9 +130,10 @@ Environment。`Contents: write` 同时也允许改 workflow 文件和 Tag，因�
      User/Team）；REST 的 `POST .../pending_deployments` 在 OpenAPI 中还标记为
      `enabledForGitHubApps=false`。两条独立信号都指向“App 不能批准”，但仍需用
      一次性 pending deployment 实测（见验收报告 N1）。
-2. 写代码使用**独立的 write deploy key**（SSH），只推送 `ai/*` 分支；deploy key
-   不是 API token，不能发布 Release 或批准 deployment。它必须不在任何 ruleset
-   bypass 中。
+2. 写代码使用**独立的 write deploy key**（SSH）**仅当仓库支持 push ruleset**；
+   deploy key 不是 API token，不能发布 Release 或批准 deployment，必须不在任何
+   ruleset bypass 中。**本仓库是 public user-owned，push ruleset 返回 422，禁止
+   在此仓库创建 write deploy key**；退回维护者推送/触发。
 3. 在授予 App `Actions: write` / deploy key 之前，先增加：
    - `v*` Tag 的 **creation** 规则（当前 ruleset 只有 deletion/update）；
    - target `push` 的 `file_path_restriction` ruleset，覆盖

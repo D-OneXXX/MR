@@ -7,8 +7,8 @@
 
 use std::io::Write;
 
-use image::{Rgb, RgbImage};
 use image::ImageEncoder as _;
+use image::{Rgb, RgbImage};
 use manga_reader_tauri_lib::{db, pipeline, source::ImageSource};
 
 fn page_png(w: u32, h: u32, seed: u8) -> Vec<u8> {
@@ -35,7 +35,8 @@ fn scan_list_thumbnail_progress_dashboard() {
             .compression_method(zip::CompressionMethod::Stored);
         for i in 0..5 {
             zip.start_file(format!("p{i:02}.png"), opt).expect("entry");
-            zip.write_all(&page_png(120, 160, i as u8 * 40)).expect("write");
+            zip.write_all(&page_png(120, 160, i as u8 * 40))
+                .expect("write");
         }
         zip.finish().expect("finish");
     }
@@ -86,4 +87,3 @@ fn scan_list_thumbnail_progress_dashboard() {
     println!("E2E OK: 5页cbz入库→封面/单页可解→进度3页→今日+热力图同步");
     std::fs::remove_dir_all(&dir).ok();
 }
-

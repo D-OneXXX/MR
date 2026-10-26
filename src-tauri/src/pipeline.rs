@@ -248,8 +248,7 @@ fn tall_want_h(sw: u32, sh: u32, tw: u32) -> u32 {
     if sw == 0 {
         return sh;
     }
-    ((sh as u64 * tw as u64) / sw as u64)
-        .clamp(1, u16::MAX as u64) as u32
+    ((sh as u64 * tw as u64) / sw as u64).clamp(1, u16::MAX as u64) as u32
 }
 
 /// 长图 JPEG 解码（不下线编码）：返回 IDCT 缩放解码后的栅格。
@@ -262,7 +261,8 @@ fn decode_tall_jpeg_raster(
     req_h: u32,
 ) -> Result<image::RgbImage, BackendError> {
     let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(&raw.bytes));
-    decoder.read_info()
+    decoder
+        .read_info()
         .map_err(|e| BackendError::Decode(format!("长图解码失败：{e}")))?;
     // jpeg-decoder 的 scale 目标：按目标宽求比例的高（u16 上限内的源都成立）。
     let want_w = req_w.clamp(1, u16::MAX as u32) as u16;
@@ -278,24 +278,25 @@ fn decode_tall_jpeg_raster(
         .ok_or_else(|| BackendError::Decode("缺少 JPEG 信息".into()))?;
 
     match info.pixel_format {
-        jpeg_decoder::PixelFormat::RGB24 => image::RgbImage::from_raw(
-            info.width as u32,
-            info.height as u32,
-            pixels,
-        )
-        .ok_or_else(|| BackendError::Decode("长图像素缓冲不匹配".into())),
+        jpeg_decoder::PixelFormat::RGB24 => {
+            image::RgbImage::from_raw(info.width as u32, info.height as u32, pixels)
+                .ok_or_else(|| BackendError::Decode("长图像素缓冲不匹配".into()))
+        }
         jpeg_decoder::PixelFormat::L8 => {
             let gray = image::GrayImage::from_raw(info.width as u32, info.height as u32, pixels)
                 .ok_or_else(|| BackendError::Decode("长图像素缓冲不匹配".into()))?;
-            Ok(image::RgbImage::from_fn(gray.width(), gray.height(), |x, y| {
-                let g = gray.get_pixel(x, y)[0];
-                image::Rgb([g, g, g])
-            }))
+            Ok(image::RgbImage::from_fn(
+                gray.width(),
+                gray.height(),
+                |x, y| {
+                    let g = gray.get_pixel(x, y)[0];
+                    image::Rgb([g, g, g])
+                },
+            ))
         }
         _ => {
             // CMYK 等罕见格式退回常规解码（长图 CMYK 极罕见；牺牲一次全分辨率）。
-            let img =
-                image::load_from_memory_with_format(&raw.bytes, ImageFormat::Jpeg)?;
+            let img = image::load_from_memory_with_format(&raw.bytes, ImageFormat::Jpeg)?;
             Ok(into_rgb(img))
         }
     }
@@ -398,7 +399,9 @@ pub fn render_webtoon_tiles(
     // 显示几何：目标宽 = min(源宽, 请求宽)（不放大），显示高等比。
     let (tw, th) = fit_size(sw, sh, Some(max_w), None);
     if tw == 0 || th == 0 {
-        return Err(BackendError::Decode(format!("条漫显示尺寸非法（{tw}×{th}）")));
+        return Err(BackendError::Decode(format!(
+            "条漫显示尺寸非法（{tw}×{th}）"
+        )));
     }
     // 片数与前端 `webtoon_tile_count` 公式一致（前端 Webtoon.tsx 同公式）。
     // 上限再收一道：每片至少 1 显示行（极端比例下不会产生 0 高切片）。
@@ -667,7 +670,10 @@ mod tests {
             assert_eq!(page.orig_height, h);
             let expect = w as f64 / h as f64;
             let got = page.width as f64 / page.height as f64;
-            assert!((got - expect).abs() / expect < 0.02, "宽高比失真：{got} vs {expect}");
+            assert!(
+                (got - expect).abs() / expect < 0.02,
+                "宽高比失真：{got} vs {expect}"
+            );
         }
     }
 
@@ -679,7 +685,10 @@ mod tests {
         let (tiles, pages) = render_webtoon_tiles(&raw, w).unwrap();
 
         let expect = webtoon_tile_count(w, h, w);
-        assert_eq!(tiles, expect, "片数必须与 webtoon_tile_count（前端同公式）一致");
+        assert_eq!(
+            tiles, expect,
+            "片数必须与 webtoon_tile_count（前端同公式）一致"
+        );
         assert_eq!(expect, 12, "24000 / 2048 → 12 片");
         assert_eq!(pages.len() as u32, tiles);
 
@@ -829,7 +838,9 @@ mod tests {
             );
             assert!(pages.iter().all(|p| p.width == tw));
             assert!(
-                pages.iter().all(|p| p.orig_width == sw && p.orig_height == sh),
+                pages
+                    .iter()
+                    .all(|p| p.orig_width == sw && p.orig_height == sh),
                 "{why}：orig_* 必须保持逻辑页源尺寸（L1/L2 同口径）"
             );
         }

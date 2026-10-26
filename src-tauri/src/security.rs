@@ -368,9 +368,9 @@ fn parse_capability_evidence(raw: &str) -> Result<CapabilityEvidence, String> {
     let scoped = !windows.is_empty()
         && !has_glob
         && remote_capabilities == 0
-        && windows.iter().all(|label| {
-            label == "main" || label == RECOVERY_LABEL || label == BROWSER_LABEL
-        });
+        && windows
+            .iter()
+            .all(|label| label == "main" || label == RECOVERY_LABEL || label == BROWSER_LABEL);
 
     Ok(CapabilityEvidence {
         windows,
@@ -634,8 +634,10 @@ mod tests {
         assert_eq!(remote_http.status, SecurityStatus::Fail);
         assert!(!remote_http.manifest_https);
 
-        let localhost_http =
-            audit_update_with(&channel(&["http://localhost:8080/latest.json"], "key"), false);
+        let localhost_http = audit_update_with(
+            &channel(&["http://localhost:8080/latest.json"], "key"),
+            false,
+        );
         assert_eq!(localhost_http.status, SecurityStatus::Pass);
         assert!(localhost_http.manifest_https);
         assert!(localhost_http.manifest_loopback);
@@ -649,13 +651,18 @@ mod tests {
         assert_eq!(loopback_v6.status, SecurityStatus::Pass);
 
         let userinfo = audit_update_with(
-            &channel(&["https://user:pass@updates.example.com/latest.json"], "key"),
+            &channel(
+                &["https://user:pass@updates.example.com/latest.json"],
+                "key",
+            ),
             false,
         );
         assert_eq!(userinfo.status, SecurityStatus::Fail);
 
-        let unsupported =
-            audit_update_with(&channel(&["ftp://updates.example.com/latest.json"], "key"), false);
+        let unsupported = audit_update_with(
+            &channel(&["ftp://updates.example.com/latest.json"], "key"),
+            false,
+        );
         assert_eq!(unsupported.status, SecurityStatus::Fail);
 
         let invalid = audit_update_with(&channel(&["not a url"], "key"), false);
@@ -673,16 +680,20 @@ mod tests {
         assert!(blank.sha256_enforced);
 
         // 端点齐备但没有公钥：仍是「注意」，不谎报通过。
-        let without_key =
-            audit_update_with(&channel(&["https://updates.example.com/latest.json"], ""), false);
+        let without_key = audit_update_with(
+            &channel(&["https://updates.example.com/latest.json"], ""),
+            false,
+        );
         assert_eq!(without_key.status, SecurityStatus::Warn);
         assert!(without_key.manifest_configured);
         assert!(!without_key.signature_configured);
         assert_eq!(without_key.key_source, "none");
 
         // 编译期 MR_UPDATE_PUBKEY 注入时，公钥来源标记为 build。
-        let build_key =
-            audit_update_with(&channel(&["https://updates.example.com/latest.json"], ""), true);
+        let build_key = audit_update_with(
+            &channel(&["https://updates.example.com/latest.json"], ""),
+            true,
+        );
         assert_eq!(build_key.status, SecurityStatus::Pass);
         assert_eq!(build_key.key_source, "build");
     }
@@ -722,7 +733,8 @@ mod tests {
         assert!(!parsed.has_endpoints());
         assert!(!parsed.has_pubkey());
 
-        let broken = serde_json::json!({ "plugins": { "updater": { "endpoints": 7, "pubkey": 9 } } });
+        let broken =
+            serde_json::json!({ "plugins": { "updater": { "endpoints": 7, "pubkey": 9 } } });
         let parsed = NativeUpdaterConfig::from_json(&broken);
         assert!(!parsed.has_endpoints());
         assert!(!parsed.has_pubkey());

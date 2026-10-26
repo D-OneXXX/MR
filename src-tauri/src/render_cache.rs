@@ -133,20 +133,22 @@ impl RenderCache {
     /// 「重新生成缩略图」用；页成品不受影响。
     pub fn clear_thumb_files(&self) -> u32 {
         let mut n = 0;
-        let Ok(rd) = std::fs::read_dir(&self.root) else { return 0 };
+        let Ok(rd) = std::fs::read_dir(&self.root) else {
+            return 0;
+        };
         for e in rd.flatten() {
             let book_dir = e.path();
             if !book_dir.is_dir() {
                 continue;
             }
-            let Ok(files) = std::fs::read_dir(&book_dir) else { continue };
+            let Ok(files) = std::fs::read_dir(&book_dir) else {
+                continue;
+            };
             for f in files.flatten() {
                 let name = f.file_name();
                 let name = name.to_string_lossy();
                 // 文件名形如 `000000@240x240.jpg`：index 段为 000000 即首页。
-                if name.starts_with("000000@")
-                    && std::fs::remove_file(f.path()).is_ok()
-                {
+                if name.starts_with("000000@") && std::fs::remove_file(f.path()).is_ok() {
                     n += 1;
                 }
             }
@@ -187,10 +189,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "mr-rc-bad-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("mr-rc-bad-{}-{nanos}", std::process::id()));
         let rc = RenderCache::new(dir.clone());
         rc.put("book1", 3, 800, 1200, b"not-a-jpeg");
         assert_eq!(rc.get("book1", 3, 800, 1200), None);
@@ -204,10 +203,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let base = std::env::temp_dir().join(format!(
-            "mr-rc-safe-{}-{nanos}",
-            std::process::id()
-        ));
+        let base = std::env::temp_dir().join(format!("mr-rc-safe-{}-{nanos}", std::process::id()));
         let rc = RenderCache::new(base.join("render"));
         std::fs::create_dir_all(&base).unwrap();
         let victim = base.join("victim.txt");
@@ -228,7 +224,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mr-rc-{}", std::process::id()));
         let rc = RenderCache::new(dir.clone());
         rc.put("book1", 3, 800, 1200, &jpeg);
-        assert_eq!(rc.get("book1", 3, 800, 1200).as_deref(), Some(jpeg.as_slice()));
+        assert_eq!(
+            rc.get("book1", 3, 800, 1200).as_deref(),
+            Some(jpeg.as_slice())
+        );
         assert_eq!(rc.get("book1", 4, 800, 1200), None);
         rc.remove_book("book1");
         assert_eq!(rc.get("book1", 3, 800, 1200), None);

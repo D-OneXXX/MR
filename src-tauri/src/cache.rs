@@ -34,9 +34,7 @@ struct ByteLru<K: Hash + Eq> {
 impl<K: Hash + Eq + Clone> ByteLru<K> {
     fn new(limit_bytes: u64, cap_entries: usize) -> Self {
         Self {
-            inner: LruCache::new(
-                NonZeroUsize::new(cap_entries.max(16)).expect("cap>0"),
-            ),
+            inner: LruCache::new(NonZeroUsize::new(cap_entries.max(16)).expect("cap>0")),
             bytes: 0,
             limit: limit_bytes.max(1),
         }
@@ -136,13 +134,26 @@ impl ImageCache {
     }
 
     /// 页缓存：命中 (book, index, req_w, req_h) 返回克隆。
-    pub fn get_page(&self, book_id: &str, index: u32, req_w: u32, req_h: u32) -> Option<RenderedPage> {
+    pub fn get_page(
+        &self,
+        book_id: &str,
+        index: u32,
+        req_w: u32,
+        req_h: u32,
+    ) -> Option<RenderedPage> {
         self.pages
             .lock()
             .get(&(book_id.to_string(), index, req_w, req_h))
     }
 
-    pub fn put_page(&self, book_id: &str, index: u32, req_w: u32, req_h: u32, mut page: RenderedPage) {
+    pub fn put_page(
+        &self,
+        book_id: &str,
+        index: u32,
+        req_w: u32,
+        req_h: u32,
+        mut page: RenderedPage,
+    ) {
         // L1 只留 data_url：bytes 的权威副本在磁盘 L2，双份驻留等于浪费一半预算。
         page.bytes = Vec::new();
         self.pages
@@ -153,9 +164,7 @@ impl ImageCache {
     /// 删除书籍时级联清理：该书缩略图 + 全部页缓存 + 条漫切片。
     pub fn remove_book(&self, book_id: &str) {
         self.thumbs.lock().remove_by(|k| k == book_id);
-        self.pages
-            .lock()
-            .remove_by(|(b, _, _, _)| b == book_id);
+        self.pages.lock().remove_by(|(b, _, _, _)| b == book_id);
         self.tiles.lock().remove_by(|(b, _, _, _)| b == book_id);
     }
 
@@ -179,7 +188,9 @@ impl ImageCache {
 
     /// 条漫切片缓存（虚拟化滚动的高频小对象，独立 48MB 预算）。
     pub fn get_tile(&self, book_id: &str, index: u32, tile: u32, w: u32) -> Option<RenderedPage> {
-        self.tiles.lock().get(&(book_id.to_string(), index, tile, w))
+        self.tiles
+            .lock()
+            .get(&(book_id.to_string(), index, tile, w))
     }
 
     pub fn put_tile(&self, book_id: &str, index: u32, tile: u32, w: u32, mut page: RenderedPage) {

@@ -102,8 +102,7 @@ fn unique_download_path(dir: &Path, filename: &str) -> PathBuf {
 }
 
 fn url_download_name(url: &Url) -> Option<String> {
-    let last = url
-        .path_segments()?.rfind(|segment| !segment.is_empty())?;
+    let last = url.path_segments()?.rfind(|segment| !segment.is_empty())?;
     Some(
         percent_encoding::percent_decode_str(last)
             .decode_utf8_lossy()
@@ -263,8 +262,7 @@ fn navigation_allowed(url: &Url) -> bool {
         return false;
     }
     // 开发态应用源（Vite dev server）同样禁止：远程页跳到它就等于拿到应用 Origin。
-    if (host == "localhost" || host == "127.0.0.1" || host == "[::1]") && url.port() == Some(1420)
-    {
+    if (host == "localhost" || host == "127.0.0.1" || host == "[::1]") && url.port() == Some(1420) {
         return false;
     }
     true

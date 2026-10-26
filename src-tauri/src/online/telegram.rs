@@ -108,9 +108,7 @@ fn test_origin() -> Option<String> {
     let origin = origin.trim().trim_end_matches('/').to_string();
     let u = url::Url::parse(&origin).ok()?;
     let host = u.host_str()?.to_ascii_lowercase();
-    if matches!(u.scheme(), "http" | "https")
-        && (host == "127.0.0.1" || host == "localhost")
-    {
+    if matches!(u.scheme(), "http" | "https") && (host == "127.0.0.1" || host == "localhost") {
         Some(origin)
     } else {
         None
@@ -253,10 +251,7 @@ fn parse_channel_html(
     let groups = group_messages(messages);
     let mut chapters = Vec::new();
     for group in groups {
-        if group.photos.is_empty()
-            && group.telegraph.is_none()
-            && group.document.is_none()
-        {
+        if group.photos.is_empty() && group.telegraph.is_none() && group.document.is_none() {
             continue;
         }
         let message_id = group.first_id;
@@ -270,12 +265,7 @@ fn parse_channel_html(
                 Some(document),
             )
         } else if let Some(telegraph) = group.telegraph {
-            (
-                TelegramChapterKind::Telegraph,
-                telegraph,
-                None,
-                None,
-            )
+            (TelegramChapterKind::Telegraph, telegraph, None, None)
         } else {
             (
                 TelegramChapterKind::Photos,
@@ -307,11 +297,7 @@ fn parse_channel_html(
     })
 }
 
-fn get_html(
-    http: &dyn HttpTransport,
-    url: &str,
-    referer: &str,
-) -> Result<String, BackendError> {
+fn get_html(http: &dyn HttpTransport, url: &str, referer: &str) -> Result<String, BackendError> {
     let resp = http.get(url, MANIFEST_MAX_BYTES, Some(referer), Some(url))?;
     if !(200..300).contains(&resp.status) {
         return Err(BackendError::Network(format!(
@@ -331,9 +317,7 @@ pub fn resolve_book(
     thresholds: &FilterThresholds,
 ) -> Result<OnlineBookMeta, BackendError> {
     match normalize_target(raw_url)? {
-        TelegramTarget::Telegraph { url } => {
-            resolve_telegraph(http, &url, memory, thresholds)
-        }
+        TelegramTarget::Telegraph { url } => resolve_telegraph(http, &url, memory, thresholds),
         TelegramTarget::Message {
             channel,
             message_id,
@@ -373,9 +357,7 @@ fn resolve_message(
             return resolve_telegraph(http, telegraph, memory, thresholds);
         }
         if message.document.is_some() {
-            return Err(BackendError::Msg(
-                "压缩包附件请使用下载按钮导入".into(),
-            ));
+            return Err(BackendError::Msg("压缩包附件请使用下载按钮导入".into()));
         }
         return Err(BackendError::Msg(
             "未找到正文图片；该消息可能是纯文本或贴纸".into(),
@@ -507,8 +489,8 @@ pub fn refresh_page_url(
         .as_deref()
         .unwrap_or("https://t.me")
         .trim_end_matches('/');
-    let base_url = url::Url::parse(base)
-        .map_err(|e| BackendError::Msg(format!("刷新基地址无效：{e}")))?;
+    let base_url =
+        url::Url::parse(base).map_err(|e| BackendError::Msg(format!("刷新基地址无效：{e}")))?;
     let host = base_url.host_str().unwrap_or("").to_ascii_lowercase();
     let local = host == "127.0.0.1" || host == "localhost";
     if !matches!(base_url.scheme(), "http" | "https")
@@ -516,10 +498,7 @@ pub fn refresh_page_url(
     {
         return Err(BackendError::Msg("刷新基地址不在允许范围".into()));
     }
-    let url = format!(
-        "{base}/{}/{}?embed=1",
-        anchor.channel, anchor.message_id
-    );
+    let url = format!("{base}/{}/{}?embed=1", anchor.channel, anchor.message_id);
     let html = get_html(http, &url, "https://t.me/")?;
     let photos = parse_messages(&html)
         .into_iter()
@@ -584,10 +563,9 @@ impl MessageGroup {
 }
 
 fn parse_messages(html: &str) -> Vec<ParsedMessage> {
-    let wrap_re = Regex::new(
-        r#"(?is)<div[^>]*class="(?:[^"]*\s)?tgme_widget_message(?:\s[^"]*)?"[^>]*>"#,
-    )
-    .expect("message regex");
+    let wrap_re =
+        Regex::new(r#"(?is)<div[^>]*class="(?:[^"]*\s)?tgme_widget_message(?:\s[^"]*)?"[^>]*>"#)
+            .expect("message regex");
     let mut starts = Vec::new();
     for m in wrap_re.find_iter(html) {
         starts.push((m.start(), m.end(), m.as_str().to_string()));
@@ -602,11 +580,7 @@ fn parse_messages(html: &str) -> Vec<ParsedMessage> {
         let Some(post) = attr(tag, "data-post") else {
             continue;
         };
-        let Some(id) = post
-            .rsplit('/')
-            .next()
-            .and_then(|v| v.parse::<i64>().ok())
-        else {
+        let Some(id) = post.rsplit('/').next().and_then(|v| v.parse::<i64>().ok()) else {
             continue;
         };
         let grouped_id = attr(tag, "data-grouped-id").filter(|v| !v.trim().is_empty());
@@ -641,11 +615,11 @@ fn group_messages(messages: Vec<ParsedMessage>) -> Vec<MessageGroup> {
             }
         }
         let can_merge = groups.last().is_some_and(|last| {
-            let current_photo_only =
-                !message.photos.is_empty() && message.telegraph.is_none() && message.document.is_none();
-            let last_photo_only = last.telegraph.is_none()
-                && last.document.is_none()
-                && !last.photos.is_empty();
+            let current_photo_only = !message.photos.is_empty()
+                && message.telegraph.is_none()
+                && message.document.is_none();
+            let last_photo_only =
+                last.telegraph.is_none() && last.document.is_none() && !last.photos.is_empty();
             current_photo_only
                 && last_photo_only
                 && message.id - last.first_id <= 1
@@ -707,10 +681,9 @@ fn extract_article(html: &str) -> &str {
 }
 
 fn message_text(block: &str) -> String {
-    let re = Regex::new(
-        r#"(?is)<div[^>]*class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>"#,
-    )
-    .expect("text regex");
+    let re =
+        Regex::new(r#"(?is)<div[^>]*class="[^"]*tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>"#)
+            .expect("text regex");
     re.captures(block)
         .map(|c| decode_entities(&strip_tags(&c[1])))
         .map(|s| s.replace('\u{00a0}', " "))
@@ -718,14 +691,10 @@ fn message_text(block: &str) -> String {
 }
 
 fn message_photos(block: &str) -> Vec<String> {
-    let wrap = Regex::new(
-        r#"(?is)<a[^>]*class="[^"]*tgme_widget_message_photo_wrap[^"]*"[^>]*>"#,
-    )
-    .expect("photo regex");
-    let style = Regex::new(
-        r#"(?is)background-image\s*:\s*url\(\s*["']?([^"')]+)["']?\s*\)"#,
-    )
-    .expect("style regex");
+    let wrap = Regex::new(r#"(?is)<a[^>]*class="[^"]*tgme_widget_message_photo_wrap[^"]*"[^>]*>"#)
+        .expect("photo regex");
+    let style = Regex::new(r#"(?is)background-image\s*:\s*url\(\s*["']?([^"')]+)["']?\s*\)"#)
+        .expect("style regex");
     let img = Regex::new(r#"(?is)<img[^>]+src\s*=\s*["']([^"']+)["']"#).expect("img regex");
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -792,13 +761,11 @@ fn message_document(block: &str) -> Option<TelegramDocument> {
         .filter(|v| !v.is_empty())
         .map(str::to_string)
         .or_else(|| {
-            url::Url::parse(&url)
-                .ok()
-                .and_then(|u| {
-                    u.path_segments()
-                        .and_then(|mut s| s.rfind(|x| !x.is_empty()))
-                        .map(str::to_string)
-                })
+            url::Url::parse(&url).ok().and_then(|u| {
+                u.path_segments()
+                    .and_then(|mut s| s.rfind(|x| !x.is_empty()))
+                    .map(str::to_string)
+            })
         })
         .unwrap_or_else(|| "telegram.cbz".into());
     // Telegram CDN 文档直链常常没有扩展名；以消息里的文件名为准，
@@ -1098,7 +1065,11 @@ mod tests {
             <figure><img src="/file/logo.png" width="96" height="96"></figure>
         </article></body></html>"#;
         let http = MapHttp::new(vec![
-            ("https://telegra.ph/QA-Test-01", 200, html.as_bytes().to_vec()),
+            (
+                "https://telegra.ph/QA-Test-01",
+                200,
+                html.as_bytes().to_vec(),
+            ),
             ("https://telegra.ph/file/a.png", 200, png(800, 1200)),
             ("https://telegra.ph/file/b.png", 200, png(800, 1200)),
             ("https://telegra.ph/file/c.png", 200, png(800, 1200)),

@@ -213,12 +213,40 @@ fn tokens(value: &str) -> impl Iterator<Item = String> + '_ {
 
 fn is_chrome_class(value: &str) -> bool {
     const EXACT: &[&str] = &[
-        "ad", "ads", "adv", "advert", "banner", "promo", "sponsor", "comment", "comments",
-        "sidebar", "recommend", "related", "share", "menu", "breadcrumb", "toolbar",
+        "ad",
+        "ads",
+        "adv",
+        "advert",
+        "banner",
+        "promo",
+        "sponsor",
+        "comment",
+        "comments",
+        "sidebar",
+        "recommend",
+        "related",
+        "share",
+        "menu",
+        "breadcrumb",
+        "toolbar",
     ];
     const CONTAINS: &[&str] = &[
-        "header", "footer", "nav", "logo", "avatar", "qrcode", "watermark", "thumb", "icon",
-        "loading", "placeholder", "sprite", "button", "btn", "sticker", "emoji",
+        "header",
+        "footer",
+        "nav",
+        "logo",
+        "avatar",
+        "qrcode",
+        "watermark",
+        "thumb",
+        "icon",
+        "loading",
+        "placeholder",
+        "sprite",
+        "button",
+        "btn",
+        "sticker",
+        "emoji",
     ];
     let lower = value.to_ascii_lowercase();
     tokens(&lower).any(|token| EXACT.contains(&token.as_str()))
@@ -504,10 +532,7 @@ mod tests {
         assert_eq!(meta.page_count, 30);
         let stored: crate::online::StoredMeta = serde_json::from_str(&meta.meta_json).unwrap();
         assert!(stored.filtered.len() >= 5);
-        assert!(stored
-            .filtered
-            .iter()
-            .any(|p| p.reason.contains("chrome")));
+        assert!(stored.filtered.iter().any(|p| p.reason.contains("chrome")));
         assert!(stored.filtered.iter().any(|p| {
             p.reason.contains("small")
                 || p.reason.contains("banner")
@@ -622,10 +647,7 @@ mod tests {
     fn viewer_only_page_is_rejected() {
         let page = url::Url::parse("http://gallery.example/g/1/token").unwrap();
         let html = br#"<html><body><a href="/s/abc/1-1">1</a></body></html>"#;
-        let err = parse_gallery(html, &page, &page)
-            .err()
-            .unwrap()
-            .to_string();
+        let err = parse_gallery(html, &page, &page).err().unwrap().to_string();
         assert_eq!(
             err,
             "未找到可读图片；分页查看器或依赖 JS 的页面不在支持范围"

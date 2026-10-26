@@ -45,7 +45,8 @@ impl OnlinePageCache {
     }
 
     fn book_dir(&self, book_id: &str) -> PathBuf {
-        self.root.join(hex::encode(Sha256::digest(book_id.as_bytes())))
+        self.root
+            .join(hex::encode(Sha256::digest(book_id.as_bytes())))
     }
 
     fn key(url: &str, referer: &str) -> String {
@@ -80,14 +81,7 @@ impl OnlinePageCache {
     }
 
     /// 成功落盘返回 true；非法图片、空内容或超限内容不写。
-    pub fn put(
-        &self,
-        book_id: &str,
-        url: &str,
-        referer: &str,
-        ext: &str,
-        bytes: &[u8],
-    ) -> bool {
+    pub fn put(&self, book_id: &str, url: &str, referer: &str, ext: &str, bytes: &[u8]) -> bool {
         let Some(ext) = normalize_ext(ext) else {
             return false;
         };
@@ -193,7 +187,9 @@ fn walk(root: &Path) -> (u64, u64) {
         let Ok(rd) = fs::read_dir(&dir) else { continue };
         for entry in rd.flatten() {
             let path = entry.path();
-            let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
             if meta.file_type().is_symlink() {
                 continue;
             }
@@ -251,7 +247,9 @@ fn collect_files(root: &Path, out: &mut Vec<(SystemTime, PathBuf, u64)>, total: 
         let Ok(rd) = fs::read_dir(&dir) else { continue };
         for entry in rd.flatten() {
             let path = entry.path();
-            let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
             if meta.file_type().is_symlink() {
                 continue;
             }
@@ -371,9 +369,7 @@ mod tests {
         let root = temp_root("corrupt");
         let cache = OnlinePageCache::new(root.join("online"));
         assert!(!cache.put("book", "http://x/1.png", "http://x/ch", "png", b"not-png"));
-        assert!(cache
-            .get("book", "http://x/1.png", "http://x/ch")
-            .is_none());
+        assert!(cache.get("book", "http://x/1.png", "http://x/ch").is_none());
         assert_eq!(cache.disk_bytes(), 0, "坏文件不能进入缓存");
         std::fs::remove_dir_all(root).ok();
     }
@@ -387,21 +383,15 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         assert!(cache.put("book", "http://x/2.png", "http://x/ch", "png", &png));
         std::thread::sleep(Duration::from_millis(30));
-        assert!(cache
-            .get("book", "http://x/1.png", "http://x/ch")
-            .is_some());
+        assert!(cache.get("book", "http://x/1.png", "http://x/ch").is_some());
         let removed = trim_total(&[cache.root()], 100);
         assert!(removed > 0);
         assert!(
-            cache
-                .get("book", "http://x/1.png", "http://x/ch")
-                .is_some(),
+            cache.get("book", "http://x/1.png", "http://x/ch").is_some(),
             "刚读过的页应保留"
         );
         assert!(
-            cache
-                .get("book", "http://x/2.png", "http://x/ch")
-                .is_none(),
+            cache.get("book", "http://x/2.png", "http://x/ch").is_none(),
             "最久未用的页应淘汰"
         );
         std::fs::remove_dir_all(root).ok();
@@ -414,13 +404,7 @@ mod tests {
         let cache = OnlinePageCache::new(root.join("online"));
         render.put("book", 0, 100, 100, &[1u8; 80]);
         std::thread::sleep(Duration::from_millis(30));
-        assert!(cache.put(
-            "book",
-            "http://x/1.png",
-            "http://x/ch",
-            "png",
-            &tiny_png()
-        ));
+        assert!(cache.put("book", "http://x/1.png", "http://x/ch", "png", &tiny_png()));
         assert!(trim_total(&[render.root(), cache.root()], 100) > 0);
         assert_eq!(render.disk_bytes(), 0, "更旧的 render 文件应被淘汰");
         assert!(cache.disk_bytes() > 0);
@@ -435,13 +419,7 @@ mod tests {
         let cache_root = root.join("cache");
         let cache = OnlinePageCache::new(cache_root.join("online"));
         let render = crate::render_cache::RenderCache::new(cache_root.join("render"));
-        assert!(cache.put(
-            "book",
-            "http://x/1.png",
-            "http://x/ch",
-            "png",
-            &tiny_png()
-        ));
+        assert!(cache.put("book", "http://x/1.png", "http://x/ch", "png", &tiny_png()));
         render.put("book", 0, 100, 100, &[2u8; 80]);
         cache.clear_all();
         render.clear_all();

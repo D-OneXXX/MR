@@ -318,3 +318,56 @@ grep -rn "push:" .github/workflows/    # 不得出现 tags 触发
 - **干净 VM 的重复执行**：本节结果来自共享宿主，**不是**一次性干净 VM；
   正式发布前应在干净 VM 上用同一脚本重跑一次（脚本已就绪，命令见 `docs/dev/RELEASE.md` §4.2）。
 - **跨版本升级（0.17.1 → 0.17.2）**：版本 bump 未授权，尚未覆盖。
+
+---
+
+## 11. 最终发布就绪报告（2026-10-26）
+
+### 11.1 VERIFIED（已验证，有可复现证据）
+
+| 项 | 证据 |
+|---|---|
+| 已发布版本的签名信任链完好 | 官方 minisign 0.12 验证 `v0.17.1` 安装包：`Signature and comment signature verified`（对应 `tauri.conf.json` 的公钥，ID `67CB304460E08E4A`） |
+| 本机私钥与配置公钥是同一把 | 本机 `updater.key` 签名的探针用同一公钥验签通过 |
+| Environment 级 Secret 产出有效签名 | 隔离演练 Draft 制品（由 Environment Secret 签名）验签通过 |
+| 签名 Secret 已收敛到 Environment | 仓库级 Secret = 0；`release-windows` / `release-linux` 各 2 项；**验证与验签成功后才删除仓库级副本** |
+| Tag 推送不再公开发布 | 推送 `v0.0.0-rehearsal` 后无任何发版 workflow 触发；仓库内无 `push: tags:` |
+| 人工审批门禁真实生效 | deployment `7325926128` 状态 `waiting`，`required_reviewers=["User#D-OneXXX"]`，单人可审批，未审批则 job 不执行 |
+| 候选只建 Draft | 演练 Draft `isDraft=true`；`releases/latest` 仍是 `v0.17.1-linux-sec1`；公开清单字节未变 |
+| 发布链路三重拒绝 | 演练标签（工作层）、演练候选（闸门层）、证据缺失/过期/不匹配（证据层）均拒绝 |
+| 发布证据门禁可用 | 真实安装证据 + 官方 minisign 签名证据跑 `verify-evidence.mjs` → OK（版本/Commit/平台/制品摘要全部对齐） |
+| Windows 全新安装 / 覆盖升级 / 回滚 | 真实 NSIS 安装执行通过（见第 10 节）：注册项、版本、启动、数据存活均正常 |
+| 阅读进度与 SQLite 数据完整性 | 升级 + 回滚后：书仍 8 本、`QA Local Folder` 进度仍为 3 |
+| 双通道独立 | Windows / Linux 各自工作流、Environment、端点、并发组；跨通道发布被拒绝 |
+| 权限收敛 | 工作流级 `contents: read`，发布 job 单独 `contents: write` 且不持私钥；默认权限 `read` |
+| 自动化回归 | 隔离演练 30/30；`npm run test:release` 全绿；静态 QA 全绿；CI 三条工作流全绿 |
+
+### 11.2 BLOCKED（当前环境无法完成，未伪造通过）
+
+| 项 | 原因 | 解除方式 |
+|---|---|---|
+| 干净 Windows VM 上的安装/升级/回滚复跑 | 本机是共享宿主（Windows 11 工作站），不是一次性干净 VM | 在干净 VM 上用 `scripts/release-smoke/windows-install-upgrade.ps1` 跑两遍（全新安装 + 覆盖升级/回滚，用 `-MergeFrom` 合并），把 `install-verification.json` 上传到 Draft |
+| 跨版本升级（0.17.1 → 0.17.2） | 版本 bump 未授权 | 授权 bump 后用 0.17.2 候选安装包重跑同一套验证 |
+| 正式候选的安装证据 | 现有证据绑定的是 0.17.1 候选 | 0.17.2 候选产生后必须重跑（证据绑定版本 + 制品摘要，不复用旧证据） |
+| Linux 通道的安装/升级验证 | 无 Linux 主机 | Linux 通道的发布强制条件同样需要一份 Linux 安装证据 |
+| 正式发布本身 | 未授权 | 待上述条件齐备并经人工审批后，由维护者触发 |
+
+### 11.3 NOT_VERIFIED（当前无法验证，不代表正常）
+
+| 项 | 说明 |
+|---|---|
+| 非演练候选的「Draft → 审批 → 公开」全链路 | 演练证明了**拒绝路径**与审批门禁；正式发布路径未执行（无授权） |
+| 已安装的**发布版**应用被 CDP 驱动 | 发布版构建未暴露 CDP target（安装脚本以进程存活判断，核验读数用同 schema 的调试构建） |
+| minisign 工具自身的发布签名 | 上游未在仓库内公布其发布用公钥，无法离线验证；工具来源为官方 GitHub Release，摘要已固定在 `minisign.digests.json` |
+| 真实用户目录下的升级迁移 | 超出隐私边界，不做自动化 |
+
+### 11.4 需要维护者亲自完成的最小操作
+
+1. **在干净 Windows VM 上重跑安装/升级/回滚验证**（绑定最终候选安装包），并把
+   `install-verification.json` 上传为 Draft 资产（命令见 `docs/dev/RELEASE.md` §4.2）。
+2. **确认 Environment Secret 的密钥来源**：当前用的是本机已验签的
+   `%USERPROFILE%\.mangareader-updater\updater.key`；若你另有权威副本，重新写入两个
+   Environment 即可（仓库级副本已删除）。
+3. **授权版本 bump 到 0.17.2**（本轮保持 0.17.1，未推 Tag、未发布）。
+4. **决定演练标签与 Draft 的去留**：`v0.0.0-rehearsal` 及其 Draft 已按要求保留；
+   ruleset 保护 `v*` 标签的删除/修改，清理需要豁免或接受保留。

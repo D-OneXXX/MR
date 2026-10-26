@@ -67,7 +67,7 @@ jobs:
             exit 1
           fi
           COMMIT="$(git rev-parse HEAD)"
-          git fetch --no-tags origin main
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
             echo "候选 Commit $COMMIT 不在 main 上，拒绝发布" >&2
             exit 1
@@ -75,6 +75,21 @@ jobs:
           echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      # 发布门禁必须用**当前 main 上的治理脚本**执行，而不是标签提交里的旧副本。
+      # 1) 门禁是「工具」：候选身份由 tag / commit / 平台 / 每个制品 SHA-256 单独绑定，
+      #    工具版本不参与候选身份；
+      # 2) 候选创建之后若治理脚本修过缺陷（例如回执契约统一），标签里的旧副本会让
+      #    正式发布**必然失败**——只剩「绕过门禁」一条路可走，与「缺证据即拒绝」的
+      #    设计目标正好相反；
+      # 3) main 受保护（PR + CI + PR 治理门禁），门禁脚本的每次改动都经过评审。
+      - name: Use current release-gate tooling from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git checkout FETCH_HEAD -- scripts/
+          echo "发布门禁脚本已对齐 main（$(git rev-parse --short FETCH_HEAD)）"
 
       - name: Inspect release state
         id: state

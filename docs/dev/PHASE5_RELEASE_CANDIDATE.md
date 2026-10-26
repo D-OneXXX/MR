@@ -78,9 +78,9 @@ GitHub Actions + Environments / Node 22（QA harness）
 
 ---
 
-## 3. 本轮实测发现并修复的四个真实缺陷
+## 3. 本轮实测发现并修复的五个真实缺陷
 
-这四个缺陷都**发生在门禁之前或门禁内部**，发布门禁自己无法发现；其中三个会**直接阻断正式发布**。
+这五个缺陷都**发生在门禁之前或门禁内部**，发布门禁自己无法发现；其中三个会**直接阻断正式发布**。
 
 | # | 缺陷 | 现象 | 根因 | 修复 |
 |---|---|---|---|---|
@@ -88,9 +88,15 @@ GitHub Actions + Environments / Node 22（QA harness）
 | 2 | **卸载路径解析错误**（安装验证假失败） | 脚本末尾「卸载后卸载列表不再包含 MangaReader」恒失败，`verdict` 恒为 FAIL | 注册表 `UninstallString` 是**带引号且含空格**的路径（`"C:\Program Files\…"`），脚本用 `.Split(" ")[0]` 截成 `"C:\Program`，卸载器从未执行 | 正确解析引号路径；并对 NSIS 卸载器的**异步清理**做 30s 有界轮询（不弱化断言） |
 | 3 | **minisign 在 Windows 上装不上**（发布阻断级） | `Expand-Archive: NotSupportedArchiveFileExtension`，发布流水线第一步就崩 | 压缩包临时文件丢掉了 `.zip` 扩展名，而 PowerShell `Expand-Archive` 只接受 `.zip` | 按 URL 保留真实扩展名（新增 `resolveArchiveName`），并检查解压命令退出码 |
 | 4 | **minisign 定位不到 / 选错架构**（发布阻断级） | 报「找不到 minisign」；修复后又命中 `aarch64` 可执行文件而静默拿不到结果 | 官方包解压后位于 `tools/minisign/minisign-win64/x86_64/`，脚本只找扁平路径；递归查找时又未按架构排序 | 递归定位 `tools/minisign` 且**优先宿主架构**；失败时输出工具执行错误 |
+| 5 | **发布门禁用标签里的旧脚本**（发布阻断级 + 结构性） | 缺陷 1 修好后仍发不了：标签 `v0.17.2` 被 ruleset 固定在 `f331782`（修复之前），而发布工作流从**标签提交**取门禁脚本 → 仍然按旧契约判「疑似审批后替换制品」 | 发布工作流 `actions/checkout` 标签后再跑仓库里的门禁脚本，等于把「门禁实现版本」与「候选身份」绑死；而 `v*` 标签禁止改删，候选创建后修过门禁就再也无法正式发布——只剩「绕过门禁」一条路 | 发布工作流改为执行 **main 上的当前治理脚本**（`git checkout FETCH_HEAD -- scripts/`）：候选身份仍由 tag / commit / 平台 / 每个制品 SHA-256 单独绑定，门禁实现版本不参与绑定；main 受保护（PR + CI + PR 治理门禁）。静态守卫新增该检查防回退 |
+
+> 缺陷 5 的边界说明：它**不放宽**任何门禁——main 上的门禁比标签里的更严（多了干净环境强制条件）。
+> 它消除的是「候选创建后修过门禁 ⇒ 正式发布必然失败 ⇒ 只能绕过」这条结构性死路。
+> 若要彻底避免，可用新版本号重新切候选；本轮沿用维护者授权的 0.17.2。
 
 回归保护：新增 `scripts/release-governance/minisign-tooling.test.mjs`（5 项）并入 `npm run test:release`；
-`rc-record.test.mjs` 与 `evidence.test.mjs` 新增契约与干净环境用例；演练新增 I8 场景。
+`rc-record.test.mjs` 与 `evidence.test.mjs` 新增契约与干净环境用例；演练新增 I8 场景；
+静态守卫新增「发布工作流必须用 main 的当前门禁脚本」。
 
 ---
 
@@ -265,7 +271,8 @@ GitHub Actions + Environments / Node 22（QA harness）
 | `scripts/release-governance/evidence.test.mjs` / `rc-record.test.mjs` | 新增干净环境与契约用例 |
 | `scripts/release-governance/rehearse.mjs` | 夹具对齐唯一契约；新增 I8 场景 |
 | `scripts/release-smoke/windows-install-upgrade.ps1` | 新增 `-CleanEnvironment` / `-ImageName`；修复卸载路径解析；卸载后有界轮询 |
-| `tests/qa/suites/static.mjs` | 静态守卫守住三处 `cleanEnvironment` 契约 |
+| `tests/qa/suites/static.mjs` | 静态守卫守住三处 `cleanEnvironment` 契约；新增「发布工作流必须用 main 的当前门禁脚本」 |
+| `.github/workflows/release-publish.yml` / `release-publish-linux.yml` | 发布门禁改用 main 上的当前治理脚本；`git fetch` 改用显式 refspec 保证 `origin/main` 存在 |
 | `.gitignore` | 忽略本地工具目录 `tools/` |
 | `docs/TESTING.md` | CI 门禁章节更新为现有工作流；新增 `visual:theme-token` 观察条目 |
 | `docs/dev/RELEASE.md` | 发布流水线描述更新为「候选 → Draft → 审批 → 发布」；§4.2 补干净 VM 参数 |

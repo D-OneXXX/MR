@@ -143,81 +143,53 @@ jobs:
           npm audit --omit=dev --audit-level=high
 
       # ---------- 构建 + 签名（签名私钥来自 Environment 级 Secret） ----------
-      - name: Build signed NSIS bundle
+      # tauri-action 负责：签名、生成 updater 包（.nsis.zip）与 latest.json、
+      # 上传资产，并且**只创建 Draft**（releaseDraft: true）。
+      # 旧的 release-windows.yml 用的就是它（v0.17.0/v0.17.1 的更新清单由它产出），
+      # 这里保留同一条成熟路径，只把「直接发布」换成「建 Draft」。
+      - name: Build signed NSIS bundle → Draft
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           MR_BUILD_ORIGIN: official
-        run: npm run tauri -- build --bundles nsis
+        with:
+          tagName: ${{ steps.identity.outputs.tag }}
+          releaseName: MangaReader ${{ steps.identity.outputs.tag }}
+          releaseBody: |
+            Release Candidate（**Draft，未公开**）。
+            审批通过后由 release-publish 工作流校验绑定并发布。
+            RC 记录（版本 / Commit / 制品 SHA-256 / 平台）见资产 rc-record.json。
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: "--bundles nsis"
 
-      - name: Collect candidate artifacts
-        id: artifacts
+      - name: Download Draft assets for verification
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
         run: |
           set -euo pipefail
-          mkdir -p candidate
-          PREFIX=""
-          if [ "${{ inputs.rehearsal }}" = "true" ]; then
-            PREFIX="rehearsal-"
-          fi
-          for file in src-tauri/target/release/bundle/nsis/*.exe; do
-            [ -e "$file" ] || continue
-            cp "$file" "candidate/${PREFIX}$(basename "$file")"
-          done
-          for file in src-tauri/target/release/bundle/nsis/latest.json src-tauri/target/release/bundle/nsis/*.sig; do
-            [ -e "$file" ] || continue
-            cp "$file" "candidate/${PREFIX}$(basename "$file")"
-          done
+          rm -rf candidate && mkdir -p candidate
+          gh release download "$TAG" --dir candidate --clobber
           ls -l candidate/
-
       - name: Verify updater manifest (pre-Draft)
         shell: bash
         run: |
           set -euo pipefail
           MANIFEST="candidate/latest.json"
-          if [ "${{ inputs.rehearsal }}" = "true" ]; then
-            MANIFEST="candidate/rehearsal-latest.json"
-          fi
           if [ ! -f "$MANIFEST" ]; then
-            echo "缺少更新清单（createUpdaterArtifacts 应产出）：$MANIFEST" >&2
+            echo "缺少更新清单（tauri-action 应产出 latest.json）：$MANIFEST" >&2
             exit 1
           fi
           node scripts/verify-updater-manifest.mjs "$MANIFEST" \
             --require-platform windows-x86_64
 
       # ---------- 只创建 Draft：绝不公开发布 ----------
-      - name: Create or reuse Draft release
-        id: draft
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.identity.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null | grep -qx true; then
-            echo "Draft 已存在，复用：$TAG"
-          else
-            if [ "${{ inputs.rehearsal }}" = "true" ]; then
-              gh release create "$TAG" --verify-tag --draft \
-                --title "REHEARSAL · 非正式演练 · 不得发布 ($TAG)" \
-                --notes "隔离演练产物：所有资产带 rehearsal- 前缀，绝不公开。"
-            else
-              gh release create "$TAG" --verify-tag --draft \
-                --title "MangaReader $TAG (Draft · 待审批)" \
-                --notes "Release Candidate：待人工审批后才会发布。"
-            fi
-          fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
-      - name: Upload candidate artifacts to Draft
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.identity.outputs.tag }}
-        run: |
-          set -euo pipefail
-          gh release upload "$TAG" candidate/* --clobber
-
       - name: Build and upload RC record
         shell: bash
         env:

@@ -39,6 +39,13 @@ export const CHANNELS = {
   },
 };
 
+/** 治理文件（记录/摘要/安装验证回执）：不是构建产物，不参与制品摘要比对。 */
+export const GOVERNANCE_FILES = new Set([
+  "rc-record.json",
+  "rc-summary.md",
+  "install-verification.json",
+]);
+
 const HEX40 = /^[0-9a-f]{40}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const SEMVER = /^\d+\.\d+\.\d+$/;
@@ -272,7 +279,11 @@ export function verifyPublishPreconditions(input) {
   }
 
   // 制品摘要必须与实际下载到的文件一致（审批后替换制品会被这里抓住）。
-  const digests = input.actualDigests || new Map();
+  const digests = new Map(
+    [...(input.actualDigests || new Map())].filter(
+      ([name]) => !GOVERNANCE_FILES.has(name),
+    ),
+  );
   for (const item of record.artifacts) {
     const actual = digests.get(item.name);
     if (actual === undefined) {

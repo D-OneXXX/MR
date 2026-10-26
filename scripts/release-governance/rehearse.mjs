@@ -102,6 +102,64 @@ class FakeReleaseStore {
   }
 }
 
+const REHEARSAL_BOOK_ID = "1".repeat(64);
+const REHEARSAL_SNAPSHOT = "c".repeat(64);
+
+/** 与安装脚本产出的 library 结构一致：数据库自检 + 进度 + 真实 IPC 回读。 */
+function makeLibrary(overrides = {}) {
+  return {
+    quickCheck: "ok",
+    schemaVersionBefore: 1,
+    schemaVersionAfter: 1,
+    bookCount: 1,
+    readingLogRows: 2,
+    readingLogPages: 3,
+    books: [
+      {
+        id: REHEARSAL_BOOK_ID,
+        title: "Release Smoke Book",
+        pageCount: 3,
+        currentPage: 2,
+        scrollPct: 0.5,
+        removed: 0,
+        sourceType: "local",
+      },
+    ],
+    ipc: {
+      ok: true,
+      source: "list_books",
+      bookId: REHEARSAL_BOOK_ID,
+      title: "Release Smoke Book",
+      currentPage: 2,
+      scrollPct: 0.5,
+      bookCount: 1,
+      checkedAt: new Date().toISOString(),
+    },
+    snapshotSha256: REHEARSAL_SNAPSHOT,
+    verifiedAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+/** 与安装脚本产出的 machine.provenance 一致：可核实的 GitHub Actions run。 */
+function makeProvenance(overrides = {}) {
+  return {
+    kind: "github-actions",
+    repository: "D-OneXXX/MR",
+    runId: "1234567890",
+    runUrl: "https://github.com/D-OneXXX/MR/actions/runs/1234567890",
+    runnerName: "RUNNER-01",
+    imageOs: "win22",
+    imageVersion: "20261021.1.0",
+    workflow:
+      "D-OneXXX/MR/.github/workflows/release-install-verify.yml@refs/heads/main",
+    actor: "D-OneXXX",
+    runAttempt: "1",
+    startedAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
 function makeAttestation(record, installerSha256, overrides = {}) {
   return {
     kind: "manga-reader.install-verification",
@@ -111,6 +169,10 @@ function makeAttestation(record, installerSha256, overrides = {}) {
     // 与安装脚本产出的结构一致（唯一契约）：artifactName / artifactSha256。
     artifactName: "setup.exe",
     artifactSha256: installerSha256,
+    expectedArtifactSha256: installerSha256,
+    previousVersion: "0.17.1",
+    previousArtifactName: "MangaReader_0.17.1_x64-setup.exe",
+    previousArtifactSha256: "b".repeat(64),
     verdict: "PASS",
     checks: {
       freshInstall: "pass",
@@ -118,7 +180,14 @@ function makeAttestation(record, installerSha256, overrides = {}) {
       dataIntegrity: "pass",
       recovery: "pass",
     },
-    machine: { os: "Windows Server 2022", cleanEnvironment: true, image: "rehearsal-vm" },
+    library: makeLibrary(),
+    machine: {
+      os: "Windows Server 2022",
+      cleanEnvironment: true,
+      image: "GitHub Actions windows-2022 20261021.1.0",
+      host: "RUNNER-01",
+      provenance: makeProvenance(),
+    },
     verifiedAt: new Date().toISOString(),
     ...overrides,
   };
@@ -344,10 +413,27 @@ const gateInstall = {
   platform: gateExpected.platform,
   artifactName: gateExpected.artifactName,
   artifactSha256: gateDigest,
+  expectedArtifactSha256: gateDigest,
+  previousVersion: "0.17.1",
+  previousArtifactName: "MangaReader_0.17.1_x64-setup.exe",
+  previousArtifactSha256: "b".repeat(64),
   checks: { freshInstall: "pass", upgrade: "pass", dataIntegrity: "pass", recovery: "pass" },
-  machine: { os: "Windows Server 2022", cleanEnvironment: true, image: "rehearsal-clean-vm" },
+  library: makeLibrary(),
+  machine: {
+    os: "Windows Server 2022",
+    cleanEnvironment: true,
+    image: "GitHub Actions windows-2022 20261021.1.0",
+    host: "RUNNER-01",
+    provenance: makeProvenance(),
+  },
   verifiedAt: new Date().toISOString(),
 };
+
+function mutateInstall(mutator) {
+  const copy = structuredClone(gateInstall);
+  mutator(copy);
+  return copy;
+}
 const gate = (overrides = {}) =>
   verifyReleaseEvidence({
     record: gateRecord,
@@ -388,6 +474,58 @@ check(
     installEvidence: {
       ...gateInstall,
       machine: { os: "Windows 11", image: "shared-workstation", cleanEnvironment: false },
+    },
+  }).ok,
+);
+check(
+  "I9 安装证据缺少 provenance → 拒绝",
+  !gate({
+    installEvidence: mutateInstall((evidence) => {
+      delete evidence.machine.provenance;
+    }),
+  }).ok,
+);
+check(
+  "I10 github-actions runUrl 与 runId 不一致 → 拒绝",
+  !gate({
+    installEvidence: mutateInstall((evidence) => {
+      evidence.machine.provenance.runUrl =
+        "https://github.com/D-OneXXX/MR/actions/runs/9999999999";
+    }),
+  }).ok,
+);
+check(
+  "I11 升级后用户阅读进度缺失 → 拒绝",
+  !gate({
+    installEvidence: mutateInstall((evidence) => {
+      evidence.library.books[0].currentPage = 0;
+      evidence.library.ipc.currentPage = 0;
+    }),
+  }).ok,
+);
+check(
+  "I12 expectedArtifactSha256 与安装包摘要不一致 → 拒绝",
+  !gate({
+    installEvidence: mutateInstall((evidence) => {
+      evidence.expectedArtifactSha256 = "e".repeat(64);
+    }),
+  }).ok,
+);
+check(
+  "I13 upgrade=pass 但缺 previousVersion → 拒绝",
+  !gate({
+    installEvidence: mutateInstall((evidence) => {
+      delete evidence.previousVersion;
+    }),
+  }).ok,
+);
+check(
+  "I14 旧共享宿主回执（无 provenance/library）→ 拒绝",
+  !gate({
+    installEvidence: {
+      ...gateInstall,
+      library: undefined,
+      machine: { os: "Windows 11", cleanEnvironment: false },
     },
   }).ok,
 );

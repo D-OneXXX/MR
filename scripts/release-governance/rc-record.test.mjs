@@ -22,6 +22,9 @@ import { runVerification } from "./verify-draft.mjs";
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const INSTALLER = Buffer.from("installer-bytes");
 const INSTALLER_SHA = sha256Bytes(INSTALLER);
+const PREVIOUS_SHA = "b".repeat(64);
+const BOOK_ID = "1".repeat(64);
+const SNAPSHOT_SHA = "c".repeat(64);
 
 function makeRecord(overrides = {}) {
   return buildRcRecord({
@@ -42,6 +45,10 @@ function makeAttestation(overrides = {}) {
     // 与安装脚本产出的结构一致（唯一契约）。
     artifactName: "app-setup.exe",
     artifactSha256: INSTALLER_SHA,
+    expectedArtifactSha256: INSTALLER_SHA,
+    previousVersion: "0.17.1",
+    previousArtifactName: "app-setup-0.17.1.exe",
+    previousArtifactSha256: PREVIOUS_SHA,
     verdict: "PASS",
     checks: {
       freshInstall: "pass",
@@ -49,7 +56,57 @@ function makeAttestation(overrides = {}) {
       dataIntegrity: "pass",
       recovery: "pass",
     },
-    machine: { os: "Windows Server 2022", cleanEnvironment: true, image: "windows-2022-clean" },
+    library: {
+      quickCheck: "ok",
+      schemaVersionBefore: 1,
+      schemaVersionAfter: 1,
+      bookCount: 1,
+      readingLogRows: 2,
+      readingLogPages: 3,
+      books: [
+        {
+          id: BOOK_ID,
+          title: "Release Smoke Book",
+          pageCount: 3,
+          currentPage: 2,
+          scrollPct: 0.5,
+          removed: 0,
+          sourceType: "local",
+        },
+      ],
+      ipc: {
+        ok: true,
+        source: "list_books",
+        bookId: BOOK_ID,
+        title: "Release Smoke Book",
+        currentPage: 2,
+        scrollPct: 0.5,
+        bookCount: 1,
+        checkedAt: new Date().toISOString(),
+      },
+      snapshotSha256: SNAPSHOT_SHA,
+      verifiedAt: new Date().toISOString(),
+    },
+    machine: {
+      os: "Windows Server 2022",
+      cleanEnvironment: true,
+      image: "GitHub Actions windows-2022 20261021.1.0",
+      host: "RUNNER-01",
+      provenance: {
+        kind: "github-actions",
+        repository: "D-OneXXX/MR",
+        runId: "1234567890",
+        runUrl: "https://github.com/D-OneXXX/MR/actions/runs/1234567890",
+        runnerName: "RUNNER-01",
+        imageOs: "win22",
+        imageVersion: "20261021.1.0",
+        workflow:
+          "D-OneXXX/MR/.github/workflows/release-install-verify.yml@refs/heads/main",
+        actor: "D-OneXXX",
+        runAttempt: "1",
+        startedAt: new Date().toISOString(),
+      },
+    },
     verifiedAt: new Date().toISOString(),
     ...overrides,
   };

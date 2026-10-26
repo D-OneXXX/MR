@@ -10,11 +10,21 @@
  * - 证据不得过期（默认 30 天），也不得来自未来；
  * - 签名证据必须锚定到**仓库当前配置的 updater 公钥**（公钥 ID 一致），
  * 避免「用另一把钥匙签的」证据蒙混过关；
+ * - 安装证据必须来自**可核实的干净环境**：`machine.cleanEnvironment === true`、
+ *   镜像标识非空，且 `machine.provenance` 指向具体的 GitHub Actions run 或本机 VM
+ *   （`cleanEnvironment` 本身只是一句声明，不足以作为发布依据）；
+ * - Windows 通道还必须证明安装/升级后用户数据仍在：数据库 `quick_check`、schema 版本、
+ *   合成书库与阅读进度，以及经真实 IPC `list_books` 回读的一致性；
  * - 演练候选（rehearsal）永远不可发布。
  *
  * 本模块是纯函数：不联网、不读密钥、不改任何远端状态。
  */
-import { REHEARSAL_TAG_PATTERN } from "./rc-record.mjs";
+import {
+  REHEARSAL_TAG_PATTERN,
+  installIntegrityProblems,
+  libraryEvidenceProblems,
+  machineEvidenceProblems,
+} from "./rc-record.mjs";
 
 export const SIGNATURE_EVIDENCE_KIND = "manga-reader.signature-verification";
 export const INSTALL_EVIDENCE_KIND = "manga-reader.install-verification";
@@ -122,18 +132,14 @@ export function validateInstallEvidence(evidence, expected = {}) {
     problems.push("证据未记录被安装制品的 SHA-256");
   }
   if (!evidence.artifactName) problems.push("证据未记录被安装制品名");
-  if (!evidence.machine?.os) problems.push("证据未记录验证环境（machine.os）");
 
-  // 干净环境是**发布强制条件**：共享宿主上的安装/升级回执不能满足发布门禁。
-  // 该声明由在一次性干净环境上执行验证的人显式给出（脚本参数 -CleanEnvironment），
-  // 缺失或为 false 一律拒绝。
-  if (evidence.machine?.cleanEnvironment !== true) {
-    problems.push(
-      "安装证据未声明干净环境（machine.cleanEnvironment 必须为 true；共享宿主上的验证不满足发布强制条件）",
-    );
-  }
-  if (!String(evidence.machine?.image || "").trim()) {
-    problems.push("安装证据未记录干净环境镜像标识（machine.image）");
+  // 干净环境不再是「一句声明」：必须能核实到具体镜像与运行来源（provenance）。
+  problems.push(...machineEvidenceProblems(evidence.machine, "安装证据"));
+  // expectedArtifactSha256 必须与真实安装包摘要一致；覆盖升级必须记录升级前身份。
+  problems.push(...installIntegrityProblems(evidence, "安装证据"));
+  // Windows 通道必须证明安装/升级后用户数据仍在（数据库自检 + 进度 + 真实 IPC 回读）。
+  if ((expected.channel || "windows") === "windows") {
+    problems.push(...libraryEvidenceProblems(evidence.library, "安装证据"));
   }
 
   const required =

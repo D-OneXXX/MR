@@ -229,6 +229,15 @@ export function validateInstallAttestation(attestation, expected) {
     }
   }
   if (!attestation.machine?.os) problems.push("安装验证回执缺少运行环境记录");
+  // 干净环境声明：共享宿主上的验证不满足发布强制条件。
+  if (attestation.machine?.cleanEnvironment !== true) {
+    problems.push(
+      "安装验证回执未声明干净环境（machine.cleanEnvironment 必须为 true；共享宿主上的验证不满足发布强制条件）",
+    );
+  }
+  if (!String(attestation.machine?.image || "").trim()) {
+    problems.push("安装验证回执未记录干净环境镜像标识（machine.image）");
+  }
   if (!attestation.verifiedAt || Number.isNaN(Date.parse(attestation.verifiedAt))) {
     problems.push("安装验证回执缺少合法时间");
   } else if (Date.parse(attestation.verifiedAt) > Date.now() + 60_000) {

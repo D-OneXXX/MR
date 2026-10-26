@@ -34,16 +34,46 @@ function parseArgs(argv) {
   return args;
 }
 
-/** 定位 minisign：环境变量 → PATH → 仓库内 tools/。找不到就返回 null。 */
+/**
+ * 定位 minisign：环境变量 → 仓库内 tools/（递归，兼容官方包的嵌套解压布局，
+ * 且**必须匹配宿主架构**）→ PATH。找不到就返回 null（调用方必须 fail closed）。
+ */
 export function findMinisign(root = process.cwd()) {
-  const candidates = [];
-  if (process.env.MR_MINISIGN_BIN) candidates.push(process.env.MR_MINISIGN_BIN);
-  candidates.push(
+  const explicit = process.env.MR_MINISIGN_BIN;
+  if (explicit && fs.existsSync(explicit)) return explicit;
+
+  const matches = [];
+  const walk = (dir, depth) => {
+    if (depth > 4 || !fs.existsSync(dir)) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full, depth + 1);
+      else if (/^minisign(\.exe)?$/i.test(entry.name)) matches.push(full);
+    }
+  };
+  walk(path.join(root, "tools", "minisign"), 0);
+  matches.push(
     path.join(root, "tools", "minisign", "minisign.exe"),
     path.join(root, "tools", "minisign", "minisign"),
   );
-  for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) return candidate;
+
+  // 官方包同时提供 aarch64 与 x86_64；选错架构会静默拿到「跑不起来」的可执行文件
+  // （spawnSync 失败且无输出），因此必须优先宿主架构。
+  const hostPattern = /x86[_-]?64|amd64|x64/i;
+  const foreignPattern = /aarch64|arm64/i;
+  const hostMatches = matches.filter((item) => hostPattern.test(item));
+  const foreignMatches = matches.filter((item) => foreignPattern.test(item));
+  const otherMatches = matches.filter(
+    (item) => !hostPattern.test(item) && !foreignPattern.test(item),
+  );
+  for (const candidate of [...hostMatches, ...otherMatches, ...foreignMatches]) {
+    if (fs.existsSync(candidate)) return candidate;
   }
   const probe = spawnSync("minisign", ["-v"], { encoding: "utf8" });
   if (probe.status === 0) return "minisign";
@@ -100,7 +130,8 @@ export function main(argv = process.argv.slice(2)) {
   const verified = run.status === 0 && /verified/i.test(output);
   if (!verified) {
     console.error("[signature-verify] 验签未通过：");
-    console.error(output.trim().split("\n").slice(0, 6).join("\n"));
+    if (run.error) console.error(`  工具无法执行：${run.error.message}`);
+    if (output.trim()) console.error(output.trim().split("\n").slice(0, 6).join("\n"));
     fs.rmSync(work, { recursive: true, force: true });
     return 1;
   }

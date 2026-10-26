@@ -124,6 +124,18 @@ export function validateInstallEvidence(evidence, expected = {}) {
   if (!evidence.artifactName) problems.push("证据未记录被安装制品名");
   if (!evidence.machine?.os) problems.push("证据未记录验证环境（machine.os）");
 
+  // 干净环境是**发布强制条件**：共享宿主上的安装/升级回执不能满足发布门禁。
+  // 该声明由在一次性干净环境上执行验证的人显式给出（脚本参数 -CleanEnvironment），
+  // 缺失或为 false 一律拒绝。
+  if (evidence.machine?.cleanEnvironment !== true) {
+    problems.push(
+      "安装证据未声明干净环境（machine.cleanEnvironment 必须为 true；共享宿主上的验证不满足发布强制条件）",
+    );
+  }
+  if (!String(evidence.machine?.image || "").trim()) {
+    problems.push("安装证据未记录干净环境镜像标识（machine.image）");
+  }
+
   const required =
     expected.requiredChecks ||
     CHANNEL_REQUIRED_CHECKS[expected.channel] ||

@@ -34,6 +34,19 @@ function pickTarget() {
   return "linux";
 }
 
+/**
+ * 压缩包文件名必须保留真实扩展名：
+ * PowerShell 的 Expand-Archive 只接受 `.zip`，扩展名不对会直接抛
+ * NotSupportedArchiveFileExtension——发布流水线（windows-2022）必然失败。
+ */
+export function resolveArchiveName(url, target) {
+  const fromUrl = String(url || "").split("/").pop();
+  if (fromUrl && /\.(zip|tar\.gz|tgz)$/i.test(fromUrl)) return fromUrl;
+  return target === "win64" || target === "macos"
+    ? `minisign-${target}.zip`
+    : `minisign-${target}.tar.gz`;
+}
+
 export async function fetchMinisign({ rootDir = root, target = pickTarget() } = {}) {
   const digests = JSON.parse(fs.readFileSync(DIGESTS_FILE, "utf8"));
   const entry = digests[target];
@@ -41,7 +54,10 @@ export async function fetchMinisign({ rootDir = root, target = pickTarget() } = 
   const toolsDir = path.join(rootDir, "tools", "minisign");
   fs.mkdirSync(toolsDir, { recursive: true });
 
-  const archive = path.join(os.tmpdir(), `minisign-${target}-${entry.sha256.slice(0, 8)}`);
+  // 压缩包扩展名必须与实际格式一致：PowerShell 的 Expand-Archive 只接受 .zip，
+  // 扩展名不对会直接抛 NotSupportedArchiveFileExtension（发布流水线必然失败）。
+  const archiveName = resolveArchiveName(entry.url, target);
+  const archive = path.join(os.tmpdir(), archiveName);
   const response = await fetch(entry.url);
   if (!response.ok) {
     throw new Error(`下载 minisign 失败：${response.status} ${entry.url}`);
@@ -56,14 +72,26 @@ export async function fetchMinisign({ rootDir = root, target = pickTarget() } = 
     );
   }
 
-  if (target === "win64") {
-    spawnSync("powershell", [
-      "-NoProfile",
-      "-Command",
-      `Expand-Archive -Force '${archive}' '${toolsDir}'`,
-    ], { stdio: "inherit" });
+  if (target === "win64" || target === "macos") {
+    const unzip = spawnSync(
+      "powershell",
+      ["-NoProfile", "-Command", `Expand-Archive -Force '${archive}' '${toolsDir}'`],
+      { encoding: "utf8" },
+    );
+    if (unzip.status !== 0) {
+      throw new Error(
+        `解压 minisign 失败（${archive}）：${(unzip.stderr || unzip.stdout || "").trim()}`,
+      );
+    }
   } else {
-    spawnSync("tar", ["-xzf", archive, "-C", toolsDir], { stdio: "inherit" });
+    const untar = spawnSync("tar", ["-xzf", archive, "-C", toolsDir], {
+      encoding: "utf8",
+    });
+    if (untar.status !== 0) {
+      throw new Error(
+        `解压 minisign 失败（${archive}）：${(untar.stderr || untar.stdout || "").trim()}`,
+      );
+    }
   }
   fs.rmSync(archive, { force: true });
 

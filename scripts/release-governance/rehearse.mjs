@@ -111,7 +111,7 @@ function makeAttestation(record, installerSha256, overrides = {}) {
     installer: { name: "setup.exe", sha256: installerSha256 },
     verdict: "PASS",
     checks: { install: "pass", upgrade: "pass", rollback: "pass", dataIntegrity: "pass" },
-    machine: { os: "Windows Server 2022", image: "rehearsal-vm" },
+    machine: { os: "Windows Server 2022", cleanEnvironment: true, image: "rehearsal-vm" },
     verifiedAt: new Date().toISOString(),
     ...overrides,
   };
@@ -338,7 +338,7 @@ const gateInstall = {
   artifactName: gateExpected.artifactName,
   artifactSha256: gateDigest,
   checks: { freshInstall: "pass", upgrade: "pass", dataIntegrity: "pass", recovery: "pass" },
-  machine: { os: "Windows Server 2022" },
+  machine: { os: "Windows Server 2022", cleanEnvironment: true, image: "rehearsal-clean-vm" },
   verifiedAt: new Date().toISOString(),
 };
 const gate = (overrides = {}) =>
@@ -374,6 +374,15 @@ check(
 check(
   "I7 证据锚定的公钥与配置不一致 → 拒绝",
   !gate({ publicKeyId: "0000000000000000" }).ok,
+);
+check(
+  "I8 安装证据未声明干净环境 → 拒绝",
+  !gate({
+    installEvidence: {
+      ...gateInstall,
+      machine: { os: "Windows 11", image: "shared-workstation", cleanEnvironment: false },
+    },
+  }).ok,
 );
 
 // G. 标签命名约束

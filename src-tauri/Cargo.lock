@@ -2468,7 +2468,7 @@ dependencies = [
 
 [[package]]
 name = "manga-reader-tauri"
-version = "0.17.1"
+version = "0.17.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",

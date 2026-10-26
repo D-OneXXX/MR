@@ -718,6 +718,38 @@ export function checkReleaseGovernance(root, report) {
     evidence.push(`${name}: 构建签名 → Draft + rc-record`);
   }
 
+  // 7) 安装/升级验证必须声明「干净环境」：共享宿主上的回执不能满足发布强制条件。
+  //    契约与产出脚本两侧都要有，缺任一侧门禁都会失效。
+  const installScript = path.join(
+    root,
+    "scripts",
+    "release-smoke",
+    "windows-install-upgrade.ps1",
+  );
+  const evidenceModule = path.join(
+    root,
+    "scripts",
+    "release-governance",
+    "evidence.mjs",
+  );
+  const rcModule = path.join(root, "scripts", "release-governance", "rc-record.mjs");
+  for (const [label, file, needle] of [
+    ["安装验证脚本", installScript, "cleanEnvironment"],
+    ["证据契约 evidence.mjs", evidenceModule, "cleanEnvironment"],
+    ["回执契约 rc-record.mjs", rcModule, "cleanEnvironment"],
+  ]) {
+    if (!fs.existsSync(file)) {
+      errors.push(`缺少${label}：${path.relative(root, file)}`);
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    if (!source.includes(needle)) {
+      errors.push(
+        `${label} 必须要求安装证据声明干净环境（cleanEnvironment）：${path.relative(root, file)}`,
+      );
+    }
+  }
+
   if (errors.length) {
     fail(report, {
       id: "static:release-governance",

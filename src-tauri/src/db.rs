@@ -1718,10 +1718,15 @@ mod tests {
             );
             let global_days = reading_log_days(&conn, None, 3650).unwrap();
             assert!(
-                global_days.iter().any(|(date, pages)| date == "2026-01-01" && *pages == 7),
+                global_days
+                    .iter()
+                    .any(|(date, pages)| date == "2026-01-01" && *pages == 7),
                 "迁移前旧史必须仍能在全局统计里查到：{global_days:?}"
             );
-            assert_eq!(get_setting(&conn, "theme").unwrap().as_deref(), Some("dark"));
+            assert_eq!(
+                get_setting(&conn, "theme").unwrap().as_deref(),
+                Some("dark")
+            );
             assert!(quick_check(&conn).is_ok(), "迁移后必须通过 quick_check");
             // 新增的唯一索引必须生效：(date, COALESCE(book_id,'')) 唯一。
             let dup = conn.execute(

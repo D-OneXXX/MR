@@ -148,6 +148,17 @@ browser WebView  ─ 无 IPC 权限，仅导航与下载
   mtime 与字节数都未变则直接复用 `page_count`，不再解包。目录始终全量扫描
   （嵌套变更不会可靠反映到目录 mtime）；扫描失败会清掉旧指纹，文件回滚到旧
   mtime/size 时不会被误判为未变。备份/恢复不携带该派生表。
+- **跨版本数据兼容（升级/回滚安全）**：`init_schema` 只**向前**迁移，
+  绝不把更高版本的库写回旧 `user_version`。两条自动化断言锁住该边界：
+  - `legacy_library_file_migrates_without_data_loss`：按旧版本形态造出的库文件
+    （`books` 缺 `removed/scroll_pct/source_type/meta_json`、`reading_log` 为 `(date)`
+    主键、无在线表、`user_version=1`）经 `db::open` + `init_schema` 后，
+    书、路径、页数、阅读进度、设置、旧阅读历史全部保留，新增列取默认值，
+    `(date, COALESCE(book_id,''))` 唯一索引生效，`quick_check` 通过，重复迁移幂等；
+  - `newer_schema_version_is_not_downgraded`：`user_version` 高于当前 schema 的库
+    不会被降级写回，数据不丢。
+  旧阅读历史落在 `reading_log.book_id IS NULL` 的全局桶里（迁移前语义），
+  按书查询查不到，但全局统计仍可查到。
 
 ## 6. 后端模块
 

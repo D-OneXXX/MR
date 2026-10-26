@@ -26,9 +26,19 @@ slice byte-identical and turn the "multiple distinct slices" assertion invalid â
 
 ```bash
 npm run test:governance
+npm run test:release
 npm run status
 npm run labels:check   # requires gh auth and labels already applied
 ```
+
+`npm run test:release` checks the release surface that CI cannot see at runtime:
+product identity, NSIS targets/languages, updater public key, independent Windows/Linux
+update endpoints, the Linux updater-manifest generator (including its failure paths), and
+the public manifest verifier (`scripts/verify-updater-manifest.mjs`). SQLite
+upgrade/rollback compatibility is covered by `cargo test --lib`
+(`legacy_library_file_migrates_without_data_loss`, `newer_schema_version_is_not_downgraded`).
+Real NSIS install/upgrade/rollback needs a clean Windows VM and stays BLOCKED in CI â€”
+see [dev/RELEASE.md](dev/RELEASE.md).
 
 `npm run status` writes `docs/PROJECT_STATE.md`; it is generated and must not be
 hand-edited. `npm run labels:check` never changes remote labels; use

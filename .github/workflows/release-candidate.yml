@@ -84,6 +84,7 @@ jobs:
               echo "演练模式的标签必须固定为 v0.0.0-rehearsal：$TAG" >&2
               exit 1
             fi
+            VERSION="0.0.0"
             COMMIT="$(git rev-parse origin/main)"
           else
             if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then

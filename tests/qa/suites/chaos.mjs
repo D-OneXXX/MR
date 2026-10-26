@@ -154,11 +154,81 @@ export async function runChaosSuite(ctx, report) {
   } else {
     const mainBefore = await targetsOnPort(ctx);
     const mainTarget = mainBefore.find((target) => target.url.includes("localhost:1420/") && !target.url.includes("recovery.html"));
+    // 诊断探针（只读）：记录连点**到达页面**的时间线，以及检测窗口内是否发生
+    // 「有意义的 DOM 状态变化」（与产品检测器同一套 attributeFilter）。
+    // hosted 与本地的差异必须能落到这两类证据上，不能靠猜。
+    await page
+      .eval(`(() => {
+        window.__qaRage = { clicks: [], mutations: [], startedAt: performance.now() };
+        window.addEventListener(
+          "click",
+          (event) => {
+            window.__qaRage.clicks.push({
+              t: Math.round(performance.now() - window.__qaRage.startedAt),
+              x: event.clientX,
+              y: event.clientY,
+              tag: event.target && event.target.tagName,
+              trusted: event.isTrusted,
+              hash: location.hash,
+            });
+          },
+          true,
+        );
+        const observer = new MutationObserver((records) => {
+          for (const record of records) {
+            if (record.type !== "attributes" || !record.attributeName) continue;
+            const target = record.target;
+            window.__qaRage.mutations.push({
+              t: Math.round(performance.now() - window.__qaRage.startedAt),
+              attr: record.attributeName,
+              tag: target && target.tagName,
+              id: (target && target.id) || "",
+            });
+          }
+        });
+        observer.observe(document.documentElement, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: [
+            "href",
+            "aria-expanded",
+            "aria-selected",
+            "aria-pressed",
+            "data-state",
+            "open",
+            "disabled",
+            "hidden",
+            "inert",
+          ],
+        });
+        return true;
+      })()`)
+      .catch(() => false);
+    const clickTimeline = [];
     for (let index = 0; index < 6; index += 1) {
+      const started = Date.now();
       await page.mouseClick(point.x, point.y);
+      clickTimeline.push(Date.now() - started);
       await sleep(80);
     }
     await sleep(1000);
+    const rageProbe = await page
+      .eval(`(() => {
+        const probe = window.__qaRage;
+        if (!probe) return null;
+        return {
+          clicks: probe.clicks,
+          mutations: probe.mutations.slice(0, 20),
+          mutationCount: probe.mutations.length,
+        };
+      })()`)
+      .catch(() => null);
+    const rageEvidence = {
+      point,
+      dispatchMs: clickTimeline,
+      probe: rageProbe,
+    };
+    note(report, `chaos rage-click 诊断：${JSON.stringify(rageEvidence)}`);
     let recovery = null;
     try {
       recovery = await waitForRecovery(ctx, 7000);
@@ -172,7 +242,7 @@ export async function runChaosSuite(ctx, report) {
         layer: "chaos",
         title: "1.5s 内 6 次无效区域连点未触发独立恢复窗口",
         severity: "P1",
-        details: `point=${JSON.stringify(point)}`,
+        details: JSON.stringify(rageEvidence),
         location: "src/features/resilience/rageClick.ts:60-172",
         expected: "5 次/1500ms/30px 无状态变化后打开 recovery",
         actual: "未出现 recovery target",

@@ -581,6 +581,141 @@ export async function runStaticSuite(ctx, report) {
   checkReleaseSurface(root, report);
   checkAntiMockGuards(root, report);
   checkActionsPinned(root, report);
+  checkReleaseGovernance(root, report);
+}
+
+/* ------------------------------------------------------------------ */
+/* §3.4 发布治理静态守卫（Phase 4）                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 发布链路必须满足的硬约束（静态可验证部分）：
+ *
+ * 1. **没有任何 workflow 由 Tag 推送触发**——`push: tags:` 一旦出现，
+ *    推送 `v*` 就会直接进入发版流水线（Phase 0 审计出的最高风险）。
+ * 2. 发布相关 workflow 只能由 `workflow_dispatch` 手动触发。
+ * 3. 发布（publish）workflow 必须声明 `environment:`（人工审批门禁）。
+ * 4. 发布 workflow **不得**持有签名私钥（产物已在候选阶段签好名）。
+ * 5. 不得存在 `skip_full_qa` / `releaseDraft: false` 之类的绕过开关。
+ * 6. 发布 workflow 必须显式声明最小权限（工作流级 `contents: read`，
+ *    需要写权限的 job 单独提升），不得使用 `permissions: write-all`。
+ */
+export function checkReleaseGovernance(root, report) {
+  const dir = path.join(root, ".github", "workflows");
+  const errors = [];
+  const evidence = [];
+  const publishFiles = ["release-publish.yml", "release-publish-linux.yml"];
+  const candidateFiles = ["release-candidate.yml", "release-candidate-linux.yml"];
+
+  if (!fs.existsSync(dir)) {
+    fail(report, {
+      id: "static:release-governance",
+      suite: "static",
+      layer: "static",
+      title: "发布治理静态契约缺失",
+      severity: "P1",
+      details: ".github/workflows 目录不存在",
+      location: ".github/workflows",
+    });
+    return;
+  }
+
+  const files = fs.readdirSync(dir).filter((name) => /\.ya?ml$/.test(name)).sort();
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(dir, name), "utf8");
+    // 1) 禁止 Tag 触发。
+    if (/push:\s*\n\s*tags:/m.test(source)) {
+      errors.push(`${name} 仍由 Tag 推送触发（必须改为 workflow_dispatch 手动触发）`);
+    }
+    if (/^\s*-\s*"?v\*/m.test(source) && /tags:/m.test(source)) {
+      errors.push(`${name} 仍声明了 v* Tag 触发器`);
+    }
+    // 6) 权限收敛。
+    if (/permissions:\s*write-all/.test(source)) {
+      errors.push(`${name} 使用了 permissions: write-all`);
+    }
+    // 5) 绕过开关。
+    for (const bypass of ["skip_full_qa", "releaseDraft: false", "skip_approval"]) {
+      if (source.includes(bypass)) {
+        errors.push(`${name} 含绕过开关 ${bypass}`);
+      }
+    }
+  }
+
+  // 2) 发布相关 workflow 必须手动触发。
+  for (const name of [...publishFiles, ...candidateFiles]) {
+    const file = path.join(dir, name);
+    if (!fs.existsSync(file)) {
+      errors.push(`缺少发布工作流 ${name}`);
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    if (!source.includes("workflow_dispatch")) {
+      errors.push(`${name} 必须由 workflow_dispatch 手动触发`);
+    }
+    if (!/permissions:\s*\n\s*contents:\s*read/.test(source)) {
+      errors.push(`${name} 必须显式声明工作流级 permissions: contents: read`);
+    }
+  }
+
+  // 3) 发布工作流必须有人工审批门禁；4) 不得持有签名私钥。
+  for (const name of publishFiles) {
+    const file = path.join(dir, name);
+    if (!fs.existsSync(file)) continue;
+    const source = fs.readFileSync(file, "utf8");
+    if (!/environment:\s*release-(windows|linux)/.test(source)) {
+      errors.push(`${name} 必须声明 environment: release-*（人工审批门禁）`);
+    }
+    if (source.includes("TAURI_SIGNING_PRIVATE_KEY")) {
+      errors.push(`${name} 不得引用签名私钥（产物已在候选阶段签名）`);
+    }
+    if (!source.includes("verify-draft.mjs")) {
+      errors.push(`${name} 必须调用发布前绑定校验 verify-draft.mjs`);
+    }
+    evidence.push(`${name}: 手动触发 + environment 门禁 + 绑定校验`);
+  }
+
+  // 候选工作流必须持有签名私钥并产出 Draft。
+  for (const name of candidateFiles) {
+    const file = path.join(dir, name);
+    if (!fs.existsSync(file)) continue;
+    const source = fs.readFileSync(file, "utf8");
+    if (!source.includes("TAURI_SIGNING_PRIVATE_KEY")) {
+      errors.push(`${name} 必须使用签名私钥构建候选制品`);
+    }
+    if (!source.includes("--draft")) {
+      errors.push(`${name} 必须只创建 Draft（--draft），不得直接公开`);
+    }
+    if (!source.includes("rc-record.json")) {
+      errors.push(`${name} 必须产出 rc-record.json（审批依据）`);
+    }
+    evidence.push(`${name}: 构建签名 → Draft + rc-record`);
+  }
+
+  if (errors.length) {
+    fail(report, {
+      id: "static:release-governance",
+      suite: "static",
+      layer: "static",
+      title: "发布治理静态契约被破坏（Tag 触发 / 缺审批门禁 / 存在绕过开关）",
+      severity: "P1",
+      details: errors.join(" | "),
+      location: ".github/workflows",
+      expected:
+        "无 Tag 触发的发布工作流；手动触发 + environment 审批门禁 + 发布前绑定校验；无跳过 QA/审批的开关",
+      actual: errors.join(" | "),
+      rootCause: "新增或修改发版工作流时引入了 Tag 触发、宽松权限或绕过开关",
+      fix: "按 docs/dev/PHASE4_RELEASE_GOVERNANCE.md 恢复：dispatch 触发 + environment + verify-draft 绑定校验",
+    });
+  } else {
+    ok(report, {
+      id: "static:release-governance",
+      suite: "static",
+      layer: "static",
+      title: "发布治理静态契约成立（无 Tag 触发 / 有审批门禁 / 无绕过开关）",
+      details: evidence.join("；"),
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -949,46 +1084,81 @@ export function checkReleaseSurface(root, report) {
     }
   }
 
-  const windowsWorkflow = read(".github/workflows/release-windows.yml");
-  const windowsSteps = yamlStepTexts(windowsWorkflow);
-  const windowsStepText = windowsSteps ? windowsSteps.join("\n") : "";
-  if (!windowsSteps || windowsSteps.length === 0) {
-    errors.push("release-windows.yml 未解析到 steps");
+  // Phase 4：发布链路拆成「候选（Draft）→ 发布（审批后公开）」，双通道各自独立。
+  const windowsCandidate = read(".github/workflows/release-candidate.yml");
+  const windowsPublish = read(".github/workflows/release-publish.yml");
+  const linuxCandidate = read(".github/workflows/release-candidate-linux.yml");
+  const linuxPublish = read(".github/workflows/release-publish-linux.yml");
+
+  const windowsCandidateSteps = yamlStepTexts(windowsCandidate);
+  const windowsCandidateText = windowsCandidateSteps
+    ? windowsCandidateSteps.join("\n")
+    : "";
+  if (!windowsCandidateSteps || windowsCandidateSteps.length === 0) {
+    errors.push("release-candidate.yml 未解析到 steps");
   }
   for (const marker of [
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-    "uploadUpdaterJson: true",
-    // 只匹配 action 名，不匹配版本/SHA：版本由 static:actions-pinned 守卫固定到 commit SHA。
-    "tauri-apps/tauri-action@",
-    "releaseDraft: false",
     "MR_BUILD_ORIGIN: official",
     "npx tsc --noEmit",
     "cargo test --lib",
     "npm run build",
-    "tests/qa/run-qa.mjs",
+    // 候选只落成 Draft，并产出审批依据。
+    "--draft",
+    "rc-record.json",
+    // QA 证据按 run id 绑定到候选 Commit。
+    "qa_run_id",
+    "verify-updater-manifest.mjs",
   ]) {
-    if (!windowsStepText.includes(marker)) {
-      errors.push(`release-windows.yml 的 steps 缺少 ${marker}`);
+    if (!windowsCandidateText.includes(marker)) {
+      errors.push(`release-candidate.yml 的 steps 缺少 ${marker}`);
     }
   }
-  if (!windowsWorkflow.includes("windows-2022")) {
-    errors.push(
-      "release-windows.yml 缺少 windows-2022 runner（真实 WebView2 QA 需规避 Server 2025 CDP 回归）",
-    );
+  for (const marker of [
+    "windows-2022",
+    "workflow_dispatch",
+    "environment: release-windows",
+    "contents: read",
+    "contents: write",
+  ]) {
+    if (!windowsCandidate.includes(marker)) {
+      errors.push(`release-candidate.yml 缺少 ${marker}`);
+    }
   }
-  // Windows 常规通道绝不被 -linux 标签触发。
-  if (!windowsWorkflow.includes("contains(github.ref_name, '-linux')")) {
-    errors.push(
-      "release-windows.yml 必须排除 -linux 标签（contains(github.ref_name, '-linux')）",
-    );
+  if (/releaseDraft:\s*false/.test(windowsCandidate)) {
+    errors.push("release-candidate.yml 不得直接公开发布（只能创建 Draft）");
   }
 
-  const linuxWorkflow = read(".github/workflows/release-linux-critical.yml");
-  const linuxSteps = yamlStepTexts(linuxWorkflow);
-  const linuxStepText = linuxSteps ? linuxSteps.join("\n") : "";
-  if (!linuxSteps || linuxSteps.length === 0) {
-    errors.push("release-linux-critical.yml 未解析到 steps");
+  const windowsPublishSteps = yamlStepTexts(windowsPublish);
+  const windowsPublishText = windowsPublishSteps ? windowsPublishSteps.join("\n") : "";
+  if (!windowsPublishSteps || windowsPublishSteps.length === 0) {
+    errors.push("release-publish.yml 未解析到 steps");
+  }
+  for (const marker of [
+    "verify-draft.mjs",
+    "gh release edit",
+    "--draft=false",
+    "verify-updater-manifest.mjs",
+    "latest-linux-critical.json",
+  ]) {
+    if (!windowsPublishText.includes(marker)) {
+      errors.push(`release-publish.yml 的 steps 缺少 ${marker}`);
+    }
+  }
+  for (const marker of ["workflow_dispatch", "environment: release-windows"]) {
+    if (!windowsPublish.includes(marker)) {
+      errors.push(`release-publish.yml 缺少 ${marker}`);
+    }
+  }
+  if (windowsPublish.includes("TAURI_SIGNING_PRIVATE_KEY")) {
+    errors.push("release-publish.yml 不得持有签名私钥（产物已在候选阶段签名）");
+  }
+
+  const linuxCandidateSteps = yamlStepTexts(linuxCandidate);
+  const linuxCandidateText = linuxCandidateSteps ? linuxCandidateSteps.join("\n") : "";
+  if (!linuxCandidateSteps || linuxCandidateSteps.length === 0) {
+    errors.push("release-candidate-linux.yml 未解析到 steps");
   }
   for (const marker of [
     "TAURI_SIGNING_PRIVATE_KEY",
@@ -999,21 +1169,51 @@ export function checkReleaseSurface(root, report) {
     "npx tsc --noEmit",
     "cargo test --lib",
     "npm run build",
-    "tests/qa/run-qa.mjs",
-    "--suite=static",
+    "--config src-tauri/tauri.linux.conf.json",
+    "--draft",
+    "rc-record.json",
+    "qa_run_id",
+    "verify-updater-manifest.mjs",
   ]) {
-    if (!linuxStepText.includes(marker)) {
-      errors.push(`release-linux-critical.yml 的 steps 缺少 ${marker}`);
+    if (!linuxCandidateText.includes(marker)) {
+      errors.push(`release-candidate-linux.yml 的 steps 缺少 ${marker}`);
     }
   }
   for (const marker of [
     "ubuntu-22.04",
     "workflow_dispatch",
-    "v*-linux-sec*",
+    "environment: release-linux",
+    "contents: read",
+    "contents: write",
   ]) {
-    if (!linuxWorkflow.includes(marker)) {
-      errors.push(`release-linux-critical.yml 缺少 ${marker}`);
+    if (!linuxCandidate.includes(marker)) {
+      errors.push(`release-candidate-linux.yml 缺少 ${marker}`);
     }
+  }
+
+  const linuxPublishSteps = yamlStepTexts(linuxPublish);
+  const linuxPublishText = linuxPublishSteps ? linuxPublishSteps.join("\n") : "";
+  if (!linuxPublishSteps || linuxPublishSteps.length === 0) {
+    errors.push("release-publish-linux.yml 未解析到 steps");
+  }
+  for (const marker of [
+    "verify-draft.mjs",
+    "gh release edit",
+    "--draft=false",
+    "verify-updater-manifest.mjs",
+    "linux-x86_64",
+  ]) {
+    if (!linuxPublishText.includes(marker)) {
+      errors.push(`release-publish-linux.yml 的 steps 缺少 ${marker}`);
+    }
+  }
+  for (const marker of ["workflow_dispatch", "environment: release-linux"]) {
+    if (!linuxPublish.includes(marker)) {
+      errors.push(`release-publish-linux.yml 缺少 ${marker}`);
+    }
+  }
+  if (linuxPublish.includes("TAURI_SIGNING_PRIVATE_KEY")) {
+    errors.push("release-publish-linux.yml 不得持有签名私钥（产物已在候选阶段签名）");
   }
 
   // Linux 端 updater 端点必须独立指向高危补丁通道（平台专属配置覆盖）。
@@ -1034,33 +1234,20 @@ export function checkReleaseSurface(root, report) {
   // Linux 发布链必须真的应用平台 overlay：overlay 文件存在不等于被使用。
   // 少了 --config，Linux 产物会带着 Windows 的 latest.json 端点，
   // 更新功能对 Linux 客户端形同虚设。
-  if (linuxStepText && !linuxStepText.includes("--config src-tauri/tauri.linux.conf.json")) {
+  if (linuxCandidateText && !linuxCandidateText.includes("--config src-tauri/tauri.linux.conf.json")) {
     errors.push(
-      "release-linux-critical.yml 的 tauri build 必须带 --config src-tauri/tauri.linux.conf.json",
+      "release-candidate-linux.yml 的 tauri build 必须带 --config src-tauri/tauri.linux.conf.json",
     );
   }
-  // 手动 dispatch 必须按 inputs.tag 检出：默认分支 HEAD 会让构建产物与标签指向不一致。
-  const linuxCheckout = linuxSteps?.find((step) => step.includes("actions/checkout"));
-  if (!linuxCheckout || !/ref:\s*\$\{\{[^}]*inputs\.tag/.test(linuxCheckout)) {
-    errors.push(
-      "release-linux-critical.yml 的 Checkout 必须用 inputs.tag 指定 ref（手动 dispatch 不得检出默认分支）",
-    );
-  }
-  // Release 目标提交必须是本次构建的提交，不能是 $GITHUB_SHA（dispatch 时指向默认分支）。
-  if (linuxStepText && /--target\s+"\$GITHUB_SHA"/.test(linuxStepText)) {
-    errors.push(
-      "release-linux-critical.yml 不得用 $GITHUB_SHA 作为 release 目标提交（dispatch 时它指向默认分支）",
-    );
-  }
-  // 建 Release 必须用 --verify-tag：不传 target_commitish，就不会触发对标签引用的写入尝试。
+  // 建 Draft 必须用 --verify-tag：不传 target_commitish，就不会触发对标签引用的写入尝试。
   // 本仓库的 tag ruleset 没有任何豁免者，集成令牌一旦尝试写标签引用就会被拒。
-  if (linuxStepText && !/gh release create[^\n]*--verify-tag/.test(linuxStepText)) {
-    errors.push("release-linux-critical.yml 必须用 gh release create --verify-tag（不传 target_commitish）");
+  if (linuxCandidateText && !/gh release create[^\n]*--verify-tag/.test(linuxCandidateText)) {
+    errors.push("release-candidate-linux.yml 必须用 gh release create --verify-tag（不传 target_commitish）");
   }
   // AppImage 的 minisign 签名必须作为 Release 资产发布：清单里虽然内嵌了签名，
   // 但缺了 .sig 资产，用户就无法手动验签（Windows 通道同样发布 .exe.sig）。
-  if (linuxStepText && !linuxStepText.includes("appimage/*.AppImage.sig")) {
-    errors.push("release-linux-critical.yml 必须上传 appimage/*.AppImage.sig");
+  if (linuxCandidateText && !linuxCandidateText.includes("appimage/*.AppImage.sig")) {
+    errors.push("release-candidate-linux.yml 必须上传 appimage/*.AppImage.sig");
   }
 
   // 常规 CI 必须覆盖 main 与 PR，且门禁步骤真实存在于 steps 内。

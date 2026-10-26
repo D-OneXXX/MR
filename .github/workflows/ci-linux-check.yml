@@ -89,6 +89,9 @@ jobs:
           xvfb-run -a cargo test --manifest-path src-tauri/Cargo.toml \
             --test e2e_stage1 --test memory_budget
 
+      - name: Release governance rehearsal (no secrets)
+        run: node scripts/release-governance/rehearse.mjs
+
       - name: RustSec audit
         uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:

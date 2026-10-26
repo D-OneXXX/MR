@@ -1,0 +1,186 @@
+name: Publish release (Linux critical)
+
+# Phase 4 正式发布（Linux 高危补丁通道，与 Windows 通道完全独立）。
+# 只把**已存在的 Draft** 变成公开 Release，且必须先过人工审批与绑定校验。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "待发布的候选标签（vX.Y.Z-linux-secN）"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publish-linux-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify binding → publish Draft (Linux)
+    runs-on: ubuntu-22.04
+    environment: release-linux
+    permissions:
+      contents: write # 仅用于发布 Draft、接力通道清单与发布后校验
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Checkout published tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Resolve release identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-linux-sec[0-9]+$'; then
+            echo "Linux 高危通道标签必须形如 vX.Y.Z-linux-secN：$TAG" >&2
+            exit 1
+          fi
+          VERSION="$(node -p "require('./package.json').version")"
+          BASE="$(printf '%s' "$TAG" | sed -E 's/-linux-sec.*//')"
+          if [ "v${VERSION}" != "$BASE" ]; then
+            echo "标签 $TAG 的基础版本与 package.json v${VERSION} 不一致" >&2
+            exit 1
+          fi
+          COMMIT="$(git rev-parse HEAD)"
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
+            echo "候选 Commit $COMMIT 不在 main 上，拒绝发布" >&2
+            exit 1
+          fi
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect release state
+        id: state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --json isDraft,tagName >/dev/null 2>&1; then
+            echo "找不到 Release $TAG：必须先由 release-candidate-linux 工作流创建 Draft" >&2
+            exit 1
+          fi
+          IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "Release $TAG 已公开（isDraft=false）。本工作流只负责发布 Draft；已发布视为幂等完成。" >&2
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "published=false" >> "$GITHUB_OUTPUT"
+
+      - name: Download Draft assets and verify binding
+        id: verify
+        if: steps.state.outputs.published != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+          COMMIT: ${{ steps.identity.outputs.commit }}
+        run: |
+          set -euo pipefail
+          rm -rf draft-assets && mkdir -p draft-assets
+          gh release download "$TAG" --dir draft-assets --clobber
+          if [ ! -f draft-assets/rc-record.json ]; then
+            echo "Draft 缺少 rc-record.json：无法确认制品摘要，拒绝发布" >&2
+            exit 1
+          fi
+          if [ ! -f draft-assets/install-verification.json ]; then
+            echo "缺少安装验证回执 install-verification.json：正式发布强制条件未满足，拒绝发布" >&2
+            exit 1
+          fi
+          node scripts/release-governance/verify-draft.mjs \
+            --tag "$TAG" \
+            --channel linux-critical \
+            --commit "$COMMIT" \
+            --record draft-assets/rc-record.json \
+            --assets-dir draft-assets \
+            --attestation draft-assets/install-verification.json \
+            --manifest draft-assets/latest-linux-critical.json \
+            --platform linux-x86_64
+
+      - name: Publish the Draft
+        if: steps.state.outputs.published != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --draft=false --verify-tag --title "MangaReader $TAG (Linux critical)"
+
+      - name: Channel hand-off (carry the other channel manifest)
+        if: steps.state.outputs.published != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx 'latest.json'; then
+            echo "已包含 latest.json"
+            exit 0
+          fi
+          mkdir -p handoff
+          for PREV in $(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[].tag_name'); do
+            if [ "$PREV" = "$TAG" ]; then continue; fi
+            if gh release download "$PREV" -p latest.json -D handoff --clobber 2>/dev/null; then
+              gh release upload "$TAG" handoff/latest.json --clobber
+              echo "已从 ${PREV} 接力 latest.json"
+              exit 0
+            fi
+          done
+          echo "未找到可接力的 latest.json：Windows 通道清单必须存在，否则公开下载会 404" >&2
+          exit 1
+
+      - name: Post-release verification
+        if: steps.state.outputs.published != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          if [ "$IS_DRAFT" != "false" ]; then
+            echo "发布后仍是 Draft：发布未生效" >&2
+            exit 1
+          fi
+          rm -rf published && mkdir -p published
+          gh release download "$TAG" --dir published --clobber
+          node scripts/verify-updater-manifest.mjs published/latest-linux-critical.json \
+            --expect-version "$VERSION" \
+            --require-platform linux-x86_64
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-linux-critical.json" -o published/public-manifest.json
+          node scripts/verify-updater-manifest.mjs published/public-manifest.json \
+            --expect-version "$VERSION" \
+            --require-platform linux-x86_64
+
+      - name: Summarize publication
+        if: always()
+        shell: bash
+        env:
+          TAG: ${{ steps.identity.outputs.tag }}
+          COMMIT: ${{ steps.identity.outputs.commit }}
+        run: |
+          {
+            echo "### 发布结果（Linux critical）"
+            echo ""
+            echo "- Tag: \`${TAG}\`"
+            echo "- Commit: \`${COMMIT}\`"
+            echo "- 状态：${{ steps.state.outputs.published == 'true' && '此前已公开（幂等跳过）' || '已公开' }}"
+          } >> "$GITHUB_STEP_SUMMARY"

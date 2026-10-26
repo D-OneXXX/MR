@@ -64,6 +64,9 @@ jobs:
       - name: Backend integration tests (e2e + memory budget)
         run: cargo test --manifest-path src-tauri/Cargo.toml --test e2e_stage1 --test memory_budget
 
+      - name: Release governance rehearsal (no secrets)
+        run: node scripts/release-governance/rehearse.mjs
+
       - name: Static and version guards
         run: node tests/qa/run-qa.mjs --suite=static
 

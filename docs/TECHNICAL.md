@@ -654,14 +654,15 @@ Linux 专属代码（`#[cfg(target_os = "linux")]`）在 Windows 宿主上不参
 由 `.github/workflows/ci-linux-check.yml`（push/PR 到 `main`，
 ubuntu-22.04）执行 `cargo check --all-targets`、`cargo clippy --all-targets
 -- -D warnings`、`cargo test --lib`、`xvfb-run cargo test --test e2e_stage1
---test memory_budget`、前端 `tsc`/`vite build` 与 cargo/npm 审计报告；
+--test memory_budget`、前端 `tsc`/`vite build` 与 cargo/npm 审计门禁；
 `.github/workflows/ci-windows-check.yml` 在 windows-latest 跑同一套单测/集成/
 静态 QA 门禁。纯逻辑（GBK 条目名修复、gsettings/kioslaverc 解析、DMABUF
 决策表）写成跨平台纯函数，Windows 宿主单测同样覆盖。Dependabot 每周检查
-npm / cargo / GitHub Actions 更新。2026-10-25 已将 Vite 升级到 6.4.4、
-React Router 7.18.4、lru 0.16.4；`npm audit --omit=dev` 为 0。依赖审计仍保持
-可见报告（`continue-on-error`），新的 high/critical 公告需在发布评审前处置，
-不得静默忽略。
+npm / cargo / GitHub Actions 更新。2026-10-26 已将 Vite 升级到 6.4.4、
+React Router 7.18.4、Rust zip 9.1.1、rustls 0.23.46、rustls-webpki 0.103.16、
+webpki-roots 1.0.11、tokio 1.54.1、lru 0.19.0；`npm audit --omit=dev` 为 0。
+`npm audit` 与 `cargo audit` 都是阻断门禁；cargo 审计允许 updater zip 4.6.1
+与 glib 0.18.5 的书面例外（见 §14），不得无理由新增例外。
 发版流水线（0.17.0 起）拆分为 `release-windows.yml`（`windows-latest`，NSIS）与
 `release-linux-critical.yml`（`ubuntu-22.04`，deb/rpm/AppImage，仅高危补丁标签），
 互不阻塞。
@@ -717,4 +718,8 @@ React Router 7.18.4、lru 0.16.4；`npm audit --omit=dev` 为 0。依赖审计�
   glib 0.20 修复需要 gtk-rs/Tauri 整栈升级，当前不能单点升级；MangaReader 未直接调用
   该 API，按 tolerated risk 记录，复审触发为 Tauri/gtk-rs 0.20 升级或 0.18.0 发布前
   （#18）。Windows 运行时不受该 Linux 间接依赖影响。
+- Tauri updater 2.14.0 仍锁定 zip 4.6.1；其 `ZipArchive::extract` 只用于 `.zip`
+  Windows 更新包，当前 NSIS 通道不使用。直接 zip 已升级 9.1.1；`cargo audit`
+  对 RUSTSEC-2026-0367 / 0368 / 0369 有书面例外，复审于 updater/Tauri 升级
+  或引入 `.zip` 更新时（#28）。
 - 历史 P3 审计项（更新构建哈希、SSRF link-local、状态胶囊 tab、品牌残留等）保留 backlog。

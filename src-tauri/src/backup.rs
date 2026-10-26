@@ -612,7 +612,10 @@ fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestor
             let entry = archive
                 .by_index_raw(index)
                 .map_err(|e| format!("读取备份条目失败：{e}"))?;
-            entry.name().to_string()
+            entry
+                .name()
+                .map(|name| name.into_owned())
+                .unwrap_or_else(|_| String::from_utf8_lossy(entry.name_raw()).into_owned())
         };
         if name.is_empty()
             || name.contains('\0')

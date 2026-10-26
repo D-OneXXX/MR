@@ -57,7 +57,6 @@ jobs:
       - name: Static and version guards
         run: node tests/qa/run-qa.mjs --suite=static
 
-      # 依赖审计保持可见报告；新的 high/critical 公告需在发布评审前处置。
-      - name: NPM audit report (production dependencies)
-        continue-on-error: true
+      # 生产依赖漏洞阻断；例外需书面记录。
+      - name: NPM audit (production dependencies)
         run: npm audit --omit=dev --audit-level=high

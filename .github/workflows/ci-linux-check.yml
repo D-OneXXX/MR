@@ -84,13 +84,16 @@ jobs:
         with:
           tool: cargo-audit
 
-      # 审计先作为可见报告，不阻断构建：Cargo 依赖含 Tauri/WebKit 生态，
-      # 上游 advisory 需要人工判断可利用性；阻断项在发版评审时处理。
-      - name: Cargo audit report
-        continue-on-error: true
-        run: cargo audit --file src-tauri/Cargo.lock
+      # 直接 zip 已升级 9.1.1；Tauri updater 2.14.0 仍带 zip 4.6.1，
+      # 其 extract 仅用于 .zip 更新包，当前 NSIS 通道不触发。
+      # 例外必须在 docs/TECHNICAL.md 记录，不得无理由新增。
+      - name: Cargo audit (blocking with documented updater zip exceptions)
+        run: |
+          cargo audit --file src-tauri/Cargo.lock \
+            --ignore RUSTSEC-2026-0367 \
+            --ignore RUSTSEC-2026-0368 \
+            --ignore RUSTSEC-2026-0369
 
-      # 依赖审计保持可见报告；新的 high/critical 公告需在发布评审前处置。
-      - name: NPM audit report (production dependencies)
-        continue-on-error: true
+      # 生产依赖漏洞阻断；例外需书面记录。
+      - name: NPM audit (production dependencies)
         run: npm audit --omit=dev --audit-level=high

@@ -64,7 +64,9 @@ fn process_mb() -> f64 {
     let mut sys = System::new();
     let pid = get_current_pid().expect("pid");
     sys.refresh_processes(ProcessesToUpdate::Some(&[pid]));
-    sys.process(pid).map(|p| p.memory() as f64 / 1024.0 / 1024.0).unwrap_or(0.0)
+    sys.process(pid)
+        .map(|p| p.memory() as f64 / 1024.0 / 1024.0)
+        .unwrap_or(0.0)
 }
 
 #[test]
@@ -102,9 +104,14 @@ fn two_hundred_pages_memory_growth_within_budget() {
 
     // v3 不变量：200 页全部留在 L1（翻回任一页毫秒命中），字节不超预算。
     assert_eq!(pages, PAGES, "200 页应全部驻留 L1（预算内）");
-    assert!(cache.get_page("book", 0, REQ_W, REQ_H).is_some(), "首页应命中");
     assert!(
-        cache.get_page("book", (PAGES - 1) as u32, REQ_W, REQ_H).is_some(),
+        cache.get_page("book", 0, REQ_W, REQ_H).is_some(),
+        "首页应命中"
+    );
+    assert!(
+        cache
+            .get_page("book", (PAGES - 1) as u32, REQ_W, REQ_H)
+            .is_some(),
         "末页应命中"
     );
     assert!(cbytes <= climit, "缓存 {cbytes} B 超出预算 {climit} B");

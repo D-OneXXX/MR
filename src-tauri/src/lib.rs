@@ -6,17 +6,17 @@ mod browser;
 pub mod cache;
 mod cache_health;
 mod commands;
-pub mod disk_cache;
 pub mod db;
 pub mod diagnostics;
+pub mod disk_cache;
 pub mod logging;
 mod online;
 mod open_with;
 mod paths;
-mod platform;
-mod resilience;
 pub mod pipeline;
+mod platform;
 pub mod render_cache;
+mod resilience;
 mod security;
 pub mod source;
 mod state;
@@ -367,7 +367,10 @@ fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
         Ok(conn) => conn,
         Err(error) => {
             state.set_db_error("db-open-failed");
-            logging::log_error("startup", "书库数据库打开失败（db-open-failed，详情已省略）");
+            logging::log_error(
+                "startup",
+                "书库数据库打开失败（db-open-failed，详情已省略）",
+            );
             return Err(error.to_string());
         }
     };
@@ -450,7 +453,10 @@ fn init_app<R: tauri::Runtime>(app: &mut tauri::App<R>) -> Result<(), String> {
     } else if !repaired_settings.is_empty() {
         logging::log_error(
             "version",
-            &format!("版本未变化，但修复了异常配置：{}", repaired_settings.join(",")),
+            &format!(
+                "版本未变化，但修复了异常配置：{}",
+                repaired_settings.join(",")
+            ),
         );
     }
     Ok(())

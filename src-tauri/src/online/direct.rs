@@ -236,9 +236,7 @@ pub fn parse_manifest_with(
         memory.host = crate::online::filter::url_host(url.as_str());
     }
     let referer = url.as_str().to_string();
-    let mut probe = |candidate: &CandidateImage| {
-        probe_image(http, &referer, candidate)
-    };
+    let mut probe = |candidate: &CandidateImage| probe_image(http, &referer, candidate);
     let outcome = filter_candidates(candidates, &memory, thresholds, &mut probe);
     if outcome.pages.is_empty() && !parsed.pages.is_empty() {
         return Err(BackendError::Msg(format!(
@@ -593,9 +591,7 @@ pub fn parse_batch_payload_with(
                 anchor: page.anchor.clone(),
             })
             .collect();
-        let mut probe = |candidate: &CandidateImage| {
-            probe_image(http, &referer, candidate)
-        };
+        let mut probe = |candidate: &CandidateImage| probe_image(http, &referer, candidate);
         let outcome = filter_candidates(candidates, &memory, thresholds, &mut probe);
         if outcome.pages.is_empty() && !stored.pages.is_empty() {
             return Err(BackendError::Msg(format!(
@@ -610,12 +606,7 @@ pub fn parse_batch_payload_with(
             next_url: stored.next_url,
             chapter_index: stored.chapter_index,
         };
-        out.push(make_filtered_meta(
-            &canonical,
-            &meta.title,
-            outcome,
-            links,
-        )?);
+        out.push(make_filtered_meta(&canonical, &meta.title, outcome, links)?);
     }
     Ok(out)
 }

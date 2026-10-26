@@ -66,8 +66,7 @@ pub fn extract_paths(argv: impl IntoIterator<Item = String>) -> Vec<String> {
             continue;
         }
         let path = Path::new(trimmed);
-        let supported =
-            path.is_dir() || (path.is_file() && crate::source::is_archive_path(path));
+        let supported = path.is_dir() || (path.is_file() && crate::source::is_archive_path(path));
         if !supported {
             continue;
         }
@@ -167,10 +166,7 @@ pub fn handle_launch(app: &AppHandle, argv: Vec<String>) {
         let request = import_into_request(db_path, paths);
         state.push_open_request(request);
         if let Err(error) = app_handle.emit("open-with-pending", ()) {
-            crate::logging::log_error(
-                "open_with",
-                &format!("发送打开请求失败：{error}"),
-            );
+            crate::logging::log_error("open_with", &format!("发送打开请求失败：{error}"));
         }
     });
 }
@@ -190,10 +186,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("系统时钟早于 UNIX_EPOCH")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "mr-open-with-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("mr-open-with-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("创建临时目录");
         dir
     }
@@ -223,7 +217,11 @@ mod tests {
             archive.to_string_lossy().into_owned(),
         ];
         let paths = extract_paths(argv);
-        assert_eq!(paths.len(), 3, "zip/cbz/目录各一条，重复项被去掉：{paths:?}");
+        assert_eq!(
+            paths.len(),
+            3,
+            "zip/cbz/目录各一条，重复项被去掉：{paths:?}"
+        );
         assert_eq!(paths[0], archive.to_string_lossy());
         assert_eq!(paths[1], upper.to_string_lossy());
         assert_eq!(paths[2], folder.to_string_lossy());

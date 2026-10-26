@@ -580,6 +580,79 @@ export async function runStaticSuite(ctx, report) {
   checkPostI18nHardcodedText(root, report);
   checkReleaseSurface(root, report);
   checkAntiMockGuards(root, report);
+  checkActionsPinned(root, report);
+}
+
+/* ------------------------------------------------------------------ */
+/* §3.3 GitHub Actions 供应链固定守卫                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 所有 `uses:` 必须固定到 40 位 commit SHA（可带版本注释）。
+ *
+ * 理由：浮动 tag（`@v4` / `@stable`）可以在无人 review 的情况下改变被执行的
+ * 代码；固定 SHA 后，升级必须走一次显式提交（同时保留版本注释可读性）。
+ */
+export function checkActionsPinned(root, report) {
+  const dir = path.join(root, ".github", "workflows");
+  const errors = [];
+  const evidence = [];
+  if (!fs.existsSync(dir)) {
+    fail(report, {
+      id: "static:actions-pinned",
+      suite: "static",
+      layer: "static",
+      title: "GitHub Actions 未固定到 commit SHA",
+      severity: "P1",
+      details: ".github/workflows 目录不存在",
+      location: ".github/workflows",
+      expected: "所有 uses: 固定到 40 位 SHA",
+      actual: "目录缺失",
+    });
+    return;
+  }
+  const files = fs
+    .readdirSync(dir)
+    .filter((name) => /\.ya?ml$/.test(name))
+    .sort();
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(dir, name), "utf8");
+    let count = 0;
+    for (const line of source.split(/\r?\n/)) {
+      const match = line.match(/uses:\s*([^\s#]+)/);
+      if (!match) continue;
+      count += 1;
+      const ref = match[1];
+      const sha = ref.match(/@([0-9a-f]{40})$/);
+      if (!sha) {
+        errors.push(`${name}: ${ref} 未固定到 40 位 commit SHA`);
+      }
+    }
+    if (count > 0) evidence.push(`${name}: ${count} 处 uses 已固定`);
+  }
+  if (errors.length) {
+    fail(report, {
+      id: "static:actions-pinned",
+      suite: "static",
+      layer: "static",
+      title: "GitHub Actions 未固定到 commit SHA",
+      severity: "P1",
+      details: errors.join(" | "),
+      location: ".github/workflows",
+      expected: "所有 uses: 固定到 40 位 commit SHA（保留版本注释）",
+      actual: errors.join(" | "),
+      rootCause: "新增或升级 workflow 时使用了浮动 tag/分支引用",
+      fix: "把 uses 改为 <action>@<40 位 SHA> # <版本>",
+    });
+  } else {
+    ok(report, {
+      id: "static:actions-pinned",
+      suite: "static",
+      layer: "static",
+      title: "GitHub Actions 全部固定到 commit SHA",
+      details: evidence.join("；"),
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -886,7 +959,8 @@ export function checkReleaseSurface(root, report) {
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
     "uploadUpdaterJson: true",
-    "tauri-apps/tauri-action@v1",
+    // 只匹配 action 名，不匹配版本/SHA：版本由 static:actions-pinned 守卫固定到 commit SHA。
+    "tauri-apps/tauri-action@",
     "releaseDraft: false",
     "MR_BUILD_ORIGIN: official",
     "npx tsc --noEmit",

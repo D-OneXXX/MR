@@ -367,7 +367,10 @@ fn parse_target(target: &str) -> Option<Url> {
 }
 
 /// 读取回传载荷里的可选文本字段；存在但不是字符串时报错。
-fn optional_text_field(value: &serde_json::Value, name: &str) -> Result<Option<String>, HandoffError> {
+fn optional_text_field(
+    value: &serde_json::Value,
+    name: &str,
+) -> Result<Option<String>, HandoffError> {
     match value.get(name) {
         None | Some(serde_json::Value::Null) => Ok(None),
         Some(serde_json::Value::String(raw)) => {
@@ -985,9 +988,8 @@ mod tests {
             "会话头应按 origin 登记在辅助会话注册表"
         );
         assert_eq!(
-            st.assisted_sessions
-                .headers_for_origin("http://other"),
-                None,
+            st.assisted_sessions.headers_for_origin("http://other"),
+            None,
             "其它 origin 不得拿到该会话头"
         );
         let stored = st
@@ -1040,11 +1042,13 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(st.assisted_sessions.is_empty(), "非法 origin 不得登记");
         let id = crate::db::book_id_for_path("http://e/h3");
-        assert!(st
-            .db
-            .with(|conn| crate::db::get_book(conn, &id).map_err(|e| e.to_string()))
-            .unwrap()
-            .is_some(), "origin 非法不得阻断章节导入");
+        assert!(
+            st.db
+                .with(|conn| crate::db::get_book(conn, &id).map_err(|e| e.to_string()))
+                .unwrap()
+                .is_some(),
+            "origin 非法不得阻断章节导入"
+        );
 
         cancel.store(true, Ordering::SeqCst);
         assert!(matches!(handle.join().unwrap(), HandoffOutcome::Stopped));
@@ -1308,16 +1312,22 @@ mod tests {
             let response = post_json(port, &test_token(), &body);
             assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         }
-        assert_eq!(st.assisted_sessions.len(), 0, "非法 origin 不得留下注册记录");
+        assert_eq!(
+            st.assisted_sessions.len(),
+            0,
+            "非法 origin 不得留下注册记录"
+        );
 
         // 章节仍应入库（降级不影响主流程）。
         for canonical in ["http://e/b1", "http://e/b2", "http://e/b3", "http://e/b4"] {
             let id = crate::db::book_id_for_path(canonical);
-            assert!(st
-                .db
-                .with(|conn| crate::db::get_book(conn, &id).map_err(|e| e.to_string()))
-                .unwrap()
-                .is_some(), "origin 非法不得阻断章节导入");
+            assert!(
+                st.db
+                    .with(|conn| crate::db::get_book(conn, &id).map_err(|e| e.to_string()))
+                    .unwrap()
+                    .is_some(),
+                "origin 非法不得阻断章节导入"
+            );
         }
 
         cancel.store(true, Ordering::SeqCst);
@@ -1365,7 +1375,11 @@ mod tests {
         assert_eq!(st.assisted_sessions.len(), 1);
 
         stop_handoff_state(&st);
-        assert_eq!(st.assisted_sessions.len(), 0, "停止 handoff 必须清空辅助会话");
+        assert_eq!(
+            st.assisted_sessions.len(),
+            0,
+            "停止 handoff 必须清空辅助会话"
+        );
         assert!(st.assisted_session("https://gallery.example").is_none());
     }
 }

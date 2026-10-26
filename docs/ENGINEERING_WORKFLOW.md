@@ -278,7 +278,7 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 | Secret scanning / push protection | 开启 | 开启 | 已完成 |
 | Dependabot alerts / security updates | 开启 | 开启 | 已完成 |
 | Code scanning（CodeQL default setup） | actions + JS/TS 开启；Rust 不在默认支持列表 | 保持 | 已完成 |
-| Actions 引用 | 可变 Tag | 固定 SHA | Phase 3 待办 |
+| Actions 引用 | 固定 SHA（含版本注释，静态守卫强制） | 固定 SHA | 已完成 |
 | 发布 concurrency | 无 | 按通道加 concurrency | Phase 4 |
 
 ---

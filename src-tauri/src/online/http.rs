@@ -300,15 +300,11 @@ fn no_proxy_matches(host: &str, port: Option<u16>, rules: &[String]) -> bool {
                 continue;
             }
         }
-        let rule_host = rule_host
-            .trim_start_matches("*.")
-            .trim_start_matches('.');
+        let rule_host = rule_host.trim_start_matches("*.").trim_start_matches('.');
         if rule_host.is_empty() {
             continue;
         }
-        if host_lower == rule_host
-            || host_lower.ends_with(&format!(".{rule_host}"))
-        {
+        if host_lower == rule_host || host_lower.ends_with(&format!(".{rule_host}")) {
             return true;
         }
     }
@@ -400,9 +396,7 @@ impl UreqTransport {
         let host = target
             .host_str()
             .filter(|host| !host.is_empty())
-            .ok_or_else(|| {
-                OnlineError::Network("URL 缺少主机名（online-url-invalid）".into())
-            })?;
+            .ok_or_else(|| OnlineError::Network("URL 缺少主机名（online-url-invalid）".into()))?;
         validate_host_literal(host, self.allow_loopback).map_err(OnlineError::Network)?;
         if host.parse::<IpAddr>().is_ok()
             || host.eq_ignore_ascii_case("localhost")
@@ -413,16 +407,13 @@ impl UreqTransport {
         let port = target.port_or_known_default().unwrap_or(443);
         let addrs = (host, port)
             .to_socket_addrs()
-            .map_err(|_| {
-                OnlineError::Network("域名解析失败（online-fetch-failed）".into())
-            })?;
+            .map_err(|_| OnlineError::Network("域名解析失败（online-fetch-failed）".into()))?;
         let mut saw = false;
         for addr in addrs {
             saw = true;
             if is_blocked_ip(addr.ip(), self.allow_loopback) {
                 return Err(OnlineError::Network(
-                    "目标域名解析到本机/私网/链路本地地址，已拒绝（online-blocked-address）"
-                        .into(),
+                    "目标域名解析到本机/私网/链路本地地址，已拒绝（online-blocked-address）".into(),
                 ));
             }
         }
@@ -471,18 +462,17 @@ impl UreqTransport {
         }
         if let Some(page) = referer {
             if let Ok(u) = url::Url::parse(page) {
-                if matches!(u.scheme(), "http" | "https")
-                    && u.host_str().is_some() {
-                        // 跨 origin 时用户头已被丢弃，必须使用派生值；
-                        // 同 origin 时显式配置的同名头优先。
-                        if !within_scope || !self.headers.has("referer") {
-                            req = req.set("Referer", &referer_value(target, &u, scope));
-                        }
-                        if !within_scope || !self.headers.has("origin") {
-                            let origin = u.origin().ascii_serialization();
-                            req = req.set("Origin", &origin);
-                        }
+                if matches!(u.scheme(), "http" | "https") && u.host_str().is_some() {
+                    // 跨 origin 时用户头已被丢弃，必须使用派生值；
+                    // 同 origin 时显式配置的同名头优先。
+                    if !within_scope || !self.headers.has("referer") {
+                        req = req.set("Referer", &referer_value(target, &u, scope));
                     }
+                    if !within_scope || !self.headers.has("origin") {
+                        let origin = u.origin().ascii_serialization();
+                        req = req.set("Origin", &origin);
+                    }
+                }
             }
         }
         match req.call() {
@@ -550,11 +540,8 @@ fn ensure_http_url(raw: &str) -> Result<url::Url, OnlineError> {
     if !matches!(u.scheme(), "http" | "https") {
         return Err(OnlineError::Network("仅支持 http/https URL".into()));
     }
-    validate_host_literal(
-        u.host_str().unwrap_or_default(),
-        allow_loopback_for_dev(),
-    )
-    .map_err(OnlineError::Network)?;
+    validate_host_literal(u.host_str().unwrap_or_default(), allow_loopback_for_dev())
+        .map_err(OnlineError::Network)?;
     Ok(u)
 }
 
@@ -640,9 +627,8 @@ mod tests {
 
     #[test]
     fn no_proxy_rules_match_exact_subdomain_port_and_wildcard() {
-        let rules = parse_no_proxy(
-            "example.com, .internal.test, https://secure.test/path, api.test:8443",
-        );
+        let rules =
+            parse_no_proxy("example.com, .internal.test, https://secure.test/path, api.test:8443");
         assert!(no_proxy_matches("example.com", Some(443), &rules));
         assert!(no_proxy_matches("cdn.example.com", Some(443), &rules));
         assert!(!no_proxy_matches("notexample.com", Some(443), &rules));
@@ -1395,7 +1381,10 @@ mod tests {
     #[test]
     fn assisted_origin_uses_registered_user_agent() {
         let (url, h) = spawn_hop(None);
-        let origin = url::Url::parse(&url).unwrap().origin().ascii_serialization();
+        let origin = url::Url::parse(&url)
+            .unwrap()
+            .origin()
+            .ascii_serialization();
         let registry = Arc::new(crate::state::AssistedSessionRegistry::new());
         registry
             .register(
@@ -1462,7 +1451,10 @@ mod tests {
     #[test]
     fn assisted_session_does_not_widen_user_header_scope() {
         let (url, h) = spawn_hop(None);
-        let origin = url::Url::parse(&url).unwrap().origin().ascii_serialization();
+        let origin = url::Url::parse(&url)
+            .unwrap()
+            .origin()
+            .ascii_serialization();
         let registry = Arc::new(crate::state::AssistedSessionRegistry::new());
         registry
             .register(

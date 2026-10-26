@@ -27,8 +27,8 @@ use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::online::filter::{
-    FilterAction, FilterMemory, FilterRule, FilterStats, FilterThresholds, FilteredPage, RulePattern,
-    RuleSource, SiteProfile,
+    FilterAction, FilterMemory, FilterRule, FilterStats, FilterThresholds, FilteredPage,
+    RulePattern, RuleSource, SiteProfile,
 };
 use crate::online::http::HttpTransport;
 
@@ -46,10 +46,7 @@ fn webtoon_ready(r: &db::BookRow, stored: Option<&crate::online::StoredMeta>) ->
     match stored {
         Some(meta) => !meta.pages.is_empty(),
         None => {
-            crate::logging::log_error(
-                "online_meta",
-                &format!("书籍 {} 元数据损坏", r.id),
-            );
+            crate::logging::log_error("online_meta", &format!("书籍 {} 元数据损坏", r.id));
             false
         }
     }
@@ -204,10 +201,7 @@ fn path_component_cmp(a: &str, b: &str) -> std::cmp::Ordering {
             return ordering;
         }
     }
-    a_tokens
-        .len()
-        .cmp(&b_tokens.len())
-        .then_with(|| a.cmp(b))
+    a_tokens.len().cmp(&b_tokens.len()).then_with(|| a.cmp(b))
 }
 
 /// 路径自然序：逐级目录比较，最后一级再比较文件 token。
@@ -428,8 +422,7 @@ fn scan_single_book(conn: &rusqlite::Connection, path: &Path) -> Result<BookInfo
         } else {
             db::clear_source_stamp(conn, &id)?;
         }
-        db::get_book(conn, &id)?
-            .ok_or_else(|| BackendError::Msg("入库后回读失败".into()))
+        db::get_book(conn, &id)?.ok_or_else(|| BackendError::Msg("入库后回读失败".into()))
     })();
     if result.is_err() {
         // 失败后不得保留旧指纹，否则文件回滚到旧 mtime/大小时会被误判为未变。
@@ -813,13 +806,13 @@ fn relocate_book_impl(
         ));
     }
 
-    let old = db::get_book(conn, old_id)?
-        .ok_or_else(|| BackendError::Msg("书籍不存在".to_string()))?;
+    let old =
+        db::get_book(conn, old_id)?.ok_or_else(|| BackendError::Msg("书籍不存在".to_string()))?;
     if old.source_type != "local" {
         return Err(BackendError::Msg("只能重定位本地书籍".to_string()));
     }
-    let new_id = db::find_book_id_by_path(conn, &dest)?
-        .unwrap_or_else(|| db::book_id_for_path(&dest));
+    let new_id =
+        db::find_book_id_by_path(conn, &dest)?.unwrap_or_else(|| db::book_id_for_path(&dest));
     if old.id == new_id && old.path == dest {
         return Ok(old);
     }
@@ -1225,9 +1218,7 @@ pub struct ClearCacheResult {
 /// 一键清空临时缓存：内存 L1 + 渲染 L2 + 在线原图 L2。
 /// 只删除派生目录，绝不触碰 SQLite 书库/进度/设置。
 #[tauri::command]
-pub async fn clear_temp_cache(
-    state: State<'_, Arc<AppState>>,
-) -> Result<ClearCacheResult, String> {
+pub async fn clear_temp_cache(state: State<'_, Arc<AppState>>) -> Result<ClearCacheResult, String> {
     let st = state.inner().clone();
     blocking(move || {
         let before = st.disk_cache_totals().0;
@@ -1460,10 +1451,8 @@ pub async fn get_webtoon_layout(
         let mut out: Vec<(u32, u32)> = Vec::with_capacity(count);
         for i in 0..count {
             // 先读 header（256KB 内通常含 SOF）；失败回退全读。
-            let dims: Option<(u32, u32)> = handle
-                .read_partial(i, 256 * 1024)
-                .ok()
-                .and_then(|partial| {
+            let dims: Option<(u32, u32)> =
+                handle.read_partial(i, 256 * 1024).ok().and_then(|partial| {
                     image::ImageReader::new(std::io::Cursor::new(&partial.bytes))
                         .with_guessed_format()
                         .ok()
@@ -1961,12 +1950,8 @@ fn rebuild_online_meta(
         next_url: stored.next_url.clone(),
         chapter_index: stored.chapter_index,
     };
-    let mut meta = crate::online::direct::make_meta_with_links(
-        &canonical,
-        &row.title,
-        pages,
-        links,
-    )?;
+    let mut meta =
+        crate::online::direct::make_meta_with_links(&canonical, &row.title, pages, links)?;
     let mut next: crate::online::StoredMeta = serde_json::from_str(&meta.meta_json)
         .map_err(|e| BackendError::Msg(format!("内部元数据错误：{e}")))?;
     next.schema = 2;
@@ -2123,9 +2108,7 @@ pub async fn list_online_filter_rules(
 }
 
 #[tauri::command]
-pub async fn export_online_filter_rules(
-    state: State<'_, Arc<AppState>>,
-) -> Result<String, String> {
+pub async fn export_online_filter_rules(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let st = state.inner().clone();
     blocking(move || {
         st.db
@@ -2162,7 +2145,10 @@ pub async fn import_online_filter_rules(
                     .get("rules")
                     .cloned()
                     .ok_or_else(|| BackendError::Msg("规则 JSON 缺少 rules 数组".into()))?,
-                value.get("profiles").cloned().unwrap_or(serde_json::Value::Null),
+                value
+                    .get("profiles")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
             )
         };
         let mut rules: Vec<FilterRule> = serde_json::from_value(rules_value)
@@ -2206,9 +2192,7 @@ pub async fn import_online_filter_rules(
 }
 
 #[tauri::command]
-pub async fn reset_online_filter_rules(
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
+pub async fn reset_online_filter_rules(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let st = state.inner().clone();
     blocking(move || {
         st.db
@@ -2629,8 +2613,7 @@ pub async fn get_filtered_preview(
         let thumb = image.thumbnail(360, 540);
         let (width, height) = thumb.dimensions();
         let mut buf = Vec::new();
-        let mut encoder =
-            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80);
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80);
         encoder
             .encode_image(&thumb)
             .map_err(|e| BackendError::Decode(format!("过滤图预览编码失败：{e}")))?;
@@ -2835,14 +2818,22 @@ fn canonical_existing(path: &Path) -> Option<PathBuf> {
     if !path.exists() {
         return None;
     }
-    path.canonicalize().ok().or_else(|| Some(path.to_path_buf()))
+    path.canonicalize()
+        .ok()
+        .or_else(|| Some(path.to_path_buf()))
 }
 
 fn sensitive_system_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     #[cfg(windows)]
     {
-        for key in ["SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"] {
+        for key in [
+            "SystemRoot",
+            "windir",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramData",
+        ] {
             if let Some(value) = std::env::var_os(key) {
                 dirs.push(PathBuf::from(value));
             }
@@ -2857,7 +2848,9 @@ fn sensitive_system_dirs() -> Vec<PathBuf> {
             dirs.push(PathBuf::from(path));
         }
     }
-    dirs.into_iter().filter_map(|path| canonical_existing(&path)).collect()
+    dirs.into_iter()
+        .filter_map(|path| canonical_existing(&path))
+        .collect()
 }
 
 fn sensitive_user_dirs() -> Vec<PathBuf> {
@@ -2936,10 +2929,7 @@ pub(crate) fn is_safe_library_source_path(path: &Path) -> bool {
             protected_roots.push(path);
         }
     }
-    if protected_roots
-        .iter()
-        .any(|root| path_within(&canon, root))
-    {
+    if protected_roots.iter().any(|root| path_within(&canon, root)) {
         return false;
     }
     true
@@ -3150,7 +3140,10 @@ mod tests {
         let dir = test_temp_dir("delete-guard");
         let book_dir = dir.join("book");
         std::fs::create_dir_all(&book_dir).unwrap();
-        assert!(validate_delete_target(&book_dir).is_ok(), "普通书目录应允许");
+        assert!(
+            validate_delete_target(&book_dir).is_ok(),
+            "普通书目录应允许"
+        );
         assert!(is_safe_library_source_path(&book_dir));
 
         let archive = dir.join("book.cbz");
@@ -3182,7 +3175,9 @@ mod tests {
                 "用户文档目录本身必须拒绝"
             );
         }
-        assert!(!is_safe_library_source_path(Path::new("relative/manga.cbz")));
+        assert!(!is_safe_library_source_path(Path::new(
+            "relative/manga.cbz"
+        )));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -3490,9 +3485,7 @@ mod tests {
         let (row, _) = apply_resolved_meta(&st, &old).expect("首次入库");
         let id = row.id;
         st.db
-            .with(|conn| {
-                db::set_progress(conn, &id, 4, None).map_err(|e| e.to_string())
-            })
+            .with(|conn| db::set_progress(conn, &id, 4, None).map_err(|e| e.to_string()))
             .expect("写入进度");
 
         // 页数不变的变化：进度保留。
@@ -3936,12 +3929,7 @@ mod tests {
         let new_path = dir.join("改名后的漫画.cbz");
         std::fs::rename(&old_path, &new_path).unwrap();
 
-        let row = relocate_book_impl(
-            &conn,
-            &book.id,
-            &new_path.to_string_lossy(),
-        )
-        .unwrap();
+        let row = relocate_book_impl(&conn, &book.id, &new_path.to_string_lossy()).unwrap();
         assert_eq!(row.path, new_path.to_string_lossy());
         assert_eq!(row.page_count, 20);
         assert_eq!(row.current_page, 15, "重定位后必须仍停在第 15 页");

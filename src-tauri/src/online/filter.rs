@@ -341,11 +341,14 @@ pub fn rule_matches(rule: &FilterRule, candidate: &CandidateImage, sha256: Optio
             url_template(&candidate.url).as_deref() == Some(template.as_str())
         }
         RulePattern::ExactUrl { url } => redacted_url(&candidate.url) == *url,
-        RulePattern::Sha256 { hash } => sha256.is_some_and(|actual| actual.eq_ignore_ascii_case(hash)),
-        RulePattern::DomClass { value } => candidate
-            .class_id
-            .as_deref()
-            .is_some_and(|classes| classes.to_ascii_lowercase().contains(&value.to_ascii_lowercase())),
+        RulePattern::Sha256 { hash } => {
+            sha256.is_some_and(|actual| actual.eq_ignore_ascii_case(hash))
+        }
+        RulePattern::DomClass { value } => candidate.class_id.as_deref().is_some_and(|classes| {
+            classes
+                .to_ascii_lowercase()
+                .contains(&value.to_ascii_lowercase())
+        }),
         RulePattern::Size { width, height } => {
             candidate.width == Some(*width) && candidate.height == Some(*height)
         }
@@ -400,9 +403,17 @@ fn negative_hit(candidate: &CandidateImage) -> Option<&'static str> {
     let hay = format!(
         "{} {} {} {}",
         redacted_url(&candidate.url).to_ascii_lowercase(),
-        candidate.class_id.as_deref().unwrap_or("").to_ascii_lowercase(),
+        candidate
+            .class_id
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase(),
         candidate.alt.as_deref().unwrap_or("").to_ascii_lowercase(),
-        candidate.container.as_deref().unwrap_or("").to_ascii_lowercase()
+        candidate
+            .container
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase()
     );
     NEGATIVE_WORDS
         .iter()
@@ -451,10 +462,7 @@ pub fn filter_candidates(
     } else {
         memory.host.clone()
     };
-    let templates: Vec<Option<String>> = candidates
-        .iter()
-        .map(|c| url_template(&c.url))
-        .collect();
+    let templates: Vec<Option<String>> = candidates.iter().map(|c| url_template(&c.url)).collect();
     let mut template_counts: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::new();
     for template in templates.iter().flatten() {
@@ -670,10 +678,8 @@ pub fn filter_candidates(
     profile.host = host;
     if pages.len() >= 3 && kept_ratio >= 0.6 {
         let kept_widths: Vec<u32> = pages.iter().filter_map(|p| p.width).collect();
-        let kept_templates: Vec<String> = pages
-            .iter()
-            .filter_map(|p| url_template(&p.url))
-            .collect();
+        let kept_templates: Vec<String> =
+            pages.iter().filter_map(|p| url_template(&p.url)).collect();
         let mut template_counts: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
         for template in &kept_templates {
@@ -688,10 +694,7 @@ pub fn filter_candidates(
         for container in &kept_containers {
             *container_counts.entry(container.as_str()).or_insert(0) += 1;
         }
-        if let Some((selector, _)) = container_counts
-            .into_iter()
-            .max_by_key(|(_, count)| *count)
-        {
+        if let Some((selector, _)) = container_counts.into_iter().max_by_key(|(_, count)| *count) {
             profile.main_selector = Some(selector.to_string());
         }
         if let Some(median) = median_width(&kept_widths) {
@@ -703,14 +706,7 @@ pub fn filter_candidates(
                 })
                 .collect();
             let base = median_width(&portrait).unwrap_or(median);
-            profile.width_min = Some(
-                portrait
-                    .iter()
-                    .copied()
-                    .min()
-                    .unwrap_or(base)
-                    .max(1),
-            );
+            profile.width_min = Some(portrait.iter().copied().min().unwrap_or(base).max(1));
             profile.width_max = Some(portrait.iter().copied().max().unwrap_or(base).max(1));
         }
         let observed_aspect = pages
@@ -752,10 +748,7 @@ mod tests {
 
     #[test]
     fn digit_runs_are_normalized_for_templates() {
-        assert_eq!(
-            normalize_digit_runs("/ch01/001.jpg"),
-            "/ch#/#.jpg"
-        );
+        assert_eq!(normalize_digit_runs("/ch01/001.jpg"), "/ch#/#.jpg");
         assert_eq!(
             url_template("https://cdn.example/ch01/001.jpg?token=secret#f").as_deref(),
             Some("https://cdn.example/ch#/#.jpg")
@@ -769,12 +762,7 @@ mod tests {
         assert_eq!(median_width(&[]), None);
     }
 
-    fn candidate(
-        url: &str,
-        width: u32,
-        height: u32,
-        order: usize,
-    ) -> CandidateImage {
+    fn candidate(url: &str, width: u32, height: u32, order: usize) -> CandidateImage {
         let mut candidate = CandidateImage::new(url, order);
         candidate.width = Some(width);
         candidate.height = Some(height);
@@ -788,12 +776,7 @@ mod tests {
 
     fn run(candidates: Vec<CandidateImage>, memory: &FilterMemory) -> FilterOutcome {
         let mut probe = no_probe;
-        filter_candidates(
-            candidates,
-            memory,
-            &FilterThresholds::default(),
-            &mut probe,
-        )
+        filter_candidates(candidates, memory, &FilterThresholds::default(), &mut probe)
     }
 
     #[test]
@@ -813,7 +796,12 @@ mod tests {
         candidates.push(logo);
         candidates.push(candidate("https://site.example/ad_banner.png", 728, 90, 31));
         candidates.push(candidate("https://site.example/qrcode.png", 300, 300, 32));
-        candidates.push(candidate("https://other.example/portrait.png", 800, 1200, 33));
+        candidates.push(candidate(
+            "https://other.example/portrait.png",
+            800,
+            1200,
+            33,
+        ));
         let outcome = run(candidates, &FilterMemory::default());
         assert_eq!(outcome.pages.len(), 30);
         assert_eq!(outcome.blocked.len(), 4);
@@ -981,8 +969,10 @@ mod tests {
         let outcome = run(candidates, &memory);
         assert_eq!(outcome.pages.len(), 5);
         assert_eq!(outcome.blocked.len(), 1);
-        assert!(outcome.blocked[0].reason.contains("profile")
-            || outcome.blocked[0].reason.contains("median"));
+        assert!(
+            outcome.blocked[0].reason.contains("profile")
+                || outcome.blocked[0].reason.contains("median")
+        );
     }
 
     #[test]

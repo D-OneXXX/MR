@@ -93,6 +93,19 @@
 > **Phase 1–3：以下步骤暂停执行。** 不要推送 Tag，不要创建公开 Release；Phase 4 将替换为
 > “固定 Commit → 全量 QA → 上传 Draft → 人工审批 → 发布”的流程。
 
+0. **发布契约门禁（本地可执行，必须先绿）**：
+
+   ```bat
+   npm run test:release   # 发行面静态契约 + Linux 清单生成契约 + 更新清单校验器
+   ```
+
+   该门禁覆盖：`productName` / `identifier` / NSIS 目标与六语安装向导 / `bundle.targets`
+   不含 `msi` / updater 公钥存在且为 minisign 公钥 / Windows 与 Linux 更新通道端点互相独立 /
+   `latest-linux-critical.json` 生成成功且缺签名即失败 / 公开清单结构（版本、平台、签名、https 链接）。
+
+   SQLite 数据兼容性由 `cargo test --lib` 覆盖：`legacy_library_file_migrates_without_data_loss`
+   （旧库文件无损升级）与 `newer_schema_version_is_not_downgraded`（高版本库不被降级写回）。
+
 1. 修改版本（单一事实源为 `package.json`）：
 
    ```bat
@@ -168,6 +181,45 @@
      `.../latest-linux-critical.json` 均可直接访问（双通道接力保证）；
    - 安装上一版本，打开「设置 → 关于与维护 → GitHub 自动更新」检查并安装；
    - 安装完成后按提示重启（Windows 安装器会自动退出/重启，属于用户点击后的预期行为）。
+
+### 4.1 安装 / 覆盖升级 / 回滚验证（需要干净 Windows VM）
+
+> **当前状态：BLOCKED。** GitHub-hosted runner 不是干净用户环境，也没有可交互桌面会话，
+> 因此这一步**无法在 CI 内执行**，也**没有伪造通过记录**。下面是维护者在一次性
+> Windows 虚拟机上按脚本执行的固定流程。
+
+脚本：`scripts/release-smoke/windows-install-upgrade.ps1`（PowerShell 5.1+ / pwsh）。
+
+```powershell
+pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 `
+  -PreviousInstaller D:\artifacts\MangaReader_0.17.1_x64-setup.exe `
+  -Installer D:\artifacts\MangaReader_0.17.2_x64-setup.exe `
+  -ExpectedVersion 0.17.2
+```
+
+脚本依次验证（任何一项失败即以非零码退出）：
+
+1. 安装包存在并打印 SHA-256；
+2. 旧版本静默安装（`/S`）后注册到卸载列表（HKCU/HKLM）；
+3. 新版本**覆盖安装**后注册到卸载列表、版本号与预期一致；
+4. 安装后的主程序能启动并在 12 秒后仍在运行；
+5. 升级前后 `library.db` 存在且体积未被截断（数据不丢）；
+6. 回滚：重新安装旧版本后主程序仍可启动、`library.db` 仍在；
+7. 清理：卸载后卸载列表不再包含 MangaReader。
+
+约束：只在一次性 VM 上运行；脚本不读取、不上传任何用户数据；不接触签名私钥、
+不创建 Release、不推送 Tag；结束进程属于测试清理，不是产品的静默重启。
+
+已可在无 VM 环境验证的部分（自动化门禁）：
+
+| 环节 | 覆盖方式 | 状态 |
+|---|---|---|
+| 旧库文件升级 | `cargo test --lib legacy_library_file_migrates_without_data_loss` | VERIFIED |
+| 高版本库不被降级 | `cargo test --lib newer_schema_version_is_not_downgraded` | VERIFIED |
+| 发行面/安装器配置 | `npm run test:release` | VERIFIED |
+| 公开更新清单结构 | `npm run test:release` + 发版工作流内的校验步骤 | VERIFIED |
+| NSIS 真实安装/覆盖/回滚 | `windows-install-upgrade.ps1`（需干净 VM） | BLOCKED |
+| 真实用户目录下的升级与数据迁移 | 需真实用户样本（隐私边界内不可自动化） | BLOCKED |
 
 ## 5. 更新失败的常见原因
 

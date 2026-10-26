@@ -14,6 +14,7 @@
     "test:version": "node --test scripts/version.test.mjs",
     "test:governance": "node --test scripts/sync-labels.test.mjs scripts/project-status.test.mjs scripts/pr-governance.test.mjs tests/qa/lib/reliability.test.mjs",
     "test:fixtures": "node --test tests/qa/lib/fixtures.test.mjs",
+    "test:release": "node --test scripts/release-contract.test.mjs",
     "format:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
     "status": "node scripts/project-status.mjs",
     "labels:sync": "node scripts/sync-labels.mjs",

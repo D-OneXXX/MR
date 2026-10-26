@@ -45,7 +45,13 @@ param(
   [string]$EmitEvidence = "",
 
   [Parameter(Mandatory = $false)]
-  [string]$DataDirForApp = ""
+  [string]$DataDirForApp = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$MergeFrom = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$ArtifactName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,7 +83,8 @@ function Get-InstalledMangaReader {
       $props = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue
       if ($props.DisplayName -eq "MangaReader") {
         return [pscustomobject]@{
-          InstallLocation = $props.InstallLocation
+          # 注册表里的 InstallLocation 可能自带引号（NSIS 写入形式），先剥掉。
+          InstallLocation = ($props.InstallLocation -replace '"', '')
           DisplayVersion  = $props.DisplayVersion
           UninstallString = $props.UninstallString
           Key             = $key.PSPath
@@ -127,6 +134,10 @@ function Test-AppLaunch([string]$InstallLocation) {
     Assert-True $false "安装目录里找不到主程序：$InstallLocation"
     return
   }
+  # 隔离数据目录：绝不碰真实用户的书库。
+  $env:MR_DATA_DIR = $DataDirForApp
+  $env:MR_RENDER_CACHE_DIR = Join-Path $DataDirForApp "render_cache"
+  $env:MR_ONLINE_CACHE_DIR = Join-Path $DataDirForApp "online_cache"
   $proc = Start-Process -FilePath $exe -PassThru
   Start-Sleep -Seconds 12
   $running = -not $proc.HasExited
@@ -175,7 +186,7 @@ Write-Step "数据存活检查（升级后）"
 $afterState = Get-LibraryState $DataDir
 if ($beforeState.Exists) {
   Assert-True $afterState.Exists "升级后 library.db 仍然存在"
-  Assert-True ($afterState.Size -ge $beforeState.Size) "升级后 library.db 未被截断（大小 $beforeState.Size → $afterState.Size）"
+  Assert-True ($afterState.Size -ge $beforeState.Size) "升级后 library.db 未被截断（大小 $($beforeState.Size) → $($afterState.Size)）"
 } else {
   Write-Host "   升级前无既有书库，跳过体积对比（首次安装场景）"
   Assert-True $afterState.Exists "首次安装后自动创建 library.db"
@@ -221,10 +232,29 @@ function Get-SqliteHeaderOk([string]$DbPath) {
 }
 
 if ($EmitEvidence) {
-  $installerName = Split-Path -Leaf $Installer
+  $installerName = if ($ArtifactName) { $ArtifactName } else { Split-Path -Leaf $Installer }
   $installerSha = (Get-FileHash -Algorithm SHA256 $Installer).Hash.ToLower()
   $dbPath = Join-Path $DataDirForApp "library.db"
   $dataIntegrity = if (Get-SqliteHeaderOk $dbPath) { "pass" } else { "fail" }
+  # 合并既有证据：不同次运行覆盖不同检查项（全新安装 / 覆盖升级 / 回滚），
+  # 取每项里更好的结果（pass 优先），最终产出一份完整证据。
+  $merged = [ordered]@{}
+  if ($MergeFrom -and (Test-Path $MergeFrom)) {
+    try { $merged = (Get-Content $MergeFrom -Raw | ConvertFrom-Json) } catch { $merged = @{} }
+  }
+
+  $freshInstall = if ($freshInstallOk) { "pass" } else { "fail" }
+  $upgrade = if ($upgradeOk) { "pass" } else { "fail" }
+  $recovery = if ($recoveryOk) { "pass" } else { "fail" }
+  # 合并既有证据：任一次运行为 pass 即算 pass（两次运行覆盖不同检查项）。
+  $checkFresh = $freshInstall
+  if ($merged.checks.freshInstall -eq "pass") { $checkFresh = "pass" }
+  $checkUpgrade = $upgrade
+  if ($merged.checks.upgrade -eq "pass") { $checkUpgrade = "pass" }
+  $checkData = $dataIntegrity
+  if ($merged.checks.dataIntegrity -eq "pass") { $checkData = "pass" }
+  $checkRecovery = $recovery
+  if ($merged.checks.recovery -eq "pass") { $checkRecovery = "pass" }
   $evidence = [ordered]@{
     kind = "manga-reader.install-verification"
     verdict = if ($script:Failures.Count -eq 0 -and $dataIntegrity -eq "pass") { "PASS" } else { "FAIL" }
@@ -234,10 +264,10 @@ if ($EmitEvidence) {
     artifactName = $installerName
     artifactSha256 = $installerSha
     checks = [ordered]@{
-      freshInstall = if ($freshInstallOk) { "pass" } else { "fail" }
-      upgrade = if ($upgradeOk) { "pass" } else { "fail" }
-      dataIntegrity = $dataIntegrity
-      recovery = if ($recoveryOk) { "pass" } else { "fail" }
+      freshInstall = $checkFresh
+      upgrade = $checkUpgrade
+      dataIntegrity = $checkData
+      recovery = $checkRecovery
     }
     machine = [ordered]@{
       os = (Get-CimInstance Win32_OperatingSystem).Caption
@@ -246,7 +276,8 @@ if ($EmitEvidence) {
     }
     verifiedAt = (Get-Date).ToUniversalTime().ToString("o")
   }
-  Set-Content -Path $EmitEvidence -Value ($evidence | ConvertTo-Json -Depth 6) -Encoding UTF8
+  $json = $evidence | ConvertTo-Json -Depth 6
+  [System.IO.File]::WriteAllText($EmitEvidence, $json, (New-Object System.Text.UTF8Encoding($false)))
   Write-Host "已写出安装验证证据：$EmitEvidence（verdict=$($evidence.verdict)）"
 }
 

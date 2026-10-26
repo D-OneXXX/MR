@@ -287,3 +287,34 @@ grep -rn "push:" .github/workflows/    # 不得出现 tags 触发
 新增 9 项证据门禁单测。
 
 ### 9.3 Windows 安装/升级验证（见第 10 节）
+
+---
+
+## 10. Windows 安装与升级验证（真实执行，2026-10-26）
+
+### 10.1 执行环境与诚实边界
+
+| 项 | 实际情况 |
+|---|---|
+| 宿主 | 本机 Windows 11 专业工作站版（非一次性干净 VM：系统镜像与用户配置是共享的） |
+| 安装器 | 已发布的 `v0.17.1` NSIS 安装包（真实下载，SHA-256 `3e90ece5…`）+ 隔离演练 Draft 里的候选安装包（SHA-256 `200ef3cd…`） |
+| 安装位置 | `C:\Program Files\MangaReader`（NSIS 机器级安装，卸载项在 HKLM） |
+| 应用数据 | **完全隔离**：启动应用时用 `MR_DATA_DIR` / `MR_RENDER_CACHE_DIR` / `MR_ONLINE_CACHE_DIR` 指向临时目录，未触碰真实用户书库 |
+| 版本跨度 | 覆盖安装（0.17.1 → 0.17.1 候选构建），**未覆盖 0.17.1 → 0.17.2 跨版本升级**（版本 bump 未授权） |
+
+### 10.2 实际结果（全部通过）
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| 全新安装 | PASS | 卸载后安装候选：注册表出现 MangaReader 0.17.1，主程序启动并在 12 秒后仍在运行，自动创建 `library.db` |
+| 覆盖升级 | PASS | 先装已发布 0.17.1 → 再装候选：注册项保持、版本正确、主程序启动、数据目录 `library.db` 存在且未被截断 |
+| 阅读进度与 SQLite 数据完整性 | PASS | 升级前在隔离目录写入书库（8 本书，`QA Local Folder` 进度=3）→ 升级 → 回滚后读回：**书仍为 8 本、进度仍为 3** |
+| 更新失败时的数据保护与恢复 | PASS（脚本级） | 安装脚本的「回滚」阶段验证：重新安装旧版本后应用仍可启动、`library.db` 仍在；失败即 `verdict=FAIL`，不会出具证据 |
+| 证据产出 | PASS | `install-verification.json`：`freshInstall/upgrade/dataIntegrity/recovery` 四项全 pass，绑定版本/Commit/平台/安装包 SHA-256 |
+| 发布门禁端到端 | PASS | 用真实安装证据 + 官方 minisign 生成的签名证据跑 `verify-evidence.mjs` → `OK`（版本 0.17.1 / 通道 windows / 平台 windows-x86_64 / 制品摘要 200ef3cd…） |
+
+### 10.3 仍需补做的部分
+
+- **干净 VM 的重复执行**：本节结果来自共享宿主，**不是**一次性干净 VM；
+  正式发布前应在干净 VM 上用同一脚本重跑一次（脚本已就绪，命令见 `docs/dev/RELEASE.md` §4.2）。
+- **跨版本升级（0.17.1 → 0.17.2）**：版本 bump 未授权，尚未覆盖。

@@ -686,8 +686,11 @@ export function checkReleaseGovernance(root, report) {
     if (!source.includes("TAURI_SIGNING_PRIVATE_KEY")) {
       errors.push(`${name} 必须使用签名私钥构建候选制品`);
     }
-    if (!source.includes("--draft")) {
-      errors.push(`${name} 必须只创建 Draft（--draft），不得直接公开`);
+    if (!source.includes("releaseDraft: true") && !source.includes("--draft")) {
+      errors.push(`${name} 必须只创建 Draft（releaseDraft: true / --draft），不得直接公开`);
+    }
+    if (source.includes("releaseDraft: false")) {
+      errors.push(`${name} 不得直接公开发布（releaseDraft: false）`);
     }
     if (!source.includes("rc-record.json")) {
       errors.push(`${name} 必须产出 rc-record.json（审批依据）`);
@@ -1113,7 +1116,8 @@ export function checkReleaseSurface(root, report) {
     "cargo test --lib",
     "npm run build",
     // 候选只落成 Draft，并产出审批依据。
-    "--draft",
+    "releaseDraft: true",
+    "uploadUpdaterJson: true",
     "rc-record.json",
     // QA 证据按 run id 绑定到候选 Commit。
     "qa_run_id",

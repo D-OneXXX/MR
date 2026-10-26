@@ -215,3 +215,20 @@ test("parseTag：隔离演练标签被识别为 rehearsal 且不可发布", () =
   assert.equal(verdict.ok, false);
   assert.ok(verdict.problems.some((p) => p.includes("演练候选")));
 });
+
+test("治理文件（记录/摘要/安装回执）不参与制品摘要比对", () => {
+  const record = makeRecord();
+  const verdict = verifyPublishPreconditions({
+    record,
+    actualDigests: new Map([
+      ["app-setup.exe", INSTALLER_SHA],
+      ["rc-record.json", "c".repeat(64)],
+      ["rc-summary.md", "d".repeat(64)],
+      ["install-verification.json", "e".repeat(64)],
+    ]),
+    attestation: makeAttestation(),
+    channel: "windows",
+    commit: COMMIT,
+  });
+  assert.equal(verdict.ok, true, verdict.problems.join(" | "));
+});

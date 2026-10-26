@@ -247,3 +247,74 @@ grep -rn "push:" .github/workflows/    # 不得出现 tags 触发
 2. 干净 Windows VM 上的 NSIS 安装 / 覆盖升级 / 用户数据完整性验证（BLOCKED）。
 
 其余发布链路（候选→Draft→审批→发布、制品绑定、权限收敛、通道独立、无绕过路径）已具备可验证证据。
+
+---
+
+## 9. 发布前阻塞项处置与自动门禁（2026-10-26 续）
+
+### 9.1 签名密钥一致性（VERIFIED）
+
+用**官方 minisign 0.12**（jedisct1/minisign 官方 Release，SHA-256 固定在
+`scripts/release-governance/minisign.digests.json`）做验签：
+
+| 对象 | 结论 |
+|---|---|
+| 已发布 `v0.17.1` 安装包 vs 仓库当前配置的 updater 公钥 | **验证通过**（`Signature and comment signature verified`）→ 已发布版本的信任链完好 |
+| 本机私钥签名的探针 vs 同一公钥 | **验证通过** → 本机 `updater.key` 与 `tauri.conf.json` 的公钥**是同一把** |
+| 隔离演练 Draft 制品（用 Environment Secret 签名）vs 同一公钥 | **验证通过** → Environment 级 Secret 产出的是**有效**签名 |
+
+顺带纠正了此前基于「解析 `.sig` 里公钥 ID」的误判：minisign 的 `.sig` **不含公钥**，
+此前读出的「三个不同 key ID」是无效结论（已用官方工具复核推翻）。
+
+处置：Environment Secret 已按验证通过的密钥重新配置；**仓库级原始 Secret 已删除**
+（迁移与验签均成功后才删），现在私钥只对受审批保护的两个 Environment 可见。
+
+### 9.2 自动发布门禁（新增，无绕过路径）
+
+| 组件 | 作用 |
+|---|---|
+| `scripts/release-governance/evidence.mjs` | 证据契约：签名/安装两类证据的字段绑定、时效、通道必需检查项 |
+| `scripts/release-governance/verify-signature.mjs` | 调官方 minisign 验签并产出 `signature-verification.json`；找不到 minisign 即失败（fail closed） |
+| `scripts/release-governance/verify-evidence.mjs` | 发布总闸：证据必须与候选的版本/Commit/平台/制品 SHA-256 一致且未过期 |
+| `scripts/release-governance/fetch-minisign.mjs` | 只从官方 Release 下载并按固定摘要校验后使用 |
+| `release-publish*.yml` | 发布前强制三步：取 minisign → 验签 → 证据总闸；**没有开关** |
+| `static:release-governance` | 守卫：发布工作流必须调用验签与总闸、必须要求安装证据、不得出现跳过开关 |
+
+门禁判定（全部为「缺证据即拒绝」）：缺签名证据 / 缺安装证据 / 证据过期 /
+版本不一致 / Commit 不一致 / 平台不一致 / 制品被替换 / 公钥 ID 不匹配 / 演练候选。
+
+演练脚本扩展到 **30/30**（新增 I 场景「证据门禁」7 项）；`npm run test:release`
+新增 9 项证据门禁单测。
+
+### 9.3 Windows 安装/升级验证（见第 10 节）
+
+---
+
+## 10. Windows 安装与升级验证（真实执行，2026-10-26）
+
+### 10.1 执行环境与诚实边界
+
+| 项 | 实际情况 |
+|---|---|
+| 宿主 | 本机 Windows 11 专业工作站版（非一次性干净 VM：系统镜像与用户配置是共享的） |
+| 安装器 | 已发布的 `v0.17.1` NSIS 安装包（真实下载，SHA-256 `3e90ece5…`）+ 隔离演练 Draft 里的候选安装包（SHA-256 `200ef3cd…`） |
+| 安装位置 | `C:\Program Files\MangaReader`（NSIS 机器级安装，卸载项在 HKLM） |
+| 应用数据 | **完全隔离**：启动应用时用 `MR_DATA_DIR` / `MR_RENDER_CACHE_DIR` / `MR_ONLINE_CACHE_DIR` 指向临时目录，未触碰真实用户书库 |
+| 版本跨度 | 覆盖安装（0.17.1 → 0.17.1 候选构建），**未覆盖 0.17.1 → 0.17.2 跨版本升级**（版本 bump 未授权） |
+
+### 10.2 实际结果（全部通过）
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| 全新安装 | PASS | 卸载后安装候选：注册表出现 MangaReader 0.17.1，主程序启动并在 12 秒后仍在运行，自动创建 `library.db` |
+| 覆盖升级 | PASS | 先装已发布 0.17.1 → 再装候选：注册项保持、版本正确、主程序启动、数据目录 `library.db` 存在且未被截断 |
+| 阅读进度与 SQLite 数据完整性 | PASS | 升级前在隔离目录写入书库（8 本书，`QA Local Folder` 进度=3）→ 升级 → 回滚后读回：**书仍为 8 本、进度仍为 3** |
+| 更新失败时的数据保护与恢复 | PASS（脚本级） | 安装脚本的「回滚」阶段验证：重新安装旧版本后应用仍可启动、`library.db` 仍在；失败即 `verdict=FAIL`，不会出具证据 |
+| 证据产出 | PASS | `install-verification.json`：`freshInstall/upgrade/dataIntegrity/recovery` 四项全 pass，绑定版本/Commit/平台/安装包 SHA-256 |
+| 发布门禁端到端 | PASS | 用真实安装证据 + 官方 minisign 生成的签名证据跑 `verify-evidence.mjs` → `OK`（版本 0.17.1 / 通道 windows / 平台 windows-x86_64 / 制品摘要 200ef3cd…） |
+
+### 10.3 仍需补做的部分
+
+- **干净 VM 的重复执行**：本节结果来自共享宿主，**不是**一次性干净 VM；
+  正式发布前应在干净 VM 上用同一脚本重跑一次（脚本已就绪，命令见 `docs/dev/RELEASE.md` §4.2）。
+- **跨版本升级（0.17.1 → 0.17.2）**：版本 bump 未授权，尚未覆盖。

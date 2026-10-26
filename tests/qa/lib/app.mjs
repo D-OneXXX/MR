@@ -205,6 +205,9 @@ export async function startQaApp({
   fixtures,
   cdpPort = 9334,
   telegramTestOrigin = null,
+  // 升级/恢复核验用：允许数据目录里已经有书（我们要读的就是那份既有书库）。
+  // 默认 false —— 常规 QA 仍然禁止复用脏目录，避免污染用户书库。
+  allowExistingBooks = false,
 }) {
   const vite = await ensureVite(root, artifactDir);
   if (await portOpen(`http://127.0.0.1:${cdpPort}/json/version`)) {
@@ -257,6 +260,7 @@ export async function startQaApp({
       dataDir,
       fixtures,
       cdpPort,
+      allowExistingBooks,
     });
   } catch (error) {
     // 启动失败必须回收子进程：残留的 app / Vite 句柄会让 node 永不退出，
@@ -286,6 +290,7 @@ async function runQaSession({
   dataDir,
   fixtures,
   cdpPort,
+  allowExistingBooks = false,
 }) {
   await waitForTarget(cdpPort, () => true, { timeout: 90_000 });
   let page = await connectReadyApp(cdpPort);
@@ -309,7 +314,7 @@ async function runQaSession({
   });
 
   const preexisting = await invoke(page, "list_books", { query: null });
-  if (Array.isArray(preexisting) && preexisting.length > 0) {
+  if (!allowExistingBooks && Array.isArray(preexisting) && preexisting.length > 0) {
     throw new Error(
       `隔离数据目录在导入前已有 ${preexisting.length} 本书；目标实例可能不是本次启动的 QA 应用，已中止以免污染用户书库`,
     );

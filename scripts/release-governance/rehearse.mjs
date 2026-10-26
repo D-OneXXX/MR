@@ -28,6 +28,11 @@ import {
   verifyPublishPreconditions,
 } from "./rc-record.mjs";
 import { verifyUpdaterManifest } from "../verify-updater-manifest.mjs";
+import {
+  INSTALL_EVIDENCE_KIND,
+  SIGNATURE_EVIDENCE_KIND,
+  verifyReleaseEvidence,
+} from "./evidence.mjs";
 
 const results = [];
 let failures = 0;
@@ -292,6 +297,85 @@ expectThrow(
   "演练候选",
 );
 
+// I. 发布证据门禁（签名验证 + 真实安装/升级验证）
+const gateRecord = buildRcRecord({
+  tag: "v0.17.2",
+  commit,
+  qa: { runId: "1234567890", buildCommit: commit },
+  artifacts: [
+    { name: "MangaReader_0.17.2_x64-setup.exe", sha256: sha256Bytes(Buffer.from("installer")), size: 9 },
+  ],
+});
+const gateDigest = sha256Bytes(Buffer.from("installer"));
+const gateDigests = new Map([["MangaReader_0.17.2_x64-setup.exe", gateDigest]]);
+const gateExpected = {
+  version: "0.17.2",
+  commit,
+  platform: "windows-x86_64",
+  artifactName: "MangaReader_0.17.2_x64-setup.exe",
+  artifactSha256: gateDigest,
+  publicKeyId: "67CB304460E08E4A",
+  now: new Date().toISOString(),
+};
+const gateSignature = {
+  kind: SIGNATURE_EVIDENCE_KIND,
+  verdict: "PASS",
+  version: gateExpected.version,
+  commit,
+  platform: gateExpected.platform,
+  artifactName: gateExpected.artifactName,
+  artifactSha256: gateDigest,
+  publicKeyId: gateExpected.publicKeyId,
+  verifiedBy: "minisign 0.12",
+  verifiedAt: new Date().toISOString(),
+};
+const gateInstall = {
+  kind: INSTALL_EVIDENCE_KIND,
+  verdict: "PASS",
+  version: gateExpected.version,
+  commit,
+  platform: gateExpected.platform,
+  artifactName: gateExpected.artifactName,
+  artifactSha256: gateDigest,
+  checks: { freshInstall: "pass", upgrade: "pass", dataIntegrity: "pass", recovery: "pass" },
+  machine: { os: "Windows Server 2022" },
+  verifiedAt: new Date().toISOString(),
+};
+const gate = (overrides = {}) =>
+  verifyReleaseEvidence({
+    record: gateRecord,
+    digests: gateDigests,
+    signatureEvidence: gateSignature,
+    installEvidence: gateInstall,
+    channel: "windows",
+    commit,
+    publicKeyId: gateExpected.publicKeyId,
+    now: gateExpected.now,
+    ...overrides,
+  });
+check("I1 证据齐备且绑定一致 → 放行", gate().ok, gate().problems.join(" | "));
+check("I2 缺安装/升级验证证据 → 拒绝", !gate({ installEvidence: null }).ok);
+check("I3 缺签名验证证据 → 拒绝", !gate({ signatureEvidence: null }).ok);
+check(
+  "I4 证据过期 → 拒绝",
+  !gate({
+    signatureEvidence: { ...gateSignature, verifiedAt: "2020-01-01T00:00:00.000Z" },
+    installEvidence: { ...gateInstall, verifiedAt: "2020-01-01T00:00:00.000Z" },
+  }).ok,
+);
+check(
+  "I5 证据 Commit 与候选不一致 → 拒绝",
+  !gate({ signatureEvidence: { ...gateSignature, commit: "f".repeat(40) } }).ok,
+);
+check(
+  "I6 审批后替换制品 → 拒绝",
+  !gate({ digests: new Map([["MangaReader_0.17.2_x64-setup.exe", sha256Bytes(Buffer.from("other"))]]) }).ok,
+);
+check(
+  "I7 证据锚定的公钥与配置不一致 → 拒绝",
+  !gate({ publicKeyId: "0000000000000000" }).ok,
+);
+
 // G. 标签命名约束
 check("G1 常规通道拒绝 linux 后缀标签", parseTag("v0.17.2-linux-sec1")?.channel === "linux-critical");
 check("G2 常规通道标签解析正确", parseTag("v0.17.2")?.channel === "windows");
@@ -305,7 +389,7 @@ const summary = {
   total: results.length,
   passed: results.length - failures,
   failed: failures,
-  scenarios: ["A 候选→Draft", "B 审批绑定", "C 失败恢复", "D 并发控制", "E 清单安全", "F 跨通道", "G 标签约束", "H 演练不可发布"],
+  scenarios: ["A 候选→Draft", "B 审批绑定", "C 失败恢复", "D 并发控制", "E 清单安全", "F 跨通道", "G 标签约束", "H 演练不可发布", "I 证据门禁"],
 };
 console.log("");
 console.log("=== 发布链路隔离演练 ===");

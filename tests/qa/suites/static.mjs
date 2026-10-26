@@ -672,6 +672,21 @@ export function checkReleaseGovernance(root, report) {
     if (!source.includes("verify-draft.mjs")) {
       errors.push(`${name} 必须调用发布前绑定校验 verify-draft.mjs`);
     }
+    // 强制验收：签名验证 + 真实安装/升级验证必须进发布链路，且无开关可绕。
+    if (!source.includes("verify-evidence.mjs")) {
+      errors.push(`${name} 必须调用发布证据总闸 verify-evidence.mjs`);
+    }
+    if (!source.includes("verify-signature.mjs")) {
+      errors.push(`${name} 必须执行签名验证 verify-signature.mjs`);
+    }
+    if (!source.includes("install-verification.json")) {
+      errors.push(`${name} 必须要求安装/升级验证证据 install-verification.json`);
+    }
+    for (const bypass of ["skip_evidence", "skip_signature", "skip_install", "SKIP_EVIDENCE"]) {
+      if (source.includes(bypass)) {
+        errors.push(`${name} 含证据绕过开关 ${bypass}`);
+      }
+    }
     if (!source.includes("rehearsal")) {
       errors.push(`${name} 必须显式拒绝演练标签（rehearsal）`);
     }

@@ -454,12 +454,8 @@ mod tests {
             Some("http://proxy.gnome.example:8443")
         );
         assert_eq!(
-            proxy_from_gsettings_values(
-                None,
-                Some(("127.0.0.1", 8080)),
-                Some(("127.0.0.1", 1080))
-            )
-            .as_deref(),
+            proxy_from_gsettings_values(None, Some(("127.0.0.1", 8080)), Some(("127.0.0.1", 1080)))
+                .as_deref(),
             Some("http://127.0.0.1:8080")
         );
         assert_eq!(
@@ -475,10 +471,7 @@ mod tests {
             proxy_from_gsettings_values(Some(("127.0.0.1", 0)), None, None),
             None
         );
-        assert_eq!(
-            proxy_from_gsettings_values::<&str>(None, None, None),
-            None
-        );
+        assert_eq!(proxy_from_gsettings_values::<&str>(None, None, None), None);
     }
 
     #[test]
@@ -506,7 +499,11 @@ mod tests {
             let content = format!(
                 "[Proxy Settings]\nProxyType={disabled}\nhttpsProxy=http://127.0.0.1:8443\n"
             );
-            assert_eq!(proxy_from_kioslaverc(&content), None, "ProxyType={disabled}");
+            assert_eq!(
+                proxy_from_kioslaverc(&content),
+                None,
+                "ProxyType={disabled}"
+            );
         }
         // 缺段、缺 ProxyType、坏端口 → None。
         assert_eq!(proxy_from_kioslaverc("[Other]\nProxyType=1\n"), None);

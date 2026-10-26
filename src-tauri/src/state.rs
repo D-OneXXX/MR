@@ -185,10 +185,8 @@ impl AssistedSessionRegistry {
         // 合并语义：本次没带的字段沿用旧值。
         // 否则一次「只带 UA、不带头」的登记会把已登记的会话头清空。
         let previous = guard.get(&canonical);
-        let user_agent = user_agent.or_else(|| {
-            previous
-                .and_then(|session| session.user_agent.clone())
-        });
+        let user_agent =
+            user_agent.or_else(|| previous.and_then(|session| session.user_agent.clone()));
         let headers = headers.or_else(|| previous.and_then(|session| session.headers.clone()));
         guard.insert(
             canonical.clone(),
@@ -634,10 +632,7 @@ impl AppState {
     pub fn trim_disk_cache(&self) -> u64 {
         self.cache_pressure.store(0, Ordering::Relaxed);
         let budget = self.disk_cache_limit_bytes();
-        disk_cache::trim_total(
-            &[self.render.root(), self.online_cache.root()],
-            budget,
-        )
+        disk_cache::trim_total(&[self.render.root(), self.online_cache.root()], budget)
     }
 
     /// 累计写盘超过阈值时后台触发统一淘汰；由取页/切片路径在落盘后调用。
@@ -793,7 +788,11 @@ mod tests {
         // 末级目录不是缓存类型 → 拒绝（防止把任意目录交给 remove_dir_all）。
         #[cfg(windows)]
         assert_eq!(
-            safe_cache_root(r"C:\Users\public\Documents", fallback.clone(), "render_cache"),
+            safe_cache_root(
+                r"C:\Users\public\Documents",
+                fallback.clone(),
+                "render_cache"
+            ),
             fallback
         );
         // 末级目录匹配的绝对路径才接受。
@@ -1072,7 +1071,9 @@ mod tests {
             "",
         ] {
             assert!(
-                state.register_assisted_session(bad, assisted_session("UA/1.0")).is_err(),
+                state
+                    .register_assisted_session(bad, assisted_session("UA/1.0"))
+                    .is_err(),
                 "非法 origin 必须被拒绝：{bad}"
             );
         }
@@ -1083,13 +1084,17 @@ mod tests {
             "https://example.com\r",
         ] {
             assert!(
-                state.register_assisted_session(bad, assisted_session("UA/1.0")).is_err(),
+                state
+                    .register_assisted_session(bad, assisted_session("UA/1.0"))
+                    .is_err(),
                 "含控制字符的 origin 必须被拒绝：{bad:?}"
             );
         }
         // 超长。
         let long = format!("https://{}.com", "a".repeat(MAX_ASSISTED_ORIGIN_BYTES));
-        assert!(state.register_assisted_session(&long, assisted_session("UA/1.0")).is_err());
+        assert!(state
+            .register_assisted_session(&long, assisted_session("UA/1.0"))
+            .is_err());
         // UA 含 CRLF / 超长同样拒绝。
         assert!(state
             .register_assisted_session("https://example.com", assisted_session("UA/1.0\r\nX: 1"))
@@ -1139,7 +1144,10 @@ mod tests {
     fn assisted_sessions_are_memory_only_and_never_persisted() {
         let state = test_state();
         state
-            .register_assisted_session("https://gallery.example", assisted_session("Assisted-UA/9.9"))
+            .register_assisted_session(
+                "https://gallery.example",
+                assisted_session("Assisted-UA/9.9"),
+            )
             .expect("登记辅助会话");
         // 内存里可见。
         let session = state
@@ -1181,7 +1189,8 @@ mod tests {
         assert!(
             state
                 .db
-                .with(|conn| crate::db::get_setting(conn, "online_headers").map_err(|e| e.to_string()))
+                .with(|conn| crate::db::get_setting(conn, "online_headers")
+                    .map_err(|e| e.to_string()))
                 .unwrap()
                 .is_none(),
             "辅助会话不得顺带落库任何设置项"
@@ -1192,7 +1201,10 @@ mod tests {
     fn clear_assisted_sessions_empties_the_registry() {
         let state = AppState::new();
         state
-            .register_assisted_session("https://gallery.example", assisted_session("Assisted-UA/1.0"))
+            .register_assisted_session(
+                "https://gallery.example",
+                assisted_session("Assisted-UA/1.0"),
+            )
             .expect("登记辅助会话");
         assert_eq!(state.assisted_sessions.len(), 1);
         state.clear_assisted_sessions();
@@ -1231,7 +1243,9 @@ mod tests {
             .unwrap();
         assert_eq!(registry.len(), 1);
         assert_eq!(
-            registry.headers_for_origin("https://gallery.example").as_deref(),
+            registry
+                .headers_for_origin("https://gallery.example")
+                .as_deref(),
             Some("Cookie: sid=abc")
         );
         registry.clear();

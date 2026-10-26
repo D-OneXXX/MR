@@ -15,19 +15,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Cache Rust build
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "./src-tauri -> target"
 
@@ -41,6 +41,13 @@ jobs:
 
       - name: Governance script tests
         run: npm run test:governance
+
+      - name: QA fixture unit tests
+        run: npm run test:fixtures
+
+      # 格式门禁：Rust 代码必须符合 rustfmt（只读检查，不改写工作区）。
+      - name: Rust formatting (rustfmt)
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: Typecheck frontend
         run: npx tsc --noEmit

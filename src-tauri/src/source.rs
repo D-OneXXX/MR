@@ -205,10 +205,7 @@ fn zip_image_names(archive: &mut zip::ZipArchive<File>) -> Result<Vec<ZipEntryNa
             ));
         }
         let display = fixup_entry_name(raw, &decoded);
-        names.push(ZipEntryName {
-            index,
-            display,
-        });
+        names.push(ZipEntryName { index, display });
     }
     Ok(names)
 }
@@ -255,10 +252,7 @@ impl FolderSource {
             })
             .collect();
         files.sort_by(|a, b| {
-            crate::commands::natural_cmp_path(
-                &a.to_string_lossy(),
-                &b.to_string_lossy(),
-            )
+            crate::commands::natural_cmp_path(&a.to_string_lossy(), &b.to_string_lossy())
         });
         Ok(Self { files })
     }
@@ -358,7 +352,12 @@ impl ImageSource for ZipSource {
                 name.display
             )));
         }
-        let ext = name.display.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let ext = name
+            .display
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
         Ok(RawPage { bytes, ext })
     }
 }
@@ -518,10 +517,7 @@ impl ImageSource for OnlineSource {
                             if fresh != page.url {
                                 crate::logging::log_error(
                                     "online_page",
-                                    &format!(
-                                        "第 {} 页直链失效，已按消息锚点刷新",
-                                        index + 1
-                                    ),
+                                    &format!("第 {} 页直链失效，已按消息锚点刷新", index + 1),
                                 );
                                 self.replace_page_url(index, fresh.clone());
                                 page.url = fresh;
@@ -673,10 +669,7 @@ impl SourceHandle {
                         .to_string()
                 })
                 .collect()),
-            HandleKind::Zip { names, .. } => Ok(names
-                .iter()
-                .map(|n| n.display.clone())
-                .collect()),
+            HandleKind::Zip { names, .. } => Ok(names.iter().map(|n| n.display.clone()).collect()),
             HandleKind::Online(s) => s.entry_names(),
         }
     }
@@ -720,7 +713,12 @@ impl SourceHandle {
                         name.display
                     )));
                 }
-                let ext = name.display.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                let ext = name
+                    .display
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
                 Ok(RawPage { bytes, ext })
             }
             HandleKind::Online(s) => s.read_raw(index),
@@ -756,7 +754,12 @@ impl SourceHandle {
                 }
                 let mut bytes = Vec::new();
                 (&mut entry).take(max_bytes).read_to_end(&mut bytes)?;
-                let ext = name.display.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                let ext = name
+                    .display
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
                 Ok(RawPage { bytes, ext })
             }
             // 在线页没有可廉价读取的本地 header：头部探测必须走整页下载，直接拒绝。
@@ -830,12 +833,18 @@ mod tests {
 
         // GBK 字节（中文 Windows 压缩工具、未设 UTF-8 标志）→ 修复为汉字。
         let (gbk_bytes, _, _) = encoding_rs::GBK.encode("第01话/1.png");
-        assert!(std::str::from_utf8(&gbk_bytes).is_err(), "GBK 字节不应是合法 UTF-8");
+        assert!(
+            std::str::from_utf8(&gbk_bytes).is_err(),
+            "GBK 字节不应是合法 UTF-8"
+        );
         let fixed = fixup_entry_name(&gbk_bytes, "mojibake");
         assert_eq!(fixed, "第01话/1.png");
 
         // 既非 UTF-8 也非 GB18030/Shift_JIS 的字节 → 回退 zip crate 的 CP437 解码结果。
-        assert_eq!(fixup_entry_name(&[0xff, 0xfe, 0x81, 0x30, 0x0a], "cp437"), "cp437");
+        assert_eq!(
+            fixup_entry_name(&[0xff, 0xfe, 0x81, 0x30, 0x0a], "cp437"),
+            "cp437"
+        );
     }
 
     #[test]
@@ -843,7 +852,10 @@ mod tests {
         // 日文原版包（CP932）：Shift_JIS 字节在 GB18030 下也能无错解出
         // （得到生僻汉字噪声），靠全角假名出现率裁决为 Shift_JIS。
         let (sj_bytes, _, _) = encoding_rs::SHIFT_JIS.encode("よるのゆめ/01.png");
-        assert!(std::str::from_utf8(&sj_bytes).is_err(), "Shift_JIS 字节不应是合法 UTF-8");
+        assert!(
+            std::str::from_utf8(&sj_bytes).is_err(),
+            "Shift_JIS 字节不应是合法 UTF-8"
+        );
         let fixed = fixup_entry_name(&sj_bytes, "mojibake");
         assert_eq!(fixed, "よるのゆめ/01.png");
 
@@ -878,7 +890,10 @@ mod tests {
         assert!(sniff_archive_magic(&zip_path).is_ok());
 
         // RAR 改后缀（`Rar!`）。
-        let rar_path = write("fake-rar.cbz", &[0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00]);
+        let rar_path = write(
+            "fake-rar.cbz",
+            &[0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00],
+        );
         let err = sniff_archive_magic(&rar_path).unwrap_err().to_string();
         assert!(err.contains("archive-disguised-rar"), "got: {err}");
 
@@ -1111,10 +1126,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "mr-zip-order-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("mr-zip-order-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("order.cbz");
         let file = std::fs::File::create(&path).unwrap();
@@ -1257,13 +1269,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "mr-source-cache-{}-{nanos}",
-            std::process::id()
-        ));
-        let cache = Arc::new(crate::disk_cache::OnlinePageCache::new(
-            root.join("online"),
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mr-source-cache-{}-{nanos}", std::process::id()));
+        let cache = Arc::new(crate::disk_cache::OnlinePageCache::new(root.join("online")));
         let http = Arc::new(FakeHttp::ok(tiny_png()));
         let src = super::OnlineSource::new(
             "book-test".into(),

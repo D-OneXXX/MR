@@ -264,9 +264,10 @@ pub async fn recover_database_from_backup(
     }
     let db_path = state.db_path();
     let source = PathBuf::from(source_path);
-    let result = tokio::task::spawn_blocking(move || recover_from_backup_blocking(&db_path, &source))
-        .await
-        .map_err(|error| format!("后台任务失败：{error}"))??;
+    let result =
+        tokio::task::spawn_blocking(move || recover_from_backup_blocking(&db_path, &source))
+            .await
+            .map_err(|error| format!("后台任务失败：{error}"))??;
 
     let conn = db::open(state.db_path()).map_err(|error| format!("恢复后打开书库失败：{error}"))?;
     db::init_schema(&conn).map_err(|error| format!("恢复后初始化书库失败：{error}"))?;
@@ -306,18 +307,18 @@ fn recover_from_backup_blocking(
     fs::create_dir_all(parent).map_err(|error| format!("创建数据目录失败：{error}"))?;
 
     // 先在一份全新 staging 库里完成校验与恢复；失败时活库完全不动。
-    let staging = TempFileGuard::new(parent.join(format!(
-        "library.recovery-{}.db",
-        unique_token()
-    )));
+    let staging =
+        TempFileGuard::new(parent.join(format!("library.recovery-{}.db", unique_token())));
     {
-        let conn = db::open(staging.path()).map_err(|error| format!("创建恢复临时库失败：{error}"))?;
+        let conn =
+            db::open(staging.path()).map_err(|error| format!("创建恢复临时库失败：{error}"))?;
         db::init_schema(&conn).map_err(|error| format!("初始化恢复临时库失败：{error}"))?;
         db::quick_check(&conn).map_err(|error| format!("恢复临时库自检失败：{error}"))?;
     }
     let result = restore_backup_blocking(staging.path(), source)?;
     {
-        let conn = db::open(staging.path()).map_err(|error| format!("打开恢复临时库失败：{error}"))?;
+        let conn =
+            db::open(staging.path()).map_err(|error| format!("打开恢复临时库失败：{error}"))?;
         conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
             .map_err(|error| format!("收尾恢复临时库失败：{error}"))?;
     }
@@ -515,7 +516,10 @@ fn quoted_setting_keys() -> String {
 fn sanitize_snapshot(conn: &Connection) -> Result<(), String> {
     if table_exists(conn, "settings")? {
         conn.execute(
-            &format!("DELETE FROM settings WHERE k NOT IN ({})", quoted_setting_keys()),
+            &format!(
+                "DELETE FROM settings WHERE k NOT IN ({})",
+                quoted_setting_keys()
+            ),
             [],
         )
         .map_err(|e| format!("净化备份设置失败：{e}"))?;
@@ -862,11 +866,7 @@ fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<Valida
     })
 }
 
-fn apply_restore(
-    db_path: &Path,
-    backup_db: &Path,
-    allowed_books: &[String],
-) -> Result<(), String> {
+fn apply_restore(db_path: &Path, backup_db: &Path, allowed_books: &[String]) -> Result<(), String> {
     let backup = backup_db
         .to_str()
         .ok_or_else(|| "备份临时路径不是 UTF-8".to_string())?;
@@ -943,10 +943,7 @@ fn copy_all_tables(conn: &Connection, allowed_books: &[String]) -> Result<(), St
          WHERE book_id IS NULL OR book_id='' OR book_id IN
                (SELECT id FROM restore_allowed_books);\n",
     );
-    sql.push_str(&copy_sql(
-        "online_filter_profiles",
-        PROFILE_COLUMNS,
-    ));
+    sql.push_str(&copy_sql("online_filter_profiles", PROFILE_COLUMNS));
     sql.push_str(&copy_sql("online_filter_rules", RULE_COLUMNS));
     conn.execute_batch(&sql)
         .map_err(|e| format!("写入恢复数据失败：{e}"))?;
@@ -961,9 +958,7 @@ fn copy_sql(table: &str, columns: &[&str]) -> String {
 
 fn copy_sql_where(table: &str, columns: &[&str], filter: &str) -> String {
     let cols = columns.join(", ");
-    format!(
-        "INSERT INTO {table}({cols}) SELECT {cols} FROM backup_db.{table} WHERE {filter};\n"
-    )
+    format!("INSERT INTO {table}({cols}) SELECT {cols} FROM backup_db.{table} WHERE {filter};\n")
 }
 
 // ---------- 通用小工具 ----------
@@ -1291,7 +1286,9 @@ mod tests {
             Some("dark")
         );
         assert_eq!(
-            db::get_setting(&conn, "cache_budget_mb").unwrap().as_deref(),
+            db::get_setting(&conn, "cache_budget_mb")
+                .unwrap()
+                .as_deref(),
             Some("256")
         );
         // 凭据与网络环境以当前活库为准，绝不被备份覆盖。
@@ -1304,7 +1301,9 @@ mod tests {
             Some("socks5://live-proxy:1080")
         );
         assert_eq!(
-            db::get_setting(&conn, "experimental_online").unwrap().as_deref(),
+            db::get_setting(&conn, "experimental_online")
+                .unwrap()
+                .as_deref(),
             Some("false")
         );
         let rules = db::list_filter_rules(&conn).unwrap();
@@ -1367,10 +1366,8 @@ mod tests {
         assert_eq!(result.app_version.as_deref(), Some("99.0.0"));
 
         // schema=0（从未存在过）仍被拒绝。
-        let zero_manifest = manifest.replace(
-            &format!("\"schema\":{}", BACKUP_SCHEMA + 1),
-            "\"schema\":0",
-        );
+        let zero_manifest =
+            manifest.replace(&format!("\"schema\":{}", BACKUP_SCHEMA + 1), "\"schema\":0");
         let zero_backup = dir.join("zero.mrbackup");
         write_raw_zip(
             &zero_backup,
@@ -1477,7 +1474,11 @@ mod tests {
         assert_eq!(book.title, "旧书");
         assert_eq!(book.current_page, 12);
         assert_eq!(
-            db::reading_log_days(&conn, None, 3650).unwrap().iter().map(|row| row.1).sum::<u32>(),
+            db::reading_log_days(&conn, None, 3650)
+                .unwrap()
+                .iter()
+                .map(|row| row.1)
+                .sum::<u32>(),
             15,
             "全局旧史 10 + 书 b1 的 5 页都必须保留"
         );
@@ -1689,10 +1690,7 @@ mod tests {
 
         let conn = db::open(&live_db).unwrap();
         assert_eq!(db::list_books(&conn, None).unwrap().len(), 2);
-        assert_eq!(
-            db::get_book(&conn, "b1").unwrap().unwrap().current_page,
-            12
-        );
+        assert_eq!(db::get_book(&conn, "b1").unwrap().unwrap().current_page, 12);
         drop(conn);
 
         let quarantined = fs::read_dir(&live_dir)

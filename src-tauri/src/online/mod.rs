@@ -100,9 +100,7 @@ impl From<OnlineError> for BackendError {
 
 /// 仅 debug/单元测试可通过显式环境变量放行回环夹具；release 永远拒绝。
 pub(crate) fn allow_loopback_for_dev() -> bool {
-    cfg!(test)
-        || (cfg!(debug_assertions)
-            && std::env::var_os("MR_ALLOW_LOOPBACK_ONLINE").is_some())
+    cfg!(test) || (cfg!(debug_assertions) && std::env::var_os("MR_ALLOW_LOOPBACK_ONLINE").is_some())
 }
 
 /// 私网 / link-local / 元数据 / 保留地址阻断。
@@ -136,24 +134,22 @@ pub(crate) fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
 }
 
 /// 对字面 IP / localhost 做早期校验；域名解析留给 HTTP transport 在每跳执行。
-pub(crate) fn validate_host_literal(
-    host: &str,
-    allow_loopback: bool,
-) -> Result<(), String> {
+pub(crate) fn validate_host_literal(host: &str, allow_loopback: bool) -> Result<(), String> {
     let host = host.trim().trim_start_matches('[').trim_end_matches(']');
     if host.is_empty() {
         return Err("URL 缺少主机名".to_string());
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_blocked_ip(ip, allow_loopback) {
-            return Err("目标地址位于本机/私网/链路本地，已拒绝（online-blocked-address）".to_string());
+            return Err(
+                "目标地址位于本机/私网/链路本地，已拒绝（online-blocked-address）".to_string(),
+            );
         }
         return Ok(());
     }
-    if (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"))
-        && !allow_loopback {
-            return Err("目标地址指向 localhost，已拒绝（online-blocked-address）".to_string());
-        }
+    if (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost")) && !allow_loopback {
+        return Err("目标地址指向 localhost，已拒绝（online-blocked-address）".to_string());
+    }
     Ok(())
 }
 
@@ -177,11 +173,8 @@ pub fn normalize_url(raw: &str) -> Result<url::Url, BackendError> {
             "URL 不能包含用户名或密码（online-url-invalid）".into(),
         ));
     }
-    validate_host_literal(
-        u.host_str().unwrap_or_default(),
-        allow_loopback_for_dev(),
-    )
-    .map_err(BackendError::Msg)?;
+    validate_host_literal(u.host_str().unwrap_or_default(), allow_loopback_for_dev())
+        .map_err(BackendError::Msg)?;
     u.set_fragment(None);
     Ok(u)
 }
@@ -754,23 +747,17 @@ mod tests {
             );
         }
         assert!(!is_blocked_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), false));
-        assert!(!is_blocked_ip(IpAddr::V4(Ipv4Addr::new(172, 32, 0, 1)), false));
+        assert!(!is_blocked_ip(
+            IpAddr::V4(Ipv4Addr::new(172, 32, 0, 1)),
+            false
+        ));
         assert!(is_blocked_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), false));
         assert!(!is_blocked_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), true));
         assert!(is_blocked_ip(IpAddr::V6(Ipv6Addr::LOCALHOST), false));
         assert!(!is_blocked_ip(IpAddr::V6(Ipv6Addr::LOCALHOST), true));
-        assert!(is_blocked_ip(
-            IpAddr::V6("fc00::1".parse().unwrap()),
-            true
-        ));
-        assert!(is_blocked_ip(
-            IpAddr::V6("fe80::1".parse().unwrap()),
-            true
-        ));
-        assert!(is_blocked_ip(
-            "::ffff:127.0.0.1".parse().unwrap(),
-            false
-        ));
+        assert!(is_blocked_ip(IpAddr::V6("fc00::1".parse().unwrap()), true));
+        assert!(is_blocked_ip(IpAddr::V6("fe80::1".parse().unwrap()), true));
+        assert!(is_blocked_ip("::ffff:127.0.0.1".parse().unwrap(), false));
     }
 
     #[test]

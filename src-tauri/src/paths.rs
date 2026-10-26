@@ -212,10 +212,7 @@ mod tests {
         assert!(resolve_data_root(None, None, None).is_err());
         // 环境变量两端空白被 trim。
         let padded = format!("  {}  ", env.display());
-        assert_eq!(
-            resolve_data_root(Some(&padded), None, None).unwrap(),
-            env
-        );
+        assert_eq!(resolve_data_root(Some(&padded), None, None).unwrap(), env);
     }
 
     #[test]
@@ -281,9 +278,7 @@ mod tests {
             .unwrap();
         assert_eq!(check, "ok");
         assert!(
-            !target
-                .join(".library.db.mr-migrating")
-                .exists(),
+            !target.join(".library.db.mr-migrating").exists(),
             "原子迁移不得留下临时文件"
         );
 

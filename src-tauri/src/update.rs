@@ -770,9 +770,7 @@ fn normalize_sha256(raw: &str) -> Result<String, String> {
 }
 
 fn sha256_matches(expected: &str, actual: &str) -> bool {
-    expected.len() == 64
-        && actual.len() == 64
-        && expected.eq_ignore_ascii_case(actual)
+    expected.len() == 64 && actual.len() == 64 && expected.eq_ignore_ascii_case(actual)
 }
 
 fn resolve_format(explicit: Option<&str>, url: &Url) -> Result<InstallerFormat, String> {
@@ -783,9 +781,7 @@ fn resolve_format(explicit: Option<&str>, url: &Url) -> Result<InstallerFormat, 
             "deb" => Ok(InstallerFormat::Deb),
             "rpm" => Ok(InstallerFormat::Rpm),
             "appimage" | "app-image" => Ok(InstallerFormat::AppImage),
-            _ => Err(
-                "不支持的安装包格式（update-unsupported-format）".to_string(),
-            ),
+            _ => Err("不支持的安装包格式（update-unsupported-format）".to_string()),
         };
     }
     let path = url.path().to_ascii_lowercase();
@@ -802,9 +798,7 @@ fn resolve_format(explicit: Option<&str>, url: &Url) -> Result<InstallerFormat, 
         // 未知制品误当 Windows 安装包，必须要求明确的 deb/rpm/AppImage。
         #[cfg(target_os = "linux")]
         {
-            Err(
-                "Linux 更新包 URL 缺少可识别的 .deb/.rpm/.AppImage 后缀".to_string(),
-            )
+            Err("Linux 更新包 URL 缺少可识别的 .deb/.rpm/.AppImage 后缀".to_string())
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -841,14 +835,15 @@ fn normalize_artifact(entry: ArtifactEntry, kind: ArtifactKind) -> Result<Artifa
 
 fn validate_manifest(raw: Manifest) -> Result<ValidManifest, String> {
     let version_raw = raw.version.trim().to_string();
-    let version =
-        Version::parse(&version_raw).map_err(|_| "更新清单中的版本号无效".to_string())?;
+    let version = Version::parse(&version_raw).map_err(|_| "更新清单中的版本号无效".to_string())?;
     let full = normalize_artifact(raw.full, ArtifactKind::Full)?;
     // 补丁是可选的：字段损坏时丢弃补丁并回退全量，不影响整体更新能力。
-    let patch = raw.patch.and_then(|entry| match normalize_artifact(entry, ArtifactKind::Patch) {
-        Ok(artifact) if artifact.from_version.is_some() => Some(artifact),
-        _ => None,
-    });
+    let patch = raw.patch.and_then(
+        |entry| match normalize_artifact(entry, ArtifactKind::Patch) {
+            Ok(artifact) if artifact.from_version.is_some() => Some(artifact),
+            _ => None,
+        },
+    );
     Ok(ValidManifest {
         version,
         version_raw,
@@ -997,8 +992,7 @@ async fn fetch_manifest(raw_url: &str) -> Result<ValidManifest, String> {
         }
         body.extend_from_slice(&chunk);
     }
-    let allow_unsigned =
-        configured_public_key().is_none() && is_loopback_url(response.url());
+    let allow_unsigned = configured_public_key().is_none() && is_loopback_url(response.url());
     verify_manifest_signature(&body, allow_unsigned)?;
     let manifest: Manifest =
         serde_json::from_slice(&body).map_err(|_| "更新清单格式无效".to_string())?;
@@ -1049,8 +1043,7 @@ fn verify_manifest_signature_with(
     if let Some(object) = value.as_object_mut() {
         object.remove("signature");
     }
-    let canonical =
-        serde_json::to_vec(&value).map_err(|_| "更新清单规范化失败".to_string())?;
+    let canonical = serde_json::to_vec(&value).map_err(|_| "更新清单规范化失败".to_string())?;
     key.verify(&canonical, &signature, true)
         .map_err(|_| "更新清单签名校验失败，已拒绝更新".to_string())
 }
@@ -1100,10 +1093,7 @@ pub fn cleanup_stale_artifacts() {
     let dir = std::env::temp_dir().join(UPDATE_DIR_NAME);
     let removed = cleanup_older_than(&dir, SystemTime::now(), STALE_UPDATE_AGE);
     if removed > 0 {
-        crate::logging::log_error(
-            "update",
-            &format!("已清理 {removed} 个陈旧更新临时文件"),
-        );
+        crate::logging::log_error("update", &format!("已清理 {removed} 个陈旧更新临时文件"));
     }
     #[cfg(target_os = "linux")]
     {
@@ -1126,8 +1116,7 @@ fn write_pending_install(ready: &ReadyUpdate) -> Result<(), String> {
         kind: ready.kind.clone(),
         started_at: now_iso8601(),
     };
-    let raw = serde_json::to_vec(&pending)
-        .map_err(|_| "无法记录更新安装状态".to_string())?;
+    let raw = serde_json::to_vec(&pending).map_err(|_| "无法记录更新安装状态".to_string())?;
     std::fs::write(pending_install_path()?, raw)
         .map_err(|error| format!("无法记录更新安装状态：{error}"))
 }
@@ -1182,11 +1171,7 @@ fn artifact_file_name(artifact: &Artifact, version: &str, generation: u64) -> St
         .map(sanitize_file_name);
     let mut base = match from_url {
         Some(name) => name,
-        None => format!(
-            "{}-{}",
-            FALLBACK_FILE_STEM,
-            sanitize_file_name(version)
-        ),
+        None => format!("{}-{}", FALLBACK_FILE_STEM, sanitize_file_name(version)),
     };
     let extension = artifact.format.extension();
     if !base
@@ -1239,10 +1224,7 @@ fn decode_signature_text(text: &str) -> Result<Signature, MinisignError> {
         .collect();
     match lines.len() {
         len if len >= 4 => {
-            let normalized = format!(
-                "{}\n{}\n{}\n{}",
-                lines[0], lines[1], lines[2], lines[3]
-            );
+            let normalized = format!("{}\n{}\n{}\n{}", lines[0], lines[1], lines[2], lines[3]);
             Signature::decode(&normalized)
         }
         3 => {
@@ -1285,8 +1267,8 @@ fn verify_signature_file(
 ) -> Result<(), String> {
     match key.verify_stream(signature) {
         Ok(mut verifier) => {
-            let mut file = std::fs::File::open(path)
-                .map_err(|err| format!("无法读取更新安装包：{err}"))?;
+            let mut file =
+                std::fs::File::open(path).map_err(|err| format!("无法读取更新安装包：{err}"))?;
             let mut buffer = [0u8; 64 * 1024];
             loop {
                 let read = file
@@ -1303,8 +1285,7 @@ fn verify_signature_file(
         }
         Err(MinisignError::UnsupportedLegacyMode) => {
             // 旧式（非预哈希）签名不支持流式校验，回退为一次性读取。
-            let data = std::fs::read(path)
-                .map_err(|err| format!("无法读取更新安装包：{err}"))?;
+            let data = std::fs::read(path).map_err(|err| format!("无法读取更新安装包：{err}"))?;
             key.verify(&data, signature, true)
                 .map_err(|_| "更新包签名校验失败，已删除下载文件".to_string())
         }
@@ -1389,14 +1370,7 @@ async fn stream_artifact(
     let mut idle_waits: u32 = 0;
     let started = Instant::now();
 
-    emit_update_event(
-        on_event,
-        request_id,
-        PHASE_DOWNLOADING,
-        0,
-        total,
-        0.0,
-    )?;
+    emit_update_event(on_event, request_id, PHASE_DOWNLOADING, 0, total, 0.0)?;
 
     loop {
         ensure_not_cancelled(cancel)?;
@@ -1488,8 +1462,8 @@ async fn perform_download(
     // 未配置签名公钥时只允许本机回环清单，避免远端清单把未签名制品
     // 指向 localhost（或反向）绕过策略。
     if !signature_configured() {
-        let parsed_manifest = Url::parse(manifest_url.trim())
-            .map_err(|_| "更新清单地址无效".to_string())?;
+        let parsed_manifest =
+            Url::parse(manifest_url.trim()).map_err(|_| "更新清单地址无效".to_string())?;
         if !is_loopback_url(&parsed_manifest) {
             return Err("未配置更新签名公钥，已拒绝未签名更新".to_string());
         }
@@ -1503,8 +1477,9 @@ async fn perform_download(
         return Err("当前已是最新版本，无需更新".to_string());
     }
     let artifact = match requested_kind {
-        ArtifactKind::Patch => eligible_patch
-            .ok_or_else(|| "补丁包不可用，请改用全量包".to_string())?,
+        ArtifactKind::Patch => {
+            eligible_patch.ok_or_else(|| "补丁包不可用，请改用全量包".to_string())?
+        }
         ArtifactKind::Full => manifest.full.clone(),
     };
     let signature = prepare_signature(&artifact)?;
@@ -1878,8 +1853,7 @@ pub async fn download_update(
     let _ = app;
     validate_download_url(&manifest_url)?;
     let requested_kind = ArtifactKind::parse(&kind)?;
-    let requested_version =
-        Version::parse(&version).map_err(|_| "更新版本号无效".to_string())?;
+    let requested_version = Version::parse(&version).map_err(|_| "更新版本号无效".to_string())?;
     let session = begin_download();
     perform_download(
         &session,
@@ -1924,8 +1898,8 @@ pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
         return Err("更新包校验失败，请重新下载".to_string());
     }
 
-    let current_exe = std::env::current_exe()
-        .map_err(|error| format!("无法定位当前应用路径：{error}"))?;
+    let current_exe =
+        std::env::current_exe().map_err(|error| format!("无法定位当前应用路径：{error}"))?;
     write_pending_install(&stored.ready)?;
     if let Err(error) = spawn_installer(&stored.path, &stored.ready.format, &current_exe) {
         clear_pending_install();
@@ -1997,10 +1971,7 @@ mod tests {
     }
 
     /// 一次性回环 HTTP 服务：返回清单地址与线程句柄。
-    fn serve_manifest_once(
-        status: &str,
-        body: String,
-    ) -> (String, std::thread::JoinHandle<()>) {
+    fn serve_manifest_once(status: &str, body: String) -> (String, std::thread::JoinHandle<()>) {
         use std::io::{Read as _, Write as _};
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定回环端口");
@@ -2124,7 +2095,10 @@ mod tests {
             Some(ArtifactKind::Patch)
         );
         assert!(check.patch.is_some());
-        assert_eq!(check.patch.as_ref().map(|info| info.kind.as_str()), Some("patch"));
+        assert_eq!(
+            check.patch.as_ref().map(|info| info.kind.as_str()),
+            Some("patch")
+        );
     }
 
     #[test]
@@ -2326,7 +2300,10 @@ mod tests {
         );
         assert!(manifest.mandatory);
         assert_eq!(manifest.notes, "修复若干问题");
-        assert_eq!(manifest.released_at.as_deref(), Some("2026-10-22T00:00:00Z"));
+        assert_eq!(
+            manifest.released_at.as_deref(),
+            Some("2026-10-22T00:00:00Z")
+        );
     }
 
     #[test]
@@ -2339,22 +2316,37 @@ mod tests {
         let appimage =
             Url::parse("https://example.com/MangaReader_0.15.0_amd64.AppImage").expect("url");
         #[cfg(not(target_os = "linux"))]
-        assert_eq!(resolve_format(None, &exe).expect("nsis"), InstallerFormat::Nsis);
+        assert_eq!(
+            resolve_format(None, &exe).expect("nsis"),
+            InstallerFormat::Nsis
+        );
         #[cfg(target_os = "linux")]
         assert!(
             resolve_format(None, &exe).is_err(),
             "Linux 不得把 .exe 当作可安装的 NSIS 制品"
         );
-        assert_eq!(resolve_format(None, &msi).expect("msi"), InstallerFormat::Msi);
+        assert_eq!(
+            resolve_format(None, &msi).expect("msi"),
+            InstallerFormat::Msi
+        );
         #[cfg(not(target_os = "linux"))]
-        assert_eq!(resolve_format(None, &bin).expect("nsis"), InstallerFormat::Nsis);
+        assert_eq!(
+            resolve_format(None, &bin).expect("nsis"),
+            InstallerFormat::Nsis
+        );
         #[cfg(target_os = "linux")]
         assert!(
             resolve_format(None, &bin).is_err(),
             "Linux 无后缀 URL 必须拒绝，不能回落 NSIS"
         );
-        assert_eq!(resolve_format(None, &deb).expect("deb"), InstallerFormat::Deb);
-        assert_eq!(resolve_format(None, &rpm).expect("rpm"), InstallerFormat::Rpm);
+        assert_eq!(
+            resolve_format(None, &deb).expect("deb"),
+            InstallerFormat::Deb
+        );
+        assert_eq!(
+            resolve_format(None, &rpm).expect("rpm"),
+            InstallerFormat::Rpm
+        );
         assert_eq!(
             resolve_format(None, &appimage).expect("appimage"),
             InstallerFormat::AppImage
@@ -2376,11 +2368,7 @@ mod tests {
 
     #[test]
     fn patch_with_invalid_payload_is_ignored() {
-        let mut broken = entry(
-            "https://example.com/patch.exe",
-            Some("0.9.0"),
-            Some("nsis"),
-        );
+        let mut broken = entry("https://example.com/patch.exe", Some("0.9.0"), Some("nsis"));
         broken.sha256 = "not-a-sha".to_string();
         let manifest = manifest_of("0.9.1", Some(broken));
         assert!(manifest.patch.is_none());
@@ -2431,8 +2419,7 @@ mod tests {
         assert!(Path::new(&generated).components().count() == 1);
     }
 
-    const TEST_PUBKEY: &str =
-        "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+    const TEST_PUBKEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
     const TEST_SIGNATURE: &str = "untrusted comment: signature from minisign secret key
 RWQf6LRCGA9i59SLOFxz6NxvASXDJeRtuZykwQepbDEGt87ig1BNpWaVWuNrm73YiIiJbq71Wi+dP9eKL8OC351vwIasSSbXxwA=
 trusted comment: timestamp:1555779966\tfile:test
@@ -2596,10 +2583,8 @@ QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfN
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "mr-update-copy-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("mr-update-copy-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("download.AppImage");
         let target = dir.join("installed.AppImage");

@@ -77,10 +77,7 @@ pub fn normalize_path_identity(path: &str) -> String {
 
 /// 按路径找已入库的 id：先走精确 sha256，再按平台身份键兜底。
 /// 只为本地书使用；在线 URL 仍走规范化 URL 的精确 id。
-pub fn find_book_id_by_path(
-    conn: &Connection,
-    path: &str,
-) -> Result<Option<String>, BackendError> {
+pub fn find_book_id_by_path(conn: &Connection, path: &str) -> Result<Option<String>, BackendError> {
     let exact = book_id_for_path(path);
     if get_book(conn, &exact)?.is_some() {
         return Ok(Some(exact));
@@ -356,7 +353,10 @@ fn migrate_book_columns(conn: &Connection) -> Result<(), BackendError> {
         |r| r.get(0),
     )?;
     if books_has_removed == 0 {
-        conn.execute("ALTER TABLE books ADD COLUMN removed INTEGER NOT NULL DEFAULT 0", [])?;
+        conn.execute(
+            "ALTER TABLE books ADD COLUMN removed INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
     let books_has_pct: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name='scroll_pct'",
@@ -462,7 +462,15 @@ pub fn upsert_online_book(
             page_count=excluded.page_count, updated_at=excluded.updated_at,
             removed=0, source_type=excluded.source_type, meta_json=excluded.meta_json,
             current_page=MIN(books.current_page, excluded.page_count - 1)",
-        params![id, path, title, page_count as i64, now, source_type, meta_json],
+        params![
+            id,
+            path,
+            title,
+            page_count as i64,
+            now,
+            source_type,
+            meta_json
+        ],
     )?;
     Ok(())
 }
@@ -562,14 +570,19 @@ pub fn set_source_stamp(
 }
 
 pub fn clear_source_stamp(conn: &Connection, book_id: &str) -> Result<(), BackendError> {
-    conn.execute("DELETE FROM source_stats WHERE book_id=?1", params![book_id])?;
+    conn.execute(
+        "DELETE FROM source_stats WHERE book_id=?1",
+        params![book_id],
+    )?;
     Ok(())
 }
 
 /// 该书是否处于软删（移除）状态；不存在返回 false。
 pub fn book_is_removed(conn: &Connection, id: &str) -> Result<bool, BackendError> {
     let removed: Option<i64> = conn
-        .query_row("SELECT removed FROM books WHERE id=?1", params![id], |r| r.get(0))
+        .query_row("SELECT removed FROM books WHERE id=?1", params![id], |r| {
+            r.get(0)
+        })
         .ok();
     Ok(removed.unwrap_or(0) != 0)
 }
@@ -602,7 +615,12 @@ pub fn list_books(conn: &Connection, query: Option<&str>) -> Result<Vec<BookRow>
 
 /// 设置进度并把"前进页数"计入当日 `reading_log`（只增不减，避免回翻刷榜）。
 /// `pct`：条漫模式的滚动偏移百分比（0.0..1.0）；分页模式传 None（清为 -1）。
-pub fn set_progress(conn: &Connection, id: &str, page: u32, pct: Option<f64>) -> Result<(), BackendError> {
+pub fn set_progress(
+    conn: &Connection,
+    id: &str,
+    page: u32,
+    pct: Option<f64>,
+) -> Result<(), BackendError> {
     let tx = conn.unchecked_transaction()?;
     let prev: u32 = tx
         .query_row(
@@ -729,7 +747,9 @@ pub fn today_pages(conn: &Connection) -> Result<u32, BackendError> {
 
 pub fn get_setting(conn: &Connection, k: &str) -> Result<Option<String>, BackendError> {
     let v: Option<String> = conn
-        .query_row("SELECT v FROM settings WHERE k=?1", params![k], |r| r.get(0))
+        .query_row("SELECT v FROM settings WHERE k=?1", params![k], |r| {
+            r.get(0)
+        })
         .ok();
     Ok(v)
 }
@@ -746,7 +766,9 @@ pub fn set_setting(conn: &Connection, k: &str, v: &str) -> Result<(), BackendErr
 /// Internal app metadata (not user settings): schema/compatibility markers.
 pub fn get_meta(conn: &Connection, k: &str) -> Result<Option<String>, BackendError> {
     let value: Option<String> = conn
-        .query_row("SELECT v FROM app_meta WHERE k=?1", params![k], |r| r.get(0))
+        .query_row("SELECT v FROM app_meta WHERE k=?1", params![k], |r| {
+            r.get(0)
+        })
         .ok();
     Ok(value)
 }
@@ -1048,8 +1070,9 @@ pub fn record_filter_event(
 }
 
 pub fn filter_stats(conn: &Connection) -> Result<FilterStats, BackendError> {
-    let profiles: i64 =
-        conn.query_row("SELECT COUNT(*) FROM online_filter_profiles", [], |r| r.get(0))?;
+    let profiles: i64 = conn.query_row("SELECT COUNT(*) FROM online_filter_profiles", [], |r| {
+        r.get(0)
+    })?;
     let rules: i64 =
         conn.query_row("SELECT COUNT(*) FROM online_filter_rules", [], |r| r.get(0))?;
     let blocked: i64 = conn.query_row(
@@ -1269,7 +1292,10 @@ mod tests {
         let n = hard_delete_books(&conn, &["b1".into()]).unwrap();
         assert_eq!(n, 1);
         assert!(get_book(&conn, "b1").unwrap().is_none());
-        assert!(list_books(&conn, None).unwrap().iter().all(|b| b.id == "b2"));
+        assert!(list_books(&conn, None)
+            .unwrap()
+            .iter()
+            .all(|b| b.id == "b2"));
         // 阅读进度记录级联清理。
         assert_eq!(reading_log_days(&conn, Some("b1"), 7).unwrap().len(), 0);
     }
@@ -1436,9 +1462,18 @@ mod tests {
         assert_eq!(old.source_type, "local");
         assert_eq!(old.meta_json, "{}");
 
-        let meta = r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg"}]}"#;
-        upsert_online_book(&conn, "o1", "http://x/list.json", "在线", 3, "generic_manga", meta)
-            .unwrap();
+        let meta =
+            r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg"}]}"#;
+        upsert_online_book(
+            &conn,
+            "o1",
+            "http://x/list.json",
+            "在线",
+            3,
+            "generic_manga",
+            meta,
+        )
+        .unwrap();
         let row = get_book(&conn, "o1").unwrap().unwrap();
         assert_eq!(row.source_type, "generic_manga");
         assert_eq!(row.meta_json, meta);
@@ -1457,9 +1492,11 @@ mod tests {
         assert_eq!(row.page_count, 2);
         assert_eq!(row.current_page, 1);
         assert_eq!(row.source_type, "generic_manga");
-        assert!(list_books(&conn, None).unwrap().iter().any(|b| b.id == "o1"));
+        assert!(list_books(&conn, None)
+            .unwrap()
+            .iter()
+            .any(|b| b.id == "o1"));
     }
-
 
     #[test]
     fn filter_profiles_rules_and_events_roundtrip() {
@@ -1608,4 +1645,3 @@ mod tests {
         assert!(get_book(&conn, "x").unwrap().is_none());
     }
 }
-

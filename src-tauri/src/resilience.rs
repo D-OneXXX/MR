@@ -175,9 +175,7 @@ fn read_safe_mode_result(path: &Path) -> Result<SafeModeState, String> {
     match std::fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str::<SafeModeState>(&raw)
             .map_err(|err| format!("安全模式文件损坏：{err}")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(SafeModeState::default())
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SafeModeState::default()),
         Err(error) => Err(format!("无法读取安全模式文件：{error}")),
     }
 }
@@ -538,51 +536,51 @@ fn spawn_watchdog(app: AppHandle, state: Arc<ResilienceState>) {
             let mut last_tick = Instant::now();
             let mut last_boot = boot_time_now();
             loop {
-            std::thread::sleep(WATCHDOG_TICK);
-            let now = Instant::now();
-            let gap = now.duration_since(last_tick);
-            last_tick = now;
-            let boot_now = boot_time_now();
-            let boot_gap = match (last_boot, boot_now) {
-                (Some(before), Some(after)) => Some(after.saturating_sub(before)),
-                _ => None,
-            };
-            last_boot = boot_now;
-            if resume_detected(gap, boot_gap) {
-                *state.last_heartbeat.lock() = Some(now);
-                state.freeze_notified.store(false, Ordering::SeqCst);
-                continue;
-            }
-            let Some(main) = app.get_webview_window("main") else {
-                continue;
-            };
-            let minimized = main.is_minimized().unwrap_or(false);
-            let visible = main.is_visible().unwrap_or(true);
-            if minimized || !visible {
-                // Being minimized is not a freeze. Restore grants a fresh grace
-                // window instead of immediately declaring the old timestamp stale.
-                *state.last_heartbeat.lock() = Some(Instant::now());
-                state.freeze_notified.store(false, Ordering::SeqCst);
-                continue;
-            }
+                std::thread::sleep(WATCHDOG_TICK);
+                let now = Instant::now();
+                let gap = now.duration_since(last_tick);
+                last_tick = now;
+                let boot_now = boot_time_now();
+                let boot_gap = match (last_boot, boot_now) {
+                    (Some(before), Some(after)) => Some(after.saturating_sub(before)),
+                    _ => None,
+                };
+                last_boot = boot_now;
+                if resume_detected(gap, boot_gap) {
+                    *state.last_heartbeat.lock() = Some(now);
+                    state.freeze_notified.store(false, Ordering::SeqCst);
+                    continue;
+                }
+                let Some(main) = app.get_webview_window("main") else {
+                    continue;
+                };
+                let minimized = main.is_minimized().unwrap_or(false);
+                let visible = main.is_visible().unwrap_or(true);
+                if minimized || !visible {
+                    // Being minimized is not a freeze. Restore grants a fresh grace
+                    // window instead of immediately declaring the old timestamp stale.
+                    *state.last_heartbeat.lock() = Some(Instant::now());
+                    state.freeze_notified.store(false, Ordering::SeqCst);
+                    continue;
+                }
 
-            let last = *state.last_heartbeat.lock();
-            let since_start = state.started.elapsed();
-            let since_heartbeat = last.map(|instant| instant.elapsed()).unwrap_or(since_start);
-            if !declare_freeze(true, last.is_some(), since_start, since_heartbeat)
-                || state.freeze_notified.swap(true, Ordering::SeqCst)
-            {
-                continue;
-            }
+                let last = *state.last_heartbeat.lock();
+                let since_start = state.started.elapsed();
+                let since_heartbeat = last.map(|instant| instant.elapsed()).unwrap_or(since_start);
+                if !declare_freeze(true, last.is_some(), since_start, since_heartbeat)
+                    || state.freeze_notified.swap(true, Ordering::SeqCst)
+                {
+                    continue;
+                }
 
-            if let Err(err) = open_recovery(
-                &app,
-                &state,
-                RecoveryTrigger::HeartbeatTimeout,
-                String::new(),
-            ) {
-                crate::logging::log_error("watchdog", &format!("打开恢复窗口失败：{err}"));
-            }
+                if let Err(err) = open_recovery(
+                    &app,
+                    &state,
+                    RecoveryTrigger::HeartbeatTimeout,
+                    String::new(),
+                ) {
+                    crate::logging::log_error("watchdog", &format!("打开恢复窗口失败：{err}"));
+                }
             }
         });
 }
@@ -885,10 +883,7 @@ pub async fn resilience_enable_safe_mode(
         // A frozen/missing renderer cannot process a plain reload. Recreate the
         // main WebView so the safe-mode startup policy is actually applied.
         match replace_main_window(app.clone()).await {
-            Ok(()) => crate::logging::log_error(
-                "safe_mode",
-                "已重建主窗口以应用安全模式",
-            ),
+            Ok(()) => crate::logging::log_error("safe_mode", "已重建主窗口以应用安全模式"),
             Err(err) => crate::logging::log_error(
                 "safe_mode",
                 &format!("重建主窗口应用安全模式失败：{err}"),

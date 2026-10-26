@@ -22,7 +22,13 @@ pub fn early_env_hardening() {
 /// - `wayland && nvidia`：Wayland 合成器 + NVIDIA 专有驱动 → 禁用。
 // 非 Linux 目标上唯一调用方被 cfg 掉，保留函数供测试与文档引用。
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn decide_dmabuf_disable(user_set: bool, force: bool, safe_mode: bool, wayland: bool, nvidia: bool) -> bool {
+fn decide_dmabuf_disable(
+    user_set: bool,
+    force: bool,
+    safe_mode: bool,
+    wayland: bool,
+    nvidia: bool,
+) -> bool {
     if user_set {
         return false;
     }
@@ -37,7 +43,9 @@ fn linux_webkit_hardening() {
     if std::env::var_os(DMABUF_ENV).is_some() {
         return;
     }
-    let force = std::env::var("MR_FORCE_DISABLE_DMABUF").map(|v| v == "1").unwrap_or(false);
+    let force = std::env::var("MR_FORCE_DISABLE_DMABUF")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     let safe_mode = linux_safe_mode_active();
     let wayland = linux_wayland_session();
     let nvidia = linux_nvidia_present();
@@ -94,13 +102,17 @@ fn linux_safe_mode_active() -> bool {
 #[cfg(target_os = "linux")]
 fn linux_wayland_session() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some()
-        || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false)
+        || std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v == "wayland")
+            .unwrap_or(false)
 }
 
 #[cfg(target_os = "linux")]
 fn linux_nvidia_present() -> bool {
     std::path::Path::new("/proc/driver/nvidia/version").exists()
-        || std::env::var("__GLX_VENDOR_LIBRARY_NAME").map(|v| v == "nvidia").unwrap_or(false)
+        || std::env::var("__GLX_VENDOR_LIBRARY_NAME")
+            .map(|v| v == "nvidia")
+            .unwrap_or(false)
 }
 
 /// 当前安装形态（更新策略使用；跨平台编译，非 Linux 恒为空串）。

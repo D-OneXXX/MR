@@ -211,7 +211,10 @@ mod tests {
     #[test]
     fn migration_plan_maps_patch_minor_major_and_downgrade() {
         assert_eq!(plan(None, "1.0.0").change, VersionChange::FirstRun);
-        assert_eq!(plan(Some("1.0.0"), "1.0.0").change, VersionChange::Unchanged);
+        assert_eq!(
+            plan(Some("1.0.0"), "1.0.0").change,
+            VersionChange::Unchanged
+        );
         assert_eq!(plan(Some("1.0.0"), "1.0.1").change, VersionChange::Patch);
         assert_eq!(plan(Some("1.0.0"), "1.1.0").change, VersionChange::Minor);
         assert_eq!(plan(Some("1.0.0"), "2.0.0").change, VersionChange::Major);

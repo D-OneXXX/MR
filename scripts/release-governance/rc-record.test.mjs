@@ -189,3 +189,29 @@ test("runVerification：本地目录校验（通过 / 摘要不符）", () => {
 test("通道定义互不重叠（平台键各自独立）", () => {
   assert.notEqual(CHANNELS.windows.platform, CHANNELS["linux-critical"].platform);
 });
+
+test("parseTag：隔离演练标签被识别为 rehearsal 且不可发布", () => {
+  const parsed = parseTag("v0.0.0-rehearsal");
+  assert.equal(parsed?.rehearsal, true);
+  assert.equal(parsed?.version, "0.0.0");
+  assert.equal(parsed?.channel, "windows");
+
+  const record = buildRcRecord({
+    tag: "v0.0.0-rehearsal",
+    commit: COMMIT,
+    qa: { runId: "42", buildCommit: COMMIT },
+    artifacts: [{ name: "rehearsal-app-setup.exe", sha256: INSTALLER_SHA }],
+  });
+  assert.equal(record.rehearsal, true);
+  assert.deepEqual(validateRcRecord(record), []);
+
+  const verdict = verifyPublishPreconditions({
+    record,
+    actualDigests: new Map([["rehearsal-app-setup.exe", INSTALLER_SHA]]),
+    attestation: makeAttestation({ version: "0.0.0" }),
+    channel: "windows",
+    commit: COMMIT,
+  });
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.problems.some((p) => p.includes("演练候选")));
+});

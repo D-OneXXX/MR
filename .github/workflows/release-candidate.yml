@@ -23,6 +23,11 @@ on:
         description: "干净 Windows VM 的安装/升级/回滚验证回执（base64 编码的 JSON）。正式发布必须提供"
         required: false
         type: string
+      rehearsal:
+        description: "隔离演练模式：只允许 v0.0.0-rehearsal 标签，产物一律带 rehearsal- 前缀且永不发布"
+        required: false
+        default: false
+        type: boolean
 
 # 默认最小权限；只有需要写 Release 的 job 才提升。
 permissions:
@@ -71,17 +76,27 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ inputs.tag }}"
-          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "标签必须形如 vX.Y.Z（常规通道不带 -linux 后缀）：$TAG" >&2
-            exit 1
-          fi
-          VERSION="$(node -p "require('./package.json').version")"
-          if [ "v${VERSION}" != "$TAG" ]; then
-            echo "标签 $TAG 与 package.json 版本 v${VERSION} 不一致" >&2
-            exit 1
-          fi
-          COMMIT="$(git rev-parse HEAD)"
+          REHEARSAL="${{ inputs.rehearsal }}"
           git fetch --no-tags origin main
+          if [ "$REHEARSAL" = "true" ]; then
+            # 隔离演练：标签固定为 v0.0.0-rehearsal，不参与版本语义。
+            if ! printf '%s' "$TAG" | grep -Eq '^v0\.0\.0-rehearsal$'; then
+              echo "演练模式的标签必须固定为 v0.0.0-rehearsal：$TAG" >&2
+              exit 1
+            fi
+            COMMIT="$(git rev-parse origin/main)"
+          else
+            if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "标签必须形如 vX.Y.Z（常规通道不带 -linux 后缀）：$TAG" >&2
+              exit 1
+            fi
+            VERSION="$(node -p "require('./package.json').version")"
+            if [ "v${VERSION}" != "$TAG" ]; then
+              echo "标签 $TAG 与 package.json 版本 v${VERSION} 不一致" >&2
+              exit 1
+            fi
+            COMMIT="$(git rev-parse HEAD)"
+          fi
           if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
             echo "候选 Commit $COMMIT 不在 main 上，拒绝作为发布候选" >&2
             exit 1
@@ -139,25 +154,33 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p candidate
-          cp src-tauri/target/release/bundle/nsis/*.exe candidate/
-          if [ -f src-tauri/target/release/bundle/nsis/latest.json ]; then
-            cp src-tauri/target/release/bundle/nsis/latest.json candidate/
+          PREFIX=""
+          if [ "${{ inputs.rehearsal }}" = "true" ]; then
+            PREFIX="rehearsal-"
           fi
-          if [ -f src-tauri/target/release/bundle/nsis/*.sig ]; then
-            cp src-tauri/target/release/bundle/nsis/*.sig candidate/
-          fi
+          for file in src-tauri/target/release/bundle/nsis/*.exe; do
+            [ -e "$file" ] || continue
+            cp "$file" "candidate/${PREFIX}$(basename "$file")"
+          done
+          for file in src-tauri/target/release/bundle/nsis/latest.json src-tauri/target/release/bundle/nsis/*.sig; do
+            [ -e "$file" ] || continue
+            cp "$file" "candidate/${PREFIX}$(basename "$file")"
+          done
           ls -l candidate/
 
       - name: Verify updater manifest (pre-Draft)
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f candidate/latest.json ]; then
-            echo "缺少 latest.json（createUpdaterArtifacts 应产出）" >&2
+          MANIFEST="candidate/latest.json"
+          if [ "${{ inputs.rehearsal }}" = "true" ]; then
+            MANIFEST="candidate/rehearsal-latest.json"
+          fi
+          if [ ! -f "$MANIFEST" ]; then
+            echo "缺少更新清单（createUpdaterArtifacts 应产出）：$MANIFEST" >&2
             exit 1
           fi
-          node scripts/verify-updater-manifest.mjs candidate/latest.json \
-            --expect-version "${{ steps.identity.outputs.version }}" \
+          node scripts/verify-updater-manifest.mjs "$MANIFEST" \
             --require-platform windows-x86_64
 
       # ---------- 只创建 Draft：绝不公开发布 ----------
@@ -172,9 +195,15 @@ jobs:
           if gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null | grep -qx true; then
             echo "Draft 已存在，复用：$TAG"
           else
-            gh release create "$TAG" --verify-tag --draft \
-              --title "MangaReader $TAG (Draft · 待审批)" \
-              --notes "Release Candidate：待人工审批后才会发布。"
+            if [ "${{ inputs.rehearsal }}" = "true" ]; then
+              gh release create "$TAG" --verify-tag --draft \
+                --title "REHEARSAL · 非正式演练 · 不得发布 ($TAG)" \
+                --notes "隔离演练产物：所有资产带 rehearsal- 前缀，绝不公开。"
+            else
+              gh release create "$TAG" --verify-tag --draft \
+                --title "MangaReader $TAG (Draft · 待审批)" \
+                --notes "Release Candidate：待人工审批后才会发布。"
+            fi
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 

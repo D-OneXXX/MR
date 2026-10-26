@@ -19,6 +19,9 @@ import path from "node:path";
 export const RC_KIND = "manga-reader.release-candidate";
 export const INSTALL_ATTESTATION_KIND = "manga-reader.install-verification";
 
+/** 隔离演练标签：非正式版本号，只允许产出 Draft，绝不允许发布。 */
+export const REHEARSAL_TAG_PATTERN = /^v0\.0\.0-rehearsal$/;
+
 export const CHANNELS = {
   windows: {
     id: "windows",
@@ -56,6 +59,16 @@ export function sha256Bytes(bytes) {
 /** 从标签解析版本与通道。 */
 export function parseTag(tag) {
   const value = String(tag || "").trim();
+  if (REHEARSAL_TAG_PATTERN.test(value)) {
+    return {
+      channel: "windows",
+      platform: CHANNELS.windows.platform,
+      version: "0.0.0",
+      tag: value,
+      rehearsal: true,
+      linuxSec: null,
+    };
+  }
   for (const channel of Object.values(CHANNELS)) {
     const match = value.match(channel.tagPattern);
     if (match) {
@@ -99,6 +112,8 @@ export function buildRcRecord(input) {
   if (artifacts.length === 0) throw new Error("RC 记录必须至少包含一个制品");
   return {
     kind: RC_KIND,
+    // 演练候选必须带标记：发布闸门据此无条件拒绝。
+    rehearsal: parsed.rehearsal === true,
     rcId: `rc-${parsed.tag}-${String(input.commit).slice(0, 12)}`,
     version: parsed.version,
     tag: parsed.tag,
@@ -151,6 +166,14 @@ export function validateRcRecord(record) {
       }
       if (names.has(item.name)) problems.push(`制品重名：${item.name}`);
       names.add(item.name);
+    }
+  }
+  if (record.rehearsal === true) {
+    if (!REHEARSAL_TAG_PATTERN.test(String(record.tag || ""))) {
+      problems.push("演练记录必须使用隔离标签 v0.0.0-rehearsal");
+    }
+    if (record.version !== "0.0.0") {
+      problems.push(`演练记录的版本必须为 0.0.0（当前 ${record.version}）`);
     }
   }
   const qa = record.qa || {};
@@ -223,6 +246,14 @@ export function verifyPublishPreconditions(input) {
   const record = input.record;
   problems.push(...validateRcRecord(record));
   if (problems.length) return { ok: false, problems };
+
+  // 演练候选永远不是可发布对象（与版本/摘要无关）。
+  if (record.rehearsal === true) {
+    return {
+      ok: false,
+      problems: ["演练候选（v0.0.0-rehearsal）永远不得发布"],
+    };
+  }
 
   const expectedChannel = CHANNELS[input.channel];
   if (!expectedChannel) {

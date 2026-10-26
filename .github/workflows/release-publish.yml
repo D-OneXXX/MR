@@ -53,6 +53,10 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ inputs.tag }}"
+          if printf '%s' "$TAG" | grep -q "rehearsal"; then
+            echo "演练标签永远不得发布：$TAG" >&2
+            exit 1
+          fi
           if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "标签必须形如 vX.Y.Z（常规通道不带 -linux 后缀）：$TAG" >&2
             exit 1

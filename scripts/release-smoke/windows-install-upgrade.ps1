@@ -19,7 +19,12 @@
   pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 `
     -PreviousInstaller D:\artifacts\MangaReader_0.17.1_x64-setup.exe `
     -Installer D:\artifacts\MangaReader_0.17.2_x64-setup.exe `
-    -ExpectedVersion 0.17.2
+    -ExpectedVersion 0.17.2 -CleanEnvironment -ImageName "Windows 11 Pro 24H2"
+
+.NOTES
+  干净环境声明：只有在**一次性干净 Windows 虚拟机**上执行时才加 `-CleanEnvironment`，
+  并用 `-ImageName` 记录镜像标识。共享宿主上不要加：回执里的
+  `machine.cleanEnvironment=false` 会被发布门禁拒绝，这是刻意的失败方向。
 #>
 [CmdletBinding()]
 param(
@@ -51,7 +56,13 @@ param(
   [string]$MergeFrom = "",
 
   [Parameter(Mandatory = $false)]
-  [string]$ArtifactName = ""
+  [string]$ArtifactName = "",
+
+  [Parameter(Mandatory = $false)]
+  [switch]$CleanEnvironment,
+
+  [Parameter(Mandatory = $false)]
+  [string]$ImageName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -150,6 +161,12 @@ function Test-AppLaunch([string]$InstallLocation) {
 
 Write-Step "预检"
 Assert-True (Test-Path $Installer) "安装包存在：$Installer"
+$resolvedImage = if ($ImageName) { $ImageName } else { $env:IMAGE_NAME }
+if ($CleanEnvironment) {
+  # 声明了干净环境就必须能说明这是哪套镜像：无法溯源的声明一律无效。
+  Assert-True ([bool]$resolvedImage) "声明干净环境时必须提供镜像标识（-ImageName 或 IMAGE_NAME）"
+}
+Write-Host "   干净环境声明：$([bool]$CleanEnvironment)（镜像：$resolvedImage）"
 $beforeState = Get-LibraryState $DataDir
 Write-Host "   数据目录：$DataDir（库存在：$($beforeState.Exists)）"
 
@@ -271,7 +288,10 @@ if ($EmitEvidence) {
     }
     machine = [ordered]@{
       os = (Get-CimInstance Win32_OperatingSystem).Caption
-      image = $env:IMAGE_NAME
+      # 干净环境是发布强制条件：由在一次性干净环境上执行验证的人显式声明。
+      # 共享宿主上的运行必须**不**传 -CleanEnvironment，回执因此无法满足发布门禁。
+      cleanEnvironment = [bool]$CleanEnvironment
+      image = if ($ImageName) { $ImageName } else { $env:IMAGE_NAME }
       host = $env:COMPUTERNAME
     }
     verifiedAt = (Get-Date).ToUniversalTime().ToString("o")

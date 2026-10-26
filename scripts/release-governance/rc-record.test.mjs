@@ -42,7 +42,7 @@ function makeAttestation(overrides = {}) {
     installer: { name: "app-setup.exe", sha256: INSTALLER_SHA },
     verdict: "PASS",
     checks: { install: "pass", upgrade: "pass", rollback: "pass", dataIntegrity: "pass" },
-    machine: { os: "Windows Server 2022" },
+    machine: { os: "Windows Server 2022", cleanEnvironment: true, image: "windows-2022-clean" },
     verifiedAt: new Date().toISOString(),
     ...overrides,
   };
@@ -84,6 +84,23 @@ test("validateInstallAttestation：必须 PASS 且四项检查齐全", () => {
     null,
   );
   assert.ok(missing.some((p) => p.includes("upgrade")));
+});
+
+test("validateInstallAttestation：未声明干净环境 → 拒绝", () => {
+  const dirty = validateInstallAttestation(
+    makeAttestation({
+      machine: { os: "Windows 11", image: "shared-workstation", cleanEnvironment: false },
+    }),
+    null,
+  );
+  assert.ok(dirty.some((p) => p.includes("干净环境")));
+  const noImage = validateInstallAttestation(
+    makeAttestation({
+      machine: { os: "Windows Server 2022", cleanEnvironment: true, image: "" },
+    }),
+    null,
+  );
+  assert.ok(noImage.some((p) => p.includes("镜像")));
 });
 
 test("verifyPublishPreconditions：制品被替换 → 拒绝", () => {

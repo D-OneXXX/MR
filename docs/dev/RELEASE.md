@@ -165,12 +165,23 @@ un-qa.mjs --suite=static   :: 含 static:release-governance 守卫
 
 ```powershell
 pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 ^
-  -PreviousInstaller <旧版安装包> -Installer <新版本安装包> -ExpectedVersion 0.17.2
+  -PreviousInstaller <旧版安装包> -Installer <新版本安装包> -ExpectedVersion 0.17.2 ^
+  -CleanEnvironment -ImageName "Windows 11 Pro 24H2" ^
+  -Commit <候选提交> -DataDirForApp <隔离数据目录> `
+  -EmitEvidence install-verification.json `
+  -ArtifactName MangaReader_0.17.2_x64-setup.exe
 ```
 
 脚本会输出安装验证回执（JSON）。把它作为候选/发布输入（base64）或直接作为
 Draft 资产 `install-verification.json` 上传。**没有这份回执，发布工作流会拒绝发布**
 （这是设计，不是可绕过的例外）。
+
+> **干净环境声明是机器可判定字段**：回执必须带
+> `machine.cleanEnvironment: true` 与 `machine.image`（镜像标识）。
+> 这两个字段由 `-CleanEnvironment` / `-ImageName` 显式声明——**共享宿主上不要传**：
+> 回执会写成 `cleanEnvironment=false`，发布门禁（`verify-draft.mjs` 与
+> `verify-evidence.mjs`）直接拒绝。这是有意的失败方向，避免「在开发机上跑一遍」
+> 冒充干净环境验证。声明了 `-CleanEnvironment` 却没有镜像标识时脚本自身判失败。
 
 ### 4.3 发布（人工审批后）
 

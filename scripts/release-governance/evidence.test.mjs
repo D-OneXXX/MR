@@ -57,7 +57,12 @@ const installEvidence = {
     dataIntegrity: "pass",
     recovery: "pass",
   },
-  machine: { os: "Windows Server 2022" },
+  machine: {
+    os: "Windows Server 2022",
+    // 干净环境声明：共享宿主上的验证不满足发布强制条件。
+    cleanEnvironment: true,
+    image: "windows-2022-clean",
+  },
   verifiedAt: "2026-10-26T00:00:00.000Z",
 };
 
@@ -68,6 +73,7 @@ const expected = {
   artifactName: "MangaReader_0.17.2_x64-setup.exe",
   artifactSha256: ARTIFACT_SHA,
   publicKeyId: KEY_ID,
+  channel: "windows",
   now: "2026-10-27T00:00:00.000Z",
 };
 
@@ -108,6 +114,42 @@ test("安装证据：缺少任一检查项 → 拒绝", () => {
   }
 });
 
+test("安装证据：未声明干净环境 → 拒绝（共享宿主不满足发布强制条件）", () => {
+  const withoutFlag = validateInstallEvidence(
+    {
+      ...installEvidence,
+      machine: { os: "Windows Server 2022", image: "windows-2022-clean" },
+    },
+    expected,
+  );
+  assert.ok(
+    withoutFlag.some((p) => p.includes("干净环境")),
+    "缺少 machine.cleanEnvironment 声明必须被拒绝",
+  );
+  const explicitlyDirty = validateInstallEvidence(
+    {
+      ...installEvidence,
+      machine: { ...installEvidence.machine, cleanEnvironment: false },
+    },
+    expected,
+  );
+  assert.ok(explicitlyDirty.some((p) => p.includes("干净环境")));
+});
+
+test("安装证据：干净环境必须记录镜像标识", () => {
+  const withoutImage = validateInstallEvidence(
+    {
+      ...installEvidence,
+      machine: { ...installEvidence.machine, image: "  " },
+    },
+    expected,
+  );
+  assert.ok(
+    withoutImage.some((p) => p.includes("镜像")),
+    "缺少 machine.image 必须被拒绝",
+  );
+});
+
 test("总闸：证据齐备且绑定一致 → 放行", () => {
   const verdict = verifyReleaseEvidence({
     record,
@@ -120,6 +162,24 @@ test("总闸：证据齐备且绑定一致 → 放行", () => {
     now: "2026-10-27T00:00:00.000Z",
   });
   assert.equal(verdict.ok, true, verdict.problems.join(" | "));
+});
+
+test("总闸：安装证据来自共享宿主（未声明干净环境）→ 拒绝", () => {
+  const verdict = verifyReleaseEvidence({
+    record,
+    digests: new Map([["MangaReader_0.17.2_x64-setup.exe", ARTIFACT_SHA]]),
+    signatureEvidence,
+    installEvidence: {
+      ...installEvidence,
+      machine: { os: "Windows 11", image: "shared-workstation", cleanEnvironment: false },
+    },
+    channel: "windows",
+    commit: COMMIT,
+    publicKeyId: KEY_ID,
+    now: "2026-10-27T00:00:00.000Z",
+  });
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.problems.some((p) => p.includes("干净环境")));
 });
 
 test("总闸：缺安装证据 / 缺签名证据 → 拒绝", () => {

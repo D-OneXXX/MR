@@ -300,12 +300,12 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 | 0 | 只读审计 | 已完成，用户已确认 |
 | 1 | 治理骨架：Issue/分支/Worktree/状态/PR 模板 | 已完成（PR #14） |
 | 2 | Bug 生命周期与自动修复流程 | 已完成门禁与单 Bug 演练（PR #20/#22、#21） |
-| 3 | 质量门禁与安全扫描 | 进行中：安全/供应链/格式/夹具/发布契约门禁完成，hosted 全量 QA 已跑出全绿证据（run 40265639362）；剩余 #42 混沌连点稳定性调查中 |
+| 3 | 质量门禁与安全扫描 | **完成**：安全/供应链/格式/夹具/发布契约门禁全部进 CI；hosted 全量 QA 已在 windows-2022 连续跑出全绿证据（main 上 run 40267990890，229/229）；#42/#51 两个偶发失败已按证据修复 |
 | 4 | RC / Draft / 审批 / 双通道发布 | 待开始（方案见 `docs/dev/PHASE3_ACCEPTANCE.md` 第 5 节） |
 | 5 | 发布后验证、Hotfix 与回滚 | 待开始 |
 | 6 | 隔离演练，不触发真实发布 | 待开始 |
 
-Phase 2 收尾于 2026-10-26：PR 元数据 required check 已生效；#18（glib 风险接受）与 #23（chaos/CDP flake）已处置。Phase 3 的安全门禁已完成；hosted 全量 QA 已在 windows-2022 跑出全绿证据（run 40265639362，228/228），剩余阻塞为 #42 的混沌连点偶发失败（正在用证据采集定位）。发布候选仍按 `docs/dev/LOCAL_QA_ATTESTATION.md` 走本地 attestation，直到 #42 收敛。
+Phase 2 收尾于 2026-10-26：PR 元数据 required check 已生效；#18（glib 风险接受）与 #23（chaos/CDP flake）已处置。Phase 3 已于 2026-10-26 收尾：安全、供应链（Actions SHA 固定）、格式、夹具、发布契约五类门禁全部进 CI；hosted 全量 QA 在 windows-2022 连续跑出全绿证据（main 上 run 40267990890，229/229）；两个偶发失败（#32 断言判据无效、#42/#51 测试前置条件缺失）均已按证据定位并修复。唯一未完成项是需要干净 Windows VM 的真实安装/升级/回滚验证（BLOCKED）。发布候选仍按 `docs/dev/LOCAL_QA_ATTESTATION.md` 走本地 attestation，直到 Phase 4 的 Draft + 审批流落地。
 
 Phase 3 的逐项验收结论、证据矩阵与 Phase 4 实施方案见 `docs/dev/PHASE3_ACCEPTANCE.md`。
 

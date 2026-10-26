@@ -1,6 +1,6 @@
 # MangaReader 项目状态
 
-> 生成时间：2026-10-25T20:50:33.188Z
+> 生成时间：2026-10-26T05:04:30.253Z
 > 本文件由 `npm run status` 生成，请勿手工编辑。
 > `UNKNOWN` 表示当前环境无法验证，不代表正常。
 
@@ -10,23 +10,23 @@
 |---|---|
 | package.json | `0.17.1` |
 | 最新 Release | `v0.17.1-linux-sec1`（0.17.1） |
-| 最新 Windows Release | `v0.17.1`（0.17.1）；HEAD 领先 11 个提交 |
-| 最新 Linux critical Release | `v0.17.1-linux-sec1`（0.17.1）；HEAD 领先 8 个提交 |
-| HEAD 距最新 Release | 8 个提交 |
+| 最新 Windows Release | `v0.17.1`（0.17.1）；HEAD 领先 27 个提交 |
+| 最新 Linux critical Release | `v0.17.1-linux-sec1`（0.17.1）；HEAD 领先 24 个提交 |
+| HEAD 距最新 Release | 24 个提交 |
 | 当前阶段 | 开发中（与最新发布同版本） |
-| 判定依据 | HEAD 领先最新发布 8 个提交，但版本号仍为 0.17.1。下一次发布前必须 bump。 |
+| 判定依据 | HEAD 领先最新发布 24 个提交，但版本号仍为 0.17.1。下一次发布前必须 bump。 |
 
 ## 2. 仓库与工作区
 
 | 项目 | 值 |
 |---|---|
 | 分支 | `main` |
-| HEAD | `e197dc3225c3` |
-| 提交 | fix(status): 区分必需与非必需 check runs (#22) |
-| 提交时间 | 2026-10-26T04:44:50+08:00 |
-| 工作区 | 干净 |
-| 本地分支 | `chore/13-phase-1-governance`, `chore/15-vite-lru-security`, `chore/19-pr-governance`, `fix/21-status-required-checks`, `main`, `wip/main-telegram-20261023` |
-| 已注册 Worktree | `manga-reader-tauri`（main） |
+| HEAD | `0779b83aa2d6` |
+| 提交 | fix(qa): 清空缓存前改为条件等待 (#51) |
+| 提交时间 | 2026-10-26T13:03:35+08:00 |
+| 工作区 | 有改动（staged=0, modified=1, untracked=0） |
+| 本地分支 | `chore/13-phase-1-governance`, `chore/15-vite-lru-security`, `chore/18-glib-risk-acceptance`, `chore/19-pr-governance`, `chore/24-phase2-closeout`, `chore/28-rust-security-audit`, `chore/30-full-qa-evidence`, `chore/36-local-qa-attestation`, `chore/38-actions-sha`, `chore/39-upgrade-compat`, `chore/40-phase3-report`, `chore/48-version-attribution`, `chore/49-version-attribution`, `fix/21-status-required-checks`, `fix/23-chaos-cdp-retry`, `fix/30-full-qa-retry`, `fix/30-full-qa-retry-v2`, `fix/32-arch-webtoon-ci-diag`, `fix/32-arch-webtoon-flake`, `fix/42-chaos-rage-click`, `fix/51-cache-quiescence`, `main`, `wip/main-telegram-20261023` |
+| 已注册 Worktree | `manga-reader-tauri`（main）, `chore-38-actions-sha`（chore/38-actions-sha）, `chore-39-upgrade-compat`（chore/39-upgrade-compat）, `chore-40-phase3-report`（chore/40-phase3-report）, `chore-48-version-attribution`（chore/48-version-attribution）, `fix-32-arch-webtoon-ci-diag`（fix/32-arch-webtoon-ci-diag）, `fix-42-chaos-rage-click`（fix/42-chaos-rage-click）, `fix-51-cache-quiescence`（fix/51-cache-quiescence） |
 
 ## 3. 质量门禁
 
@@ -34,8 +34,10 @@
 
 | 检查 | 必需 | 状态 | 结论 |
 |---|---|---|---|
-| cargo check + frontend build (ubuntu-22.04) | 是 | completed | success |
-| tsc + cargo test + static QA (windows-latest) | 是 | completed | success |
+| Analyze (javascript-typescript) | 否 | in_progress | — |
+| Analyze (actions) | 否 | completed | success |
+| cargo check + frontend build (ubuntu-22.04) | 是 | in_progress | — |
+| tsc + cargo test + static QA (windows-latest) | 是 | in_progress | — |
 
 - 分支保护：enforce_admins=true
 - required checks：tsc + cargo test + static QA (windows-latest), cargo check + frontend build (ubuntu-22.04), PR governance (issue link + branch naming)
@@ -48,8 +50,8 @@
 
 | # | 标题 | 状态 | 严重度 | 负责人 |
 |---|---|---|---|---|
-| #23 | QA: chaos CDP 超时偶发导致全量 QA P0（safe-mode/freeze） | status:triaged | severity:p2 | — |
-| #18 | 依赖安全：glib 0.18.5 需 Tauri/GTK 协调升级 | status:triaged | severity:p2 | — |
+| #49 | docs: 修正更新通道误报的版本归属描述 | status:in-progress | severity:p4 | — |
+| #42 | QA: chaos:rage-click hosted windows-2022 未触发独立恢复窗口 | status:in-progress | severity:p1 | — |
 
 ## 5. 开放 PR
 
@@ -59,11 +61,11 @@
 
 | Workflow | 事件 | 分支 | 状态 | 结论 |
 |---|---|---|---|---|
-| Linux check | push | main | completed | success |
-| Windows check | push | main | completed | success |
-| Windows check | pull_request | fix/21-status-required-checks | completed | success |
-| Linux check | pull_request | fix/21-status-required-checks | completed | success |
-| PR governance | pull_request | fix/21-status-required-checks | completed | success |
+| Linux check | push | main | in_progress | — |
+| Push on main | dynamic | main | in_progress | — |
+| Windows check | push | main | in_progress | — |
+| PR governance | pull_request | fix/51-cache-quiescence | completed | success |
+| Windows check | pull_request | fix/51-cache-quiescence | completed | success |
 
 ## 7. 最近 Release
 
@@ -79,8 +81,8 @@
 
 - 未配置发布审批环境；Phase 1–3 禁止推送发布 Tag。
 - 最新版本已发布但 HEAD 仍有未发布提交；下一次发布前必须 bump。
-- Windows 常规通道落后 HEAD 11 个提交。
-- Linux critical 通道落后 HEAD 8 个提交。
+- Windows 常规通道落后 HEAD 27 个提交。
+- Linux critical 通道落后 HEAD 24 个提交。
 
 ### 阻塞项
 
@@ -88,7 +90,7 @@
 
 ### 下一步任务
 
-#23 QA: chaos CDP 超时偶发导致全量 QA P0（safe-mode/freeze）
+#49 docs: 修正更新通道误报的版本归属描述
 
 ## 9. 恢复检查清单
 

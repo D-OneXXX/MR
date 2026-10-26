@@ -4,6 +4,10 @@
 > **禁止推送任何 `v*` 发布标签**。当前两个发布工作流仍会在 Tag 推送后直接公开发布，
 > 且没有人工审批环境。准备阶段只允许本地构建、测试和 Draft 设计；不得修改公开更新清单。
 > 完整规则见 `docs/ENGINEERING_WORKFLOW.md`。
+>
+> **发布候选 QA 回退**：hosted 全量 QA 被 #30/#32 阻塞期间，可按
+> `docs/dev/LOCAL_QA_ATTESTATION.md` 执行固定 Commit 的本地完整 QA attestation；
+> 它不能替代发布批准、签名校验或安装/升级测试，且仍禁止在审批前推 Tag。
 
 > 适用版本：`0.17.0` 起。官方更新通道使用 Tauri 2 Updater + GitHub Releases；
 > **双通道拆分**：Windows 常规通道走 `latest.json`，Linux 长期稳定分支只接收

@@ -188,7 +188,8 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 ### Release Candidate 门禁
 
 - 固定 Commit、固定依赖。
-- 完整 QA 通过 `.github/workflows/qa-full.yml` 在 CI 上运行；artifact 名为 `qa-evidence-<sha>`，必须与发布候选 Commit 一致。
+- 完整 QA 优先通过 `.github/workflows/qa-full.yml` 在 CI 上运行；artifact 名为 `qa-evidence-<sha>`，必须与发布候选 Commit 一致。
+- 若 hosted QA 被已记录的 #30/#32 环境问题阻塞，允许按 `docs/dev/LOCAL_QA_ATTESTATION.md` 执行本地 attestation：必须固定 Commit、清洁工作树、完整 suite、P0/P1=0、报告 SHA-256、维护者批准，并附入 Draft；不得用裸数字替代证据。
 - Windows 安装/覆盖升级、Linux 包安装/启动、数据保留。
 - 签名、清单、SHA-256 校验。
 - Release Notes、Known Issues、回滚说明。
@@ -298,12 +299,12 @@ PR 元数据门禁（`ci-pr-governance.yml`，required check）：
 | 0 | 只读审计 | 已完成，用户已确认 |
 | 1 | 治理骨架：Issue/分支/Worktree/状态/PR 模板 | 已完成（PR #14） |
 | 2 | Bug 生命周期与自动修复流程 | 已完成门禁与单 Bug 演练（PR #20/#22、#21） |
-| 3 | 质量门禁与安全扫描 | 下一阶段（#18/#23 已处置） |
+| 3 | 质量门禁与安全扫描 | 进行中（安全门禁完成；hosted qa-full 被 #30/#32 阻塞，本地 attestation 为受控回退） |
 | 4 | RC / Draft / 审批 / 双通道发布 | 待开始 |
 | 5 | 发布后验证、Hotfix 与回滚 | 待开始 |
 | 6 | 隔离演练，不触发真实发布 | 待开始 |
 
-Phase 2 收尾于 2026-10-26：PR 元数据 required check 已生效；#18（glib 风险接受）与 #23（chaos/CDP flake）已处置，下一步进入 Phase 3。
+Phase 2 收尾于 2026-10-26：PR 元数据 required check 已生效；#18（glib 风险接受）与 #23（chaos/CDP flake）已处置。Phase 3 的安全门禁已完成；hosted 全量 QA 仍被 #30/#32 阻塞，发布候选按 `docs/dev/LOCAL_QA_ATTESTATION.md` 走本地 attestation，直到 CI 恢复。
 
 Phase 1 验收：
 

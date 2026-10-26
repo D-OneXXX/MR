@@ -959,7 +959,8 @@ export function checkReleaseSurface(root, report) {
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
     "uploadUpdaterJson: true",
-    "tauri-apps/tauri-action@v1",
+    // 只匹配 action 名，不匹配版本/SHA：版本由 static:actions-pinned 守卫固定到 commit SHA。
+    "tauri-apps/tauri-action@",
     "releaseDraft: false",
     "MR_BUILD_ORIGIN: official",
     "npx tsc --noEmit",

@@ -10,10 +10,17 @@ The CI workflows pin Node 22 for this reason.
 ```bash
 npm run version:check
 npm run test:version
+npm run test:fixtures
 npx tsc --noEmit
 npm run build
+npm run format:check
 node tests/qa/run-qa.mjs --suite=static
 ```
+
+`npm run format:check` is a read-only `cargo fmt --check`: it never rewrites the tree.
+`npm run test:fixtures` guards the QA fixtures themselves (for example, the
+ultra-tall webtoon fixture must stay a **ramp**: a solid-color image would make every
+slice byte-identical and turn the "multiple distinct slices" assertion invalid — Issue #32).
 
 ## Governance checks
 
@@ -94,9 +101,13 @@ Remove personal paths, book titles, cookies, tokens, and full private URLs befor
 ## CI gates
 
 - `.github/workflows/ci-windows-check.yml` — version gate, TypeScript, production build,
-  Rust unit and integration tests, governance tests, and static QA.
+  Rust unit and integration tests, governance tests, fixture unit tests, `cargo fmt --check`,
+  and static QA.
 - `.github/workflows/ci-linux-check.yml` — Linux `cfg` compilation, clippy, Rust tests,
-  xvfb-backed integration tests, governance tests, and blocking dependency audits.
+  xvfb-backed integration tests, governance tests, fixture unit tests, `cargo fmt --check`,
+  and blocking dependency audits.
+- All workflows pin every action to a full 40-character commit SHA (version kept as a trailing
+  comment). `static:actions-pinned` fails the build if a floating tag or branch reappears.
 - `.github/workflows/ci-pr-governance.yml` — required PR metadata gate: linked issue,
   branch issue number, verification/data/release sections, and main-only base. Dependabot
   and Renovate PRs are skipped.
@@ -120,17 +131,18 @@ uploads `qa-evidence-<sha>` on success or failure. A release candidate must refe
 artifact; do not substitute a hand-written local QA count. It has no access to signing
 secrets and cannot publish a Release.
 
-If hosted QA is blocked by the recorded #30/#32 windows-2022 / WebView2 issue, use the
-controlled local attestation in
+If hosted QA is blocked by a recorded platform issue (for example #42,
+`chaos:rage-click` on windows-2022), use the controlled local attestation in
 [LOCAL_QA_ATTESTATION.md](dev/LOCAL_QA_ATTESTATION.md). It still requires an exact Commit,
 clean tree, complete suite, P0/P1=0, report hashes, environment details, and maintainer
 approval; it does not authorize a release.
 
-The full QA step allows one retry of the **complete suite** for the known windows-2022
-WebView2 131 arch/lazy-load timing flake. Both attempts remain in the job log; no suite is
-skipped and assertions are not weakened. A second failure blocks the job. The first
-observed failure (`arch:ultra-tall-webtoon`, 2026-10-26) passed the same commit locally
-228/228 and had correct API tile geometry; it is tracked in #32.
+The full QA step runs the suite **once**. The earlier "one retry of the complete suite"
+escape hatch was removed after the root cause of the `arch:ultra-tall-webtoon` failure was
+identified and fixed (#32: the ultra-tall fixture was a solid-color image, so every slice
+was byte-identical and the "distinct slices" assertion was measuring render width instead
+of slicing). A retry would have masked real failures; any remaining failure now blocks the
+job on the first attempt.
 
 > Phase 1–3: the release workflows still publish directly from a tag push. Do not push
 > any `v*` tag until Phase 4 replaces them with Draft + approval.

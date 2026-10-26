@@ -682,6 +682,13 @@ export function checkReleaseGovernance(root, report) {
     if (!source.includes("install-verification.json")) {
       errors.push(`${name} 必须要求安装/升级验证证据 install-verification.json`);
     }
+    // 发布门禁必须用 main 上的**当前**治理脚本执行：标签提交里的旧副本会让
+    // 「候选创建后修过门禁脚本」的情形必然发布失败，只剩绕过门禁一条路。
+    if (!source.includes("git checkout FETCH_HEAD -- scripts/")) {
+      errors.push(
+        `${name} 必须用 main 上的当前门禁脚本执行发布校验（git checkout FETCH_HEAD -- scripts/）`,
+      );
+    }
     for (const bypass of ["skip_evidence", "skip_signature", "skip_install", "SKIP_EVIDENCE"]) {
       if (source.includes(bypass)) {
         errors.push(`${name} 含证据绕过开关 ${bypass}`);

@@ -1,9 +1,12 @@
 # 发布与自动更新签名
 
-> **Phase 1–3 发布暂停（2026-10-26）**：在 Phase 4 发布改造完成并获用户明确批准前，
-> **禁止推送任何 `v*` 发布标签**。当前两个发布工作流仍会在 Tag 推送后直接公开发布，
-> 且没有人工审批环境。准备阶段只允许本地构建、测试和 Draft 设计；不得修改公开更新清单。
-> 完整规则见 `docs/ENGINEERING_WORKFLOW.md`。
+> **发布流程（Phase 4 起）**：仓库内**没有任何 Tag 触发的发版工作流**，推送 `v*`
+> 标签不会构建也不会公开发布。正式发布必须由维护者手动触发「候选」与「发布」
+> 两个工作流，且两次都要通过 Environment 人工审批。
+> **Phase 5 起**：候选必须绑定 QA run id、Commit 与制品 SHA-256；发布前必须有
+> 官方 minisign 验签证据与**干净环境**的安装/升级/数据完整性回执，缺一即拒绝。
+> 完整规则见 `docs/ENGINEERING_WORKFLOW.md` §9 与
+> [PHASE4_RELEASE_GOVERNANCE.md](PHASE4_RELEASE_GOVERNANCE.md)。
 >
 > **发布候选 QA 回退**：hosted 全量 QA 被 #30/#32 阻塞期间，可按
 > `docs/dev/LOCAL_QA_ATTESTATION.md` 执行固定 Commit 的本地完整 QA attestation；
@@ -38,21 +41,28 @@
 - `src-tauri/capabilities/updater.json`：仅主窗获得 `updater:default`；
   重启走自研 `restart_app`，**没有** `process:*` 权限。
 - **CI 双流水线（互不阻塞）**：
-  - `.github/workflows/release-windows.yml`：`v*` 标签（排除 `-linux*`）→
-    仅 `windows-2022` 构建 NSIS + 签名 + 上传 `latest.json`（tauri-action），
-    并把上一版 Release 里的 `latest-linux-critical.json` 接力携带到新 Release
-    （保证 `releases/latest/download/...` 双通道 URL 永远可用）。
+  - `.github/workflows/release-candidate.yml`：`workflow_dispatch` 手动触发
+    （输入 `tag` + `qa_run_id`）→ Environment `release-windows` 人工审批 →
+    仅 `windows-2022` 构建 NSIS + 签名 + 上传 `latest.json`（tauri-action）→
+    **只创建 Draft** 并附上 `rc-record.json`（版本 + Commit + 平台 + QA runId +
+    每个制品 SHA-256）。它**不会**公开发布，也不会被 Tag 推送触发。
     发布 QA 需要真实 WebView2，固定 `windows-2022`：`windows-2025` 的 Evergreen
     WebView2（>=133）存在 DevTools/CDP 端口回归，会卡在 `qa:app-bootstrap`
     （参考 actions/runner-images#14738）。主 CI 的 Windows 构建检查仍用
     `windows-latest`，不启动 WebView2。
   - 发布 QA 固定 **Node.js 22+**：CDP harness 使用 Node 全局 `WebSocket`；
     Node 20 会在 `qa:app-bootstrap` 直接报错。
-  - `.github/workflows/release-linux-critical.yml`：`v*-linux-sec*` 标签或手动
-    `workflow_dispatch` → `ubuntu-22.04` 构建 deb/rpm/AppImage，
-    `scripts/make-linux-critical-manifest.mjs` 生成
-    `latest-linux-critical.json`（AppImage + minisign 签名），同样把
-    `latest.json` 接力携带。
+  - `.github/workflows/release-publish.yml`：`workflow_dispatch` 手动触发
+    （输入 `tag`）→ Environment 审批 → 下载 Draft 制品 → 绑定校验 →
+    取官方 minisign 验签 + 证据总闸 → 把 Draft 变为公开 Release，
+    并把另一通道的清单接力携带（保证 `releases/latest/download/...` 双通道 URL 永远可用）。
+  - `.github/workflows/release-candidate-linux.yml` / `release-publish-linux.yml`：
+    Linux 高危补丁通道（标签固定 `vX.Y.Z-linux-secN`），`ubuntu-22.04` 构建
+    deb/rpm/AppImage，`scripts/make-linux-critical-manifest.mjs` 生成
+    `latest-linux-critical.json`（AppImage + minisign 签名）。与 Windows 通道
+    各自独立审批，互不触发。
+  - `.github/workflows/release-rehearsal.yml`：无 Secret 的发布状态机隔离演练，
+    每次 push / PR 都跑。
   - `.github/workflows/ci-linux-check.yml`：PR/推送时 Linux cfg 块编译检查。
 - **社区构建**：`npm run build:community`（无 `TAURI_SIGNING_PRIVATE_KEY` 时自动
   覆盖 `createUpdaterArtifacts=false` 并标记 `MR_BUILD_ORIGIN=community`），

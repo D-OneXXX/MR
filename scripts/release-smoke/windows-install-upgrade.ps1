@@ -226,10 +226,34 @@ if (-not $KeepInstalled) {
   Write-Step "清理（卸载）"
   $current = Get-InstalledMangaReader
   if ($current -and $current.UninstallString) {
-    $uninstaller = $current.UninstallString.Split(" ")[0]
+    # NSIS 写入的卸载命令是**带引号且可能含空格**的路径
+    # （例如 "C:\Program Files\MangaReader\uninstall.exe"）。
+    # 直接按空格切分只会得到 "C:\Program"，卸载器永远不会执行，
+    # 表现为「卸载后卸载列表仍包含 MangaReader」的假失败。
+    $uninstaller = $current.UninstallString.Trim()
+    if ($uninstaller.StartsWith('"')) {
+      $closing = $uninstaller.IndexOf('"', 1)
+      if ($closing -gt 0) { $uninstaller = $uninstaller.Substring(1, $closing - 1) }
+    } else {
+      $uninstaller = ($uninstaller -split '\s+')[0]
+    }
+    Assert-True (Test-Path $uninstaller) "卸载器可执行文件存在：$uninstaller"
     if (Test-Path $uninstaller) {
       $proc = Start-Process -FilePath $uninstaller -ArgumentList "/S" -PassThru
       $proc.WaitForExit(120000) | Out-Null
+      if (-not $proc.HasExited) {
+        $proc.Kill()
+        Assert-True $false "卸载程序超时未退出"
+      } else {
+        Assert-True ($proc.ExitCode -eq 0) "卸载程序退出码为 0（实际 $($proc.ExitCode)）"
+        # NSIS 卸载器会派生辅助进程后立刻返回，注册表项与安装目录的清理稍后才落地：
+        # 有界轮询等待清理完成（最多 30s），既不误判也不无限等待。
+        $deadline = (Get-Date).AddSeconds(30)
+        while ((Get-Date) -lt $deadline) {
+          if ($null -eq (Get-InstalledMangaReader)) { break }
+          Start-Sleep -Milliseconds 500
+        }
+      }
     }
   }
   Assert-True ($null -eq (Get-InstalledMangaReader)) "卸载后卸载列表不再包含 MangaReader"

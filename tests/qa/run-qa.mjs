@@ -304,7 +304,7 @@ function finalize(report) {
   writeMarkdownReport(report, mdPath, kb);
   const summary = summarize(report);
   console.log("");
-  console.log("================ MangaReader QA ================");
+  console.log("================ Moyu QA ================");
   console.log(
     `版本 v${report.appVersion} @ ${report.buildCommit} | 通过 ${summary.passed}/${summary.total} (${summary.passRate.toFixed(1)}%)`,
   );

@@ -652,7 +652,7 @@ fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestor
     let manifest: BackupManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|e| format!("备份清单损坏：{e}"))?;
     if manifest.format != BACKUP_FORMAT {
-        return Err("不是 MangaReader 备份文件（backup-invalid-format）".into());
+        return Err("不是 Moyu 备份文件（backup-invalid-format）".into());
     }
     // 前向兼容：Windows 主线版本演进快于 Linux 分支，高版本导出的备份
     // （schema > 当前）允许恢复——manifest 未知字段已被 serde 忽略，

@@ -1,9 +1,8 @@
 # Architecture overview
 
-MangaReader is a local-first desktop application built with Tauri 2, Rust, React, TypeScript,
-and SQLite. This document is the English overview; detailed module notes live in
-[TECHNICAL.md](TECHNICAL.md) (Chinese), and the binding engineering rules are in
-[AGENTS.md](../AGENTS.md).
+Moyu is a local-first desktop application built with Tauri 2, Rust, React, TypeScript,
+and SQLite. This document is the English overview of how the application behaves and where
+your data lives.
 
 ## Design goals
 
@@ -111,8 +110,7 @@ browser WebView
 | `src-tauri/src/` | Rust commands, database, import/render pipeline, online fetch, security, updates |
 | `src-tauri/capabilities/` | Tauri permission boundaries per window |
 | `tests/qa/` | Static, behavioral, visual, privacy, cache, online, and chaos checks |
-| `docs/` | User-facing/testing/architecture docs and build assets |
-| `docs/dev/` | Maintainer release and manual smoke-check runbooks |
+| `docs/` | Public architecture overview and build assets |
 | `scripts/` | Version, build, and release helpers |
 
-See [TESTING.md](TESTING.md) for the verification workflow.
+Verification commands are listed under **Development** in the README.

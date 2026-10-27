@@ -1,11 +1,12 @@
 <p align="center">
-  <img src="docs/assets/logo.png" width="96" height="96" alt="MangaReader 图标">
+  <img src="docs/assets/logo.png" width="96" height="96" alt="Moyu 图标">
 </p>
 
-<h1 align="center">MangaReader</h1>
+<h1 align="center">Moyu</h1>
 
 <p align="center">
   <strong>本地优先的 Windows / Linux 桌面漫画阅读器。</strong><br>
+  Moyu 是一款免费的桌面漫画阅读与书库管理软件。<br>
   书库留在你的磁盘上。无账号、无云端书库、不内置漫画源。
 </p>
 
@@ -27,11 +28,11 @@
 ## 产品预览
 
 <p align="center">
-  <img src="docs/assets/screenshots/library.png" width="49%" alt="MangaReader 书库，展示三本合成示例书">
-  <img src="docs/assets/screenshots/settings.png" width="49%" alt="MangaReader 外观与语言设置">
+  <img src="docs/assets/screenshots/library.png" width="49%" alt="Moyu 书库，展示三本合成示例书">
+  <img src="docs/assets/screenshots/settings.png" width="49%" alt="Moyu 外观与语言设置">
 </p>
 <p align="center">
-  <img src="docs/assets/screenshots/reader.png" width="82%" alt="MangaReader 阅读器，展示原创合成漫画页面">
+  <img src="docs/assets/screenshots/reader.png" width="82%" alt="Moyu 阅读器，展示原创合成漫画页面">
 </p>
 <p align="center">
   <sub>截图来自真实应用，使用隔离的演示书库与原创合成示例页面；不包含任何个人书库数据。</sub>
@@ -84,7 +85,7 @@ macOS 与 ARM64 构建不在当前发布范围内。
 
 1. 从最新 Release 下载 NSIS 安装器。
 2. 运行安装器，选择安装范围与语言。
-3. 启动 **MangaReader**，添加文件夹或压缩包，然后选择一本书。
+3. 启动 **Moyu**，添加文件夹或压缩包，然后选择一本书。
 
 Windows 安装器**未做 Authenticode 代码签名**，SmartScreen 可能弹出提示；运行前请确认
 安装器来自本仓库的 Releases 页面。更新包使用独立的 Tauri 更新签名。
@@ -100,6 +101,12 @@ Windows 的书库数据位于 `%APPDATA%\com.local.manga-reader`，缓存位于
 **设置 → 存储与数据** 查看。卸载可通过 Windows **设置 → 应用** 或 Linux 包管理器完成；
 如需同时删除本地元数据与进度，请手动移除数据目录。
 
+## 名称与升级兼容性
+
+应用内名称是 **Moyu**。对于已有安装，安装器的产品身份、`.cbz` / `.zip` 文件关联的注册名、
+数据目录（`com.local.manga-reader`）、更新签名与更新端点以及部分产物文件名会保留旧名
+**MangaReader**，以便升级、既有文件关联与已有用户数据保持完整。
+
 ## 快速开始
 
 1. 点击 **添加文件夹** 或 **添加书籍**，选择文件夹、ZIP 或 CBZ。
@@ -107,7 +114,7 @@ Windows 的书库数据位于 `%APPDATA%\com.local.manga-reader`，缓存位于
 3. 在阅读器中切换单页、双页或条漫布局。
 4. 在 **设置 → 常规与外观** 中调整主题、界面语言与阅读偏好。
 5. 如需在线阅读，使用浏览器/在线入口打开你有权访问的 URL。
-   MangaReader 不内置漫画源或订阅列表。
+   Moyu 不内置漫画源或订阅列表。
 
 ## 配置
 
@@ -121,7 +128,7 @@ Windows 的书库数据位于 `%APPDATA%\com.local.manga-reader`，缓存位于
 
 ## 常见问题
 
-**MangaReader 会上传我的书库吗？**
+**Moyu 会上传我的书库吗？**
 
 不会。书库数据库、进度、缓存与阅读统计都留在本机；没有账号体系或云同步。
 
@@ -167,8 +174,8 @@ Windows 使用 **设置 → 应用**，Linux 使用包管理器。本地数据�
 
 ## 许可证
 
-MangaReader 采用 **PolyForm Noncommercial License 1.0.0**，属于**源码可见**项目，
-**不是 OSI 开源项目**。本许可证不授予商业使用权。
+Moyu 可免费用于个人及其他非商业用途，许可为 **PolyForm Noncommercial License 1.0.0**。
+项目属于**源码可见**，**不是 OSI 开源项目**；本许可证不授予商业使用权。
 
 - [LICENSE](LICENSE)
 - [NOTICE.md](NOTICE.md) — 必需声明、构建来源指纹与更新通道
@@ -198,12 +205,13 @@ cargo test --lib --manifest-path src-tauri/Cargo.toml
 node tests/qa/run-qa.mjs --suite=static
 ```
 
-QA 测试框架使用隔离的数据与缓存目录启动应用，**不要指向真实书库**。完整验证流程见
-[docs/TESTING.md](docs/TESTING.md)，运行架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，
-模块细节见 [docs/TECHNICAL.md](docs/TECHNICAL.md)。
+QA 测试框架使用隔离的数据与缓存目录启动应用，**不要指向真实书库**。完整套件用
+`node tests/qa/run-qa.mjs`（需要 Node.js 22+），`--suite=static` 是快速门禁；框架会隔离应用数据
+目录、渲染与在线缓存目录以及 WebView2 用户目录。运行架构与数据存放位置见
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 问题反馈与发布反馈欢迎提交到 Issue 跟踪器；安全问题请遵循 `SECURITY.md`。
 
 ---
 
-MangaReader 不隶属于任何漫画出版社、汉化组或在线来源。你需对自己导入或访问的内容负责。
+Moyu 不隶属于任何漫画出版社、汉化组或在线来源。你需对自己导入或访问的内容负责。

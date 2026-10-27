@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest published MangaReader release.
+Security fixes are applied to the latest published Moyu release.
 
 - **Windows** follows the regular release channel.
 - **Linux** follows the long-term critical-fix channel for high-severity security and
@@ -21,7 +21,7 @@ before a fix is available.
 
 A useful report includes:
 
-- MangaReader version and build origin (shown in **Settings → About & maintenance**).
+- Moyu version and build origin (shown in **Settings → About & maintenance**).
 - Operating system and package type (NSIS, deb, rpm, or AppImage).
 - A clear description of the impact and affected component.
 - Minimal reproduction steps.

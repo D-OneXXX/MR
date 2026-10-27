@@ -22,7 +22,7 @@ const RECOVERY_LABEL: &str = "recovery";
 const RECOVERY_PAGE: &str = "recovery.html";
 /// 原生窗口标题只做中性兜底；实际语言由恢复窗前端按 `recovery.windowTitle`
 /// 调用 `setTitle` 同步，避免无装饰窗口在非中文环境出现中文标题。
-const RECOVERY_TITLE: &str = "MangaReader";
+const RECOVERY_TITLE: &str = "Moyu";
 const HEARTBEAT_STALE: Duration = Duration::from_secs(6);
 const BOOT_GRACE: Duration = Duration::from_secs(12);
 const WATCHDOG_TICK: Duration = Duration::from_secs(1);
@@ -808,7 +808,7 @@ fn rebuild_main_window(app: &AppHandle) -> Result<(), String> {
         None => WebviewUrl::App("index.html".into()),
     };
     let mut builder = WebviewWindowBuilder::new(app, "main", target)
-        .title("MangaReader")
+        .title("Moyu")
         .min_inner_size(900.0, 600.0)
         .decorations(false)
         .shadow(true)

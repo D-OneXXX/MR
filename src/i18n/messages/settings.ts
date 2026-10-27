@@ -66,7 +66,7 @@ const zhCN = {
     "扫描使用上方目录，无需先保存；结果会以提示显示。",
 
   "settings.about.title": "关于",
-  "settings.about.description": "MangaReader 是一个本地优先的漫画阅读器。",
+  "settings.about.description": "Moyu 是一款免费的桌面漫画阅读与书库管理软件。",
   "settings.about.version": "版本",
   "settings.about.commit": "构建提交",
   "settings.about.storage": "设置存储",
@@ -229,7 +229,7 @@ const zhCN = {
   "settings.backup.restoring": "正在恢复…",
   "settings.backup.saveTitle": "选择备份保存位置",
   "settings.backup.pickTitle": "选择备份文件",
-  "settings.backup.filterName": "MangaReader 备份",
+  "settings.backup.filterName": "Moyu 备份",
   "settings.backup.note":
     "备份包含书库索引、阅读进度、阅读统计、主题/语言/阅读器偏好与自学习过滤规则；不包含图片缓存、会话请求头、Cookie、过滤事件与内部版本标记。恢复会覆盖当前书库与阅读进度，建议先导出当前数据。",
   "settings.backup.confirmTitle": "从备份恢复？",
@@ -323,7 +323,7 @@ const zhTW: SettingsMessages = {
 
   "settings.about.title": "關於",
   "settings.about.description":
-    "MangaReader 是一個本機優先的漫畫閱讀器。",
+    "Moyu 是一款免費的桌面漫畫閱讀與書庫管理軟體。",
   "settings.about.version": "版本",
   "settings.about.commit": "建置提交",
   "settings.about.storage": "設定儲存",
@@ -487,7 +487,7 @@ const zhTW: SettingsMessages = {
   "settings.backup.restoring": "正在還原…",
   "settings.backup.saveTitle": "選擇備份儲存位置",
   "settings.backup.pickTitle": "選擇備份檔案",
-  "settings.backup.filterName": "MangaReader 備份",
+  "settings.backup.filterName": "Moyu 備份",
   "settings.backup.note":
     "備份包含書庫索引、閱讀進度、閱讀統計、主題/語言/閱讀器偏好與自學過濾規則；不包含圖片快取、工作階段請求標頭、Cookie、過濾事件與內部版本標記。還原會覆蓋目前的書庫與閱讀進度，建議先匯出目前資料。",
   "settings.backup.confirmTitle": "要從備份還原嗎？",
@@ -578,7 +578,8 @@ const en: SettingsMessages = {
     "Scanning uses the folder above; no save needed. Results appear as a notification.",
 
   "settings.about.title": "About",
-  "settings.about.description": "MangaReader is a local-first manga reader.",
+  "settings.about.description":
+    "Moyu is a free desktop application for manga reading and library management.",
   "settings.about.version": "Version",
   "settings.about.commit": "Build commit",
   "settings.about.storage": "Settings storage",
@@ -744,7 +745,7 @@ const en: SettingsMessages = {
   "settings.backup.restoring": "Restoring…",
   "settings.backup.saveTitle": "Choose where to save the backup",
   "settings.backup.pickTitle": "Choose a backup file",
-  "settings.backup.filterName": "MangaReader backup",
+  "settings.backup.filterName": "Moyu backup",
   "settings.backup.note":
     "The backup contains the library index, reading progress, reading stats, theme/language/reader preferences and self-learned filter rules. It does not include image caches, session request headers, cookies, filter events or internal version markers. Restoring overwrites the current library and reading progress, so export first.",
   "settings.backup.confirmTitle": "Restore from this backup?",
@@ -840,7 +841,7 @@ const es: SettingsMessages = {
 
   "settings.about.title": "Acerca de",
   "settings.about.description":
-    "MangaReader es un lector de cómics que prioriza lo local.",
+    "Moyu es una aplicación de escritorio gratuita para leer manga y gestionar tu biblioteca.",
   "settings.about.version": "Versión",
   "settings.about.commit": "Commit de compilación",
   "settings.about.storage": "Almacenamiento",
@@ -1014,7 +1015,7 @@ const es: SettingsMessages = {
   "settings.backup.restoring": "Restaurando…",
   "settings.backup.saveTitle": "Elegir dónde guardar la copia",
   "settings.backup.pickTitle": "Elegir un archivo de copia",
-  "settings.backup.filterName": "Copia de MangaReader",
+  "settings.backup.filterName": "Copia de Moyu",
   "settings.backup.note":
     "La copia incluye el índice de la biblioteca, el progreso y las estadísticas de lectura, las preferencias de tema/idioma/lector y las reglas de filtrado aprendidas. No incluye cachés de imágenes, cabeceras de sesión, cookies, eventos de filtrado ni marcas internas de versión. Restaurar sobrescribe la biblioteca y el progreso actuales, así que exporta primero.",
   "settings.backup.confirmTitle": "¿Restaurar desde esta copia?",
@@ -1112,7 +1113,7 @@ const ja: SettingsMessages = {
 
   "settings.about.title": "このアプリについて",
   "settings.about.description":
-    "MangaReader はローカル優先の漫画リーダーです。",
+    "Moyu は、漫画の閲覧と書庫管理のための無料デスクトップアプリです。",
   "settings.about.version": "バージョン",
   "settings.about.commit": "ビルドコミット",
   "settings.about.storage": "設定の保存先",
@@ -1287,7 +1288,7 @@ const ja: SettingsMessages = {
   "settings.backup.restoring": "復元中…",
   "settings.backup.saveTitle": "バックアップの保存先を選択",
   "settings.backup.pickTitle": "バックアップファイルを選択",
-  "settings.backup.filterName": "MangaReader バックアップ",
+  "settings.backup.filterName": "Moyu バックアップ",
   "settings.backup.note":
     "バックアップには書庫インデックス、読書進捗、読書統計、テーマ/言語/リーダー設定、自動学習したフィルタールールが含まれます。画像キャッシュ、セッションのリクエストヘッダー、Cookie、フィルターイベント、内部バージョン印は含まれません。復元すると現在の書庫と読書進捗が上書きされるため、先に書き出すことをおすすめします。",
   "settings.backup.confirmTitle": "このバックアップから復元しますか？",
@@ -1385,7 +1386,7 @@ const ko: SettingsMessages = {
 
   "settings.about.title": "정보",
   "settings.about.description":
-    "MangaReader는 로컬 우선 만화 리더입니다.",
+    "Moyu는 만화 읽기와 라이브러리 관리를 위한 무료 데스크톱 애플리케이션입니다.",
   "settings.about.version": "버전",
   "settings.about.commit": "빌드 커밋",
   "settings.about.storage": "설정 저장 위치",
@@ -1556,7 +1557,7 @@ const ko: SettingsMessages = {
   "settings.backup.restoring": "복원하는 중…",
   "settings.backup.saveTitle": "백업 저장 위치 선택",
   "settings.backup.pickTitle": "백업 파일 선택",
-  "settings.backup.filterName": "MangaReader 백업",
+  "settings.backup.filterName": "Moyu 백업",
   "settings.backup.note":
     "백업에는 서재 인덱스, 읽기 진행률, 읽기 통계, 테마/언어/리더 환경설정, 자체 학습 필터 규칙이 포함됩니다. 이미지 캐시, 세션 요청 헤더, 쿠키, 필터 이벤트, 내부 버전 표시는 포함되지 않습니다. 복원하면 현재 서재와 읽기 진행률을 덮어쓰므로 먼저 내보내는 것이 좋습니다.",
   "settings.backup.confirmTitle": "이 백업에서 복원할까요?",

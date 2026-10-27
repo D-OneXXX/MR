@@ -51,3 +51,11 @@ tests/qa/reports/
 
 # QA 经验库：每次跑 QA 都会就地改写，属于本地产物，不入库
 tests/qa/qa-knowledge-base.json
+
+# Internal documentation (kept locally, not published)
+/AGENTS.md
+/docs/ENGINEERING_WORKFLOW.md
+/docs/PROJECT_STATE.md
+/docs/TECHNICAL.md
+/docs/TESTING.md
+/docs/dev/

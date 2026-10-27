@@ -187,7 +187,7 @@ jobs:
           TAG: ${{ steps.identity.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release edit "$TAG" --draft=false --verify-tag --title "MangaReader $TAG (Linux critical)"
+          gh release edit "$TAG" --draft=false --verify-tag --title "Moyu $TAG (Linux critical)"
 
       - name: Channel hand-off (carry the other channel manifest)
         if: steps.state.outputs.published != 'true'

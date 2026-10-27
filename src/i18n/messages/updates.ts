@@ -44,7 +44,7 @@ const zhCN = {
   "updates.native.errorInstall": "下载或安装更新失败，当前版本未受影响。",
   "updates.disk.full":
     "系统临时目录剩余空间不足（至少需要 256 MB），请清理磁盘后重试。",
-  "updates.native.errorRelaunch": "重启应用失败，请手动关闭并重新打开 MangaReader。",
+  "updates.native.errorRelaunch": "重启应用失败，请手动关闭并重新打开 Moyu。",
   "updates.linux.manualTitle": "系统安装需要手动更新",
   "updates.linux.manualHint":
     "当前是 deb/rpm 系统安装，应用不能替换系统包文件。请下载新版本后用系统包管理器安装；AppImage 可直接下载运行。",
@@ -101,7 +101,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "updates.disk.full":
     "The system temporary folder has less than 256 MB free. Free some disk space and try again.",
   "updates.native.errorRelaunch":
-    "Could not restart the app. Close and open MangaReader manually.",
+    "Could not restart the app. Close and open Moyu manually.",
   "updates.linux.manualTitle":
     "System installation requires a manual update",
   "updates.linux.manualHint":
@@ -156,7 +156,7 @@ const zhTW: Record<keyof typeof zhCN, string> = {
   "updates.disk.full":
     "系統暫存目錄剩餘空間不足（至少需要 256 MB），請清理磁碟後重試。",
   "updates.native.errorRelaunch":
-    "無法重新啟動應用程式，請手動關閉並重新開啟 MangaReader。",
+    "無法重新啟動應用程式，請手動關閉並重新開啟 Moyu。",
   "updates.linux.manualTitle": "系統安裝需要手動更新",
   "updates.linux.manualHint":
     "目前是 deb/rpm 系統安裝，應用程式不能替換系統套件檔案。請下載新版本後用系統套件管理員安裝；AppImage 可直接下載執行。",
@@ -213,7 +213,7 @@ const es: Record<keyof typeof zhCN, string> = {
   "updates.disk.full":
     "La carpeta temporal del sistema tiene menos de 256 MB libres. Libera espacio y vuelve a intentarlo.",
   "updates.native.errorRelaunch":
-    "No se pudo reiniciar la aplicación. Cierra y abre MangaReader manualmente.",
+    "No se pudo reiniciar la aplicación. Cierra y abre Moyu manualmente.",
   "updates.linux.manualTitle":
     "La instalación del sistema requiere una actualización manual",
   "updates.linux.manualHint":
@@ -271,7 +271,7 @@ const ja: Record<keyof typeof zhCN, string> = {
   "updates.disk.full":
     "システムの一時フォルダーの空き容量が 256 MB 未満です。ディスクを空けて再試行してください。",
   "updates.native.errorRelaunch":
-    "アプリを再起動できませんでした。MangaReader を手動で閉じて開き直してください。",
+    "アプリを再起動できませんでした。Moyu を手動で閉じて開き直してください。",
   "updates.linux.manualTitle":
     "システムインストールは手動更新が必要です",
   "updates.linux.manualHint":
@@ -329,7 +329,7 @@ const ko: Record<keyof typeof zhCN, string> = {
   "updates.disk.full":
     "시스템 임시 폴더의 여유 공간이 256MB 미만입니다. 디스크 공간을 확보한 후 다시 시도하세요.",
   "updates.native.errorRelaunch":
-    "앱을 다시 시작하지 못했습니다. MangaReader를 직접 종료한 후 다시 여세요.",
+    "앱을 다시 시작하지 못했습니다. Moyu를 직접 종료한 후 다시 여세요.",
   "updates.linux.manualTitle":
     "시스템 설치에는 수동 업데이트가 필요합니다",
   "updates.linux.manualHint":

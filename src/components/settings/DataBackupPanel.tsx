@@ -37,13 +37,13 @@ const SKIP_REASON_KEYS: Record<string, MessageKey> = {
   "path-unsafe": "settings.backup.skippedReasonUnsafe",
 };
 
-/** 本地日期文件名：MangaReader-backup-YYYY-MM-DD.mrbackup。 */
+/** 本地日期文件名：Moyu-backup-YYYY-MM-DD.mrbackup。 */
 function backupFileName(): string {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
-  return `MangaReader-backup-${year}-${month}-${day}.mrbackup`;
+  return `Moyu-backup-${year}-${month}-${day}.mrbackup`;
 }
 
 /** 仅取 basename，避免把完整路径塞进确认文案。 */

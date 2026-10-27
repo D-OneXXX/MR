@@ -24,6 +24,8 @@ import {
   installIntegrityProblems,
   libraryEvidenceProblems,
   machineEvidenceProblems,
+  selectPrimaryArtifact,
+  selectSignatureArtifact,
 } from "./rc-record.mjs";
 
 export const SIGNATURE_EVIDENCE_KIND = "manga-reader.signature-verification";
@@ -46,7 +48,14 @@ export const CHANNEL_REQUIRED_CHECKS = {
     "backupRestore",
     "databaseRollback",
   ],
-  "linux-critical": ["freshInstall", "upgrade", "dataIntegrity"],
+  "linux-critical": [
+    "freshInstall",
+    "upgrade",
+    "dataIntegrity",
+    "pdfReading",
+    "progressRestart",
+    "backupRestore",
+  ],
 };
 
 const HEX40 = /^[0-9a-f]{40}$/;
@@ -234,28 +243,46 @@ export function verifyReleaseEvidence(input) {
   }
 
   const digests = input.digests || new Map();
-  const artifactName =
-    input.artifactName ||
-    (record.artifacts || []).find((item) =>
-      /setup\.exe$|\.AppImage$|\.deb$|\.rpm$/.test(item.name),
-    )?.name;
-  if (!artifactName) {
+  const installArtifact =
+    (input.artifactName
+      ? (record.artifacts || []).find((item) => item.name === input.artifactName)
+      : null) || selectPrimaryArtifact(record);
+  if (!installArtifact) {
     return { ok: false, problems: ["候选记录里找不到可验证的主制品"] };
   }
-  const artifactSha256 = digests.get(artifactName);
-  if (!artifactSha256) {
+  const installSha256 = digests.get(installArtifact.name);
+  if (!installSha256) {
     return {
       ok: false,
-      problems: [`候选制品缺失（无法验签）：${artifactName}`],
+      problems: [`候选制品缺失（无法验证安装证据）：${installArtifact.name}`],
     };
   }
-  const recordEntry = (record.artifacts || []).find(
-    (item) => item.name === artifactName,
+  const installRecordEntry = (record.artifacts || []).find(
+    (item) => item.name === installArtifact.name,
   );
-  if (recordEntry && recordEntry.sha256 !== artifactSha256) {
+  if (installRecordEntry && installRecordEntry.sha256 !== installSha256) {
     return {
       ok: false,
-      problems: [`候选制品摘要不一致（疑似审批后替换）：${artifactName}`],
+      problems: [`候选制品摘要不一致（疑似审批后替换）：${installArtifact.name}`],
+    };
+  }
+
+  // Linux：签名证据绑定 AppImage（更新通道），安装证据绑定 deb（系统安装）。
+  const signatureArtifact = selectSignatureArtifact(record) || installArtifact;
+  const signatureSha256 = digests.get(signatureArtifact.name);
+  if (!signatureSha256) {
+    return {
+      ok: false,
+      problems: [`候选制品缺失（无法验签）：${signatureArtifact.name}`],
+    };
+  }
+  const signatureRecordEntry = (record.artifacts || []).find(
+    (item) => item.name === signatureArtifact.name,
+  );
+  if (signatureRecordEntry && signatureRecordEntry.sha256 !== signatureSha256) {
+    return {
+      ok: false,
+      problems: [`候选制品摘要不一致（疑似审批后替换）：${signatureArtifact.name}`],
     };
   }
 
@@ -264,8 +291,6 @@ export function verifyReleaseEvidence(input) {
     commit: input.commit || record.commit,
     platform: record.platform,
     channel: input.channel,
-    artifactName,
-    artifactSha256,
     maxAgeDays: input.maxAgeDays,
     now: input.now,
   };
@@ -273,12 +298,16 @@ export function verifyReleaseEvidence(input) {
   problems.push(
     ...validateSignatureEvidence(input.signatureEvidence, {
       ...expected,
+      artifactName: signatureArtifact.name,
+      artifactSha256: signatureSha256,
       publicKeyId: input.publicKeyId,
     }),
   );
   problems.push(
     ...validateInstallEvidence(input.installEvidence, {
       ...expected,
+      artifactName: installArtifact.name,
+      artifactSha256: installSha256,
       requiredChecks: input.requiredChecks,
     }),
   );

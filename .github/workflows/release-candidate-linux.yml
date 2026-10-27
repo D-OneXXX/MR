@@ -17,6 +17,11 @@ on:
         description: "Linux 干净环境的安装验证回执（base64 编码的 JSON）"
         required: false
         type: string
+      release_notes:
+        description: "正式 Release Notes（可选，支持多行 Markdown）；留空时使用 Draft 占位文案"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -169,20 +174,30 @@ jobs:
             --expect-version "${{ steps.identity.outputs.version }}" \
             --require-platform linux-x86_64
 
+      - name: Resolve release notes
+        id: notes
+        shell: bash
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: node scripts/release-governance/release-notes.mjs
+
       - name: Create or reuse Draft release
         id: draft
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.identity.outputs.tag }}
+          RELEASE_BODY: ${{ steps.notes.outputs.body }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null | grep -qx true; then
             echo "Draft 已存在，复用：$TAG"
+            # 只更新 Draft 正文（仍为 Draft）；发布前审批人看到的是正式说明。
+            gh release edit "$TAG" --notes "$RELEASE_BODY"
           else
             gh release create "$TAG" --verify-tag --draft \
               --title "Moyu $TAG (Draft · Linux critical · 待审批)" \
-              --notes "Release Candidate：待人工审批后才会发布。"
+              --notes "$RELEASE_BODY"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 

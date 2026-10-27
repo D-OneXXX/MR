@@ -893,6 +893,68 @@ export function checkReleaseGovernance(root, report) {
       "release-install-verify.yml: workflow_dispatch + windows-2022 + 只读下载 + 单次上传安装回执",
     );
   }
+  const linuxInstallVerifyWorkflow = path.join(dir, "release-install-verify-linux.yml");
+  if (!fs.existsSync(linuxInstallVerifyWorkflow)) {
+    errors.push("缺少干净 Linux 安装验证工作流 release-install-verify-linux.yml");
+  } else {
+    const source = fs.readFileSync(linuxInstallVerifyWorkflow, "utf8");
+    for (const marker of [
+      "workflow_dispatch",
+      "runs-on: ubuntu-22.04",
+      "prepare-candidate-linux.mjs",
+      "linux-install-check.mjs",
+      "linux-pdf-runtime.mjs",
+      "linux-install-evidence.mjs",
+      "verify-evidence.mjs",
+      "--channel linux-critical",
+      "--experimental-sqlite",
+      'apt-get install -y "./previous/',
+      'apt-get install -y "./candidate/',
+      "install-verification.json",
+      "verify-signature.mjs",
+    ]) {
+      if (!source.includes(marker)) {
+        errors.push(`release-install-verify-linux.yml 缺少 ${marker}`);
+      }
+    }
+    if (/push:\s*\n\s*tags:/m.test(source)) {
+      errors.push("release-install-verify-linux.yml 不得由 Tag 推送触发");
+    }
+    if (!/permissions:\s*\n\s*contents:\s*read/.test(source)) {
+      errors.push("release-install-verify-linux.yml 必须声明只读 permissions: contents: read");
+    }
+    if (/permissions:\s*\n\s*contents:\s*write/.test(source)) {
+      errors.push("release-install-verify-linux.yml 不得写 Release（contents: write）");
+    }
+    const secretRefs = [...source.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(
+      (match) => match[1],
+    );
+    const disallowed = [...new Set(secretRefs.filter((name) => name !== "GITHUB_TOKEN"))];
+    if (disallowed.length > 0) {
+      errors.push(
+        `release-install-verify-linux.yml 不得引用非默认 Secret：${disallowed.join(", ")}`,
+      );
+    }
+    if (/gh release\s+(upload|edit|delete)|--draft=false/i.test(source)) {
+      errors.push("release-install-verify-linux.yml 不得上传或修改 Release");
+    }
+    evidence.push(
+      "release-install-verify-linux.yml: workflow_dispatch + ubuntu-22.04 + 只读下载 + 真实 deb 安装/升级/PDF/备份证据",
+    );
+  }
+  const linuxPublishPath = path.join(dir, "release-publish-linux.yml");
+  if (fs.existsSync(linuxPublishPath)) {
+    const source = fs.readFileSync(linuxPublishPath, "utf8");
+    if (!source.includes("verify-provenance.mjs")) {
+      errors.push("release-publish-linux.yml 必须在线核验 Linux 安装证据 provenance");
+    }
+    if (!source.includes("release-install-verify-linux.yml")) {
+      errors.push("release-publish-linux.yml 的 provenance 必须指向 Linux 安装验证工作流");
+    }
+    if (!/actions:\s*read/.test(source)) {
+      errors.push("release-publish-linux.yml 必须声明 actions: read");
+    }
+  }
   const windowsPublishPath = path.join(dir, "release-publish.yml");
   if (fs.existsSync(windowsPublishPath)) {
     const source = fs.readFileSync(windowsPublishPath, "utf8");
@@ -1416,6 +1478,8 @@ export function checkReleaseSurface(root, report) {
     "rc-record.json",
     "qa_run_id",
     "verify-updater-manifest.mjs",
+    "release-notes.mjs",
+    "release_notes",
   ]) {
     if (!linuxCandidateText.includes(marker)) {
       errors.push(`release-candidate-linux.yml 的 steps 缺少 ${marker}`);

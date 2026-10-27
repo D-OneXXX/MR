@@ -14,6 +14,8 @@ import {
   GOVERNANCE_FILES,
   parseTag,
   renderRcSummary,
+  selectPrimaryArtifact,
+  selectSignatureArtifact,
   sha256Bytes,
   sha256File,
   validateInstallAttestation,
@@ -123,6 +125,22 @@ test("parseTag：常规与 Linux 高危通道互不串台", () => {
   assert.equal(parseTag("v0.17.2")?.channel, "windows");
   assert.equal(parseTag("v0.17.2")?.platform, "windows-x86_64");
   assert.equal(parseTag("v0.17.2-linux-sec1")?.channel, "linux-critical");
+  const linuxRecord = makeRecord({
+    tag: "v0.17.2-linux-sec1",
+    artifacts: [
+      { name: "MangaReader-0.17.2-1.x86_64.rpm", sha256: "1".repeat(64), size: 3 },
+      { name: "MangaReader_0.17.2_amd64.AppImage", sha256: "2".repeat(64), size: 2 },
+      { name: "MangaReader_0.17.2_amd64.AppImage.sig", sha256: "3".repeat(64), size: 1 },
+      { name: "MangaReader_0.17.2_amd64.deb", sha256: "4".repeat(64), size: 4 },
+    ],
+  });
+  // 安装验证实际安装的是 deb；不能因为 rpm 字母序更前就把回执绑到 rpm。
+  assert.equal(selectPrimaryArtifact(linuxRecord)?.name, "MangaReader_0.17.2_amd64.deb");
+  assert.equal(
+    selectSignatureArtifact(linuxRecord)?.name,
+    "MangaReader_0.17.2_amd64.AppImage",
+  );
+  assert.equal(selectPrimaryArtifact(makeRecord())?.name, "app-setup.exe");
   assert.equal(parseTag("v0.17.2-linux-sec1")?.platform, "linux-x86_64");
   assert.equal(parseTag("v0.17.2-linux-sec1")?.version, "0.17.2");
   assert.equal(parseTag("v0.17.2-rc1"), null);
@@ -270,6 +288,55 @@ test("verifyPublishPreconditions：额外出现记录之外的制品 → 拒绝"
   });
   assert.equal(verdict.ok, false);
   assert.ok(verdict.problems.some((p) => p.includes("记录之外的制品")));
+});
+
+test("verifyPublishPreconditions：Linux 安装回执绑定 deb（不是字母序靠前的 rpm）", () => {
+  const debName = "MangaReader_0.17.2_amd64.deb";
+  const appName = "MangaReader_0.17.2_amd64.AppImage";
+  const debSha = sha256Bytes(Buffer.from("deb-bytes"));
+  const appSha = sha256Bytes(Buffer.from("app-bytes"));
+  const rpmSha = sha256Bytes(Buffer.from("rpm-bytes"));
+  const record = buildRcRecord({
+    tag: "v0.17.2-linux-sec1",
+    commit: COMMIT,
+    qa: { runId: "42", buildCommit: COMMIT },
+    artifacts: [
+      { name: "MangaReader-0.17.2-1.x86_64.rpm", sha256: rpmSha },
+      { name: appName, sha256: appSha },
+      { name: `${appName}.sig`, sha256: sha256Bytes(Buffer.from("sig")) },
+      { name: debName, sha256: debSha },
+    ],
+  });
+  const digests = new Map([
+    ["MangaReader-0.17.2-1.x86_64.rpm", rpmSha],
+    [appName, appSha],
+    [`${appName}.sig`, sha256Bytes(Buffer.from("sig"))],
+    [debName, debSha],
+  ]);
+  const attestation = makeAttestation({
+    platform: "linux-x86_64",
+    artifactName: debName,
+    artifactSha256: debSha,
+    expectedArtifactSha256: debSha,
+  });
+  const verdict = verifyPublishPreconditions({
+    record,
+    actualDigests: digests,
+    attestation,
+    channel: "linux-critical",
+    commit: COMMIT,
+  });
+  assert.equal(verdict.ok, true, verdict.problems.join(" | "));
+
+  const replaced = verifyPublishPreconditions({
+    record,
+    actualDigests: new Map(digests).set(debName, "f".repeat(64)),
+    attestation,
+    channel: "linux-critical",
+    commit: COMMIT,
+  });
+  assert.equal(replaced.ok, false);
+  assert.ok(replaced.problems.some((p) => p.includes("摘要不一致")));
 });
 
 test("renderRcSummary：审批依据必须包含版本 / Commit / 摘要", () => {

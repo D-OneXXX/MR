@@ -431,11 +431,18 @@ test("安装证据：upgrade=pass 但缺 previousVersion/previousArtifactSha256 
   assert.ok(notSemver.some((p) => p.includes("previousVersion")));
 });
 
-test("安装证据：linux-critical 通道不要求 library，但仍要求 provenance", () => {
+test("安装证据：linux-critical 不强制 library，但必须有 PDF/进度/备份与 provenance", () => {
   const linux = makeInstallEvidence({
     platform: "linux-x86_64",
     artifactName: "MangaReader_0.17.2_amd64.AppImage",
-    checks: { freshInstall: "pass", upgrade: "pass", dataIntegrity: "pass" },
+    checks: {
+      freshInstall: "pass",
+      upgrade: "pass",
+      dataIntegrity: "pass",
+      pdfReading: "pass",
+      progressRestart: "pass",
+      backupRestore: "pass",
+    },
     machine: {
       ...installEvidence.machine,
       os: "Ubuntu 22.04",
@@ -448,14 +455,97 @@ test("安装证据：linux-critical 通道不要求 library，但仍要求 prove
     platform: "linux-x86_64",
     artifactName: "MangaReader_0.17.2_amd64.AppImage",
     channel: "linux-critical",
-    requiredChecks: ["freshInstall", "upgrade", "dataIntegrity"],
   };
   assert.deepEqual(validateInstallEvidence(linux, linuxExpected), []);
+  const missingPdf = {
+    ...linux,
+    checks: { ...linux.checks, pdfReading: "fail" },
+  };
+  assert.ok(
+    validateInstallEvidence(missingPdf, linuxExpected).some((p) => p.includes("pdfReading")),
+  );
   const noProvenance = { ...linux, machine: { ...linux.machine } };
   delete noProvenance.machine.provenance;
   assert.ok(
     validateInstallEvidence(noProvenance, linuxExpected).some((p) => p.includes("provenance")),
   );
+});
+
+test("总闸：Linux 签名绑定 AppImage、安装绑定 deb → 放行", () => {
+  const appImage = "MangaReader_0.18.0_amd64.AppImage";
+  const deb = "MangaReader_0.18.0_amd64.deb";
+  const appSha = "d".repeat(64);
+  const debSha = "e".repeat(64);
+  const linuxRecord = {
+    ...record,
+    version: "0.18.0",
+    tag: "v0.18.0-linux-sec1",
+    channel: "linux-critical",
+    platform: "linux-x86_64",
+    artifacts: [
+      { name: "MangaReader-0.18.0-1.x86_64.rpm", sha256: "f".repeat(64), size: 1 },
+      { name: appImage, sha256: appSha, size: 1 },
+      { name: `${appImage}.sig`, sha256: "1".repeat(64), size: 1 },
+      { name: deb, sha256: debSha, size: 1 },
+    ],
+  };
+  const linuxSignature = {
+    ...signatureEvidence,
+    version: "0.18.0",
+    platform: "linux-x86_64",
+    artifactName: appImage,
+    artifactSha256: appSha,
+  };
+  const linuxInstall = makeInstallEvidence({
+    version: "0.18.0",
+    platform: "linux-x86_64",
+    artifactName: deb,
+    artifactSha256: debSha,
+    expectedArtifactSha256: debSha,
+    checks: {
+      freshInstall: "pass",
+      upgrade: "pass",
+      dataIntegrity: "pass",
+      pdfReading: "pass",
+      progressRestart: "pass",
+      backupRestore: "pass",
+    },
+    machine: {
+      ...installEvidence.machine,
+      os: "Ubuntu 22.04",
+      image: "GitHub Actions ubuntu-22.04 20261021.1.0",
+    },
+  });
+  const digests = new Map([
+    ["MangaReader-0.18.0-1.x86_64.rpm", "f".repeat(64)],
+    [appImage, appSha],
+    [`${appImage}.sig`, "1".repeat(64)],
+    [deb, debSha],
+  ]);
+  const verdict = verifyReleaseEvidence({
+    record: linuxRecord,
+    digests,
+    signatureEvidence: linuxSignature,
+    installEvidence: linuxInstall,
+    channel: "linux-critical",
+    commit: COMMIT,
+    publicKeyId: KEY_ID,
+    now: NOW,
+  });
+  assert.equal(verdict.ok, true, verdict.problems.join(" | "));
+
+  const misbound = verifyReleaseEvidence({
+    record: linuxRecord,
+    digests,
+    signatureEvidence: { ...linuxSignature, artifactName: deb, artifactSha256: debSha },
+    installEvidence: linuxInstall,
+    channel: "linux-critical",
+    commit: COMMIT,
+    publicKeyId: KEY_ID,
+    now: NOW,
+  });
+  assert.equal(misbound.ok, false);
+  assert.ok(misbound.problems.some((p) => p.includes("制品名")));
 });
 
 test("总闸：证据齐备且绑定一致 → 放行", () => {

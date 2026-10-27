@@ -13,7 +13,7 @@ const zhCN = {
   "library.flat": "平铺",
   "library.flatTitle": "逐个章节平铺显示",
   "library.addBooks": "添加书籍",
-  "library.addBooksTitle": "选择压缩包（zip / cbz）导入",
+  "library.addBooksTitle": "选择压缩包或 PDF（zip / cbz / pdf）导入",
   "library.addFolder": "添加文件夹",
   "library.addFolderTitle": "选择一个文件夹（其内容 = 一本书）",
   "library.onlineRead": "在线直读",
@@ -32,8 +32,8 @@ const zhCN = {
   "library.emptySearch": "没有搜到，去换个关键词吧",
   "library.emptyFilter": "当前来源筛选下还没有书，切换到「全部」看看",
   "library.emptyLibrary":
-    "书架还是空的——拖入 cbz/zip 或文件夹，或点「添加书籍」",
-  "library.dragHint": "也可以直接把 zip / cbz 压缩包或文件夹拖进窗口导入",
+    "书架还是空的——拖入 cbz/zip/pdf 或文件夹，或点「添加书籍」",
+  "library.dragHint": "也可以直接把 zip / cbz / pdf 或文件夹拖进窗口导入",
   "library.cardHint":
     "单击封面查看详情，双击或 Shift+Enter 开始阅读；右键封面可移除或删除源文件。",
   "library.selected": "已选",
@@ -106,13 +106,13 @@ const zhCN = {
   "import.failed": "失败 {count}",
   "import.itemFailed": "{path}：{message}",
   "import.failedFallback": "导入失败",
-  "import.filesTitle": "选择漫画压缩包（zip / cbz，可多选）",
-  "import.filesFilter": "漫画压缩包",
+  "import.filesTitle": "选择漫画压缩包或 PDF（zip / cbz / pdf，可多选）",
+  "import.filesFilter": "漫画压缩包 / PDF",
   "import.folderTitle": "选择漫画文件夹（一个文件夹 = 一本书，可多选）",
   "import.pickerUnavailable": "文件选择器不可用，请改用拖拽导入",
   "import.folderPickerUnavailable": "文件夹选择器不可用，请改用拖拽导入",
   "import.dropTitle": "松开即可导入",
-  "import.dropHint": "支持 zip / cbz 压缩包与文件夹，可一次拖入多个",
+  "import.dropHint": "支持 zip / cbz / pdf 与文件夹，可一次拖入多个",
 } as const;
 
 type LibraryMessages = { [K in keyof typeof zhCN]: string };
@@ -128,7 +128,7 @@ const zhTW: LibraryMessages = {
   "library.flat": "並排",
   "library.flatTitle": "逐個章節並排顯示",
   "library.addBooks": "新增書籍",
-  "library.addBooksTitle": "選擇壓縮檔（zip / cbz）匯入",
+  "library.addBooksTitle": "選擇壓縮檔或 PDF（zip / cbz / pdf）匯入",
   "library.addFolder": "新增資料夾",
   "library.addFolderTitle": "選擇一個資料夾（其內容 = 一本書）",
   "library.onlineRead": "線上直讀",
@@ -147,8 +147,8 @@ const zhTW: LibraryMessages = {
   "library.emptySearch": "沒有搜尋到，換個關鍵字試試",
   "library.emptyFilter": "目前來源篩選下還沒有書，切換到「全部」看看",
   "library.emptyLibrary":
-    "書架還是空的——拖入 cbz/zip 或資料夾，或點「新增書籍」",
-  "library.dragHint": "也可以直接把 zip / cbz 壓縮檔或資料夾拖進視窗匯入",
+    "書架還是空的——拖入 cbz/zip/pdf 或資料夾，或點「新增書籍」",
+  "library.dragHint": "也可以直接把 zip / cbz / pdf 或資料夾拖進視窗匯入",
   "library.cardHint":
     "按一下封面查看詳情，連按兩下或 Shift+Enter 開始閱讀；在封面上按右鍵可移除或刪除來源檔案。",
   "library.selected": "已選",
@@ -221,13 +221,13 @@ const zhTW: LibraryMessages = {
   "import.failed": "失敗 {count}",
   "import.itemFailed": "{path}：{message}",
   "import.failedFallback": "匯入失敗",
-  "import.filesTitle": "選擇漫畫壓縮檔（zip / cbz，可多選）",
-  "import.filesFilter": "漫畫壓縮檔",
+  "import.filesTitle": "選擇漫畫壓縮檔或 PDF（zip / cbz / pdf，可多選）",
+  "import.filesFilter": "漫畫壓縮檔 / PDF",
   "import.folderTitle": "選擇漫畫資料夾（一個資料夾 = 一本書，可多選）",
   "import.pickerUnavailable": "檔案選擇器不可用，請改用拖曳匯入",
   "import.folderPickerUnavailable": "資料夾選擇器不可用，請改用拖曳匯入",
   "import.dropTitle": "放開即可匯入",
-  "import.dropHint": "支援 zip / cbz 壓縮檔與資料夾，可一次拖入多個",
+  "import.dropHint": "支援 zip / cbz / pdf 與資料夾，可一次拖入多個",
 };
 
 const en: LibraryMessages = {
@@ -241,7 +241,7 @@ const en: LibraryMessages = {
   "library.flat": "Flat",
   "library.flatTitle": "Show every chapter as a card",
   "library.addBooks": "Add books",
-  "library.addBooksTitle": "Choose archives (zip / cbz) to import",
+  "library.addBooksTitle": "Choose archives or PDFs (zip / cbz / pdf) to import",
   "library.addFolder": "Add folder",
   "library.addFolderTitle": "Choose a folder (its contents = one book)",
   "library.onlineRead": "Read online",
@@ -261,9 +261,9 @@ const en: LibraryMessages = {
   "library.emptySearch": "No matches — try another keyword",
   "library.emptyFilter": "No books for this source filter — switch to “All”",
   "library.emptyLibrary":
-    "The shelf is empty — drop cbz/zip files or a folder, or click “Add books”",
+    "The shelf is empty — drop cbz/zip/pdf files or a folder, or click “Add books”",
   "library.dragHint":
-    "You can also drag zip / cbz archives or folders into the window to import",
+    "You can also drag zip / cbz / pdf files or folders into the window to import",
   "library.cardHint":
     "Click a cover for details, double-click or press Shift+Enter to read; right-click a cover to remove or delete the source.",
   "library.selected": "selected",
@@ -341,8 +341,8 @@ const en: LibraryMessages = {
   "import.failed": "Failed {count}",
   "import.itemFailed": "{path}: {message}",
   "import.failedFallback": "Import failed",
-  "import.filesTitle": "Choose manga archives (zip / cbz, multiple allowed)",
-  "import.filesFilter": "Manga archives",
+  "import.filesTitle": "Choose manga archives or PDFs (zip / cbz / pdf, multiple allowed)",
+  "import.filesFilter": "Manga archives / PDF",
   "import.folderTitle":
     "Choose manga folders (one folder = one book, multiple allowed)",
   "import.pickerUnavailable":
@@ -351,7 +351,7 @@ const en: LibraryMessages = {
     "Folder picker unavailable — drag folders in instead",
   "import.dropTitle": "Drop to import",
   "import.dropHint":
-    "Supports zip / cbz archives and folders, multiple at once",
+    "Supports zip / cbz / pdf files and folders, multiple at once",
 };
 
 const es: LibraryMessages = {
@@ -365,7 +365,7 @@ const es: LibraryMessages = {
   "library.flat": "Lista",
   "library.flatTitle": "Mostrar cada capítulo como tarjeta",
   "library.addBooks": "Añadir libros",
-  "library.addBooksTitle": "Elegir archivos (zip / cbz) para importar",
+  "library.addBooksTitle": "Elegir archivos o PDF (zip / cbz / pdf) para importar",
   "library.addFolder": "Añadir carpeta",
   "library.addFolderTitle": "Elegir una carpeta (su contenido = un libro)",
   "library.onlineRead": "Leer en línea",
@@ -388,9 +388,9 @@ const es: LibraryMessages = {
   "library.emptyFilter":
     "No hay libros con este filtro de origen: cambia a «Todo»",
   "library.emptyLibrary":
-    "La estantería está vacía: arrastra cbz/zip o una carpeta, o pulsa «Añadir libros»",
+    "La estantería está vacía: arrastra cbz/zip/pdf o una carpeta, o pulsa «Añadir libros»",
   "library.dragHint":
-    "También puedes arrastrar archivos zip / cbz o carpetas a la ventana para importarlos",
+    "También puedes arrastrar archivos zip / cbz / pdf o carpetas a la ventana para importarlos",
   "library.cardHint":
     "Haz clic en una portada para ver los detalles; doble clic o Mayús+Intro para leer; clic derecho para quitar o eliminar el origen.",
   "library.selected": "seleccionados",
@@ -471,8 +471,8 @@ const es: LibraryMessages = {
   "import.itemFailed": "{path}: {message}",
   "import.failedFallback": "Error al importar",
   "import.filesTitle":
-    "Elegir archivos de manga (zip / cbz, se permiten varios)",
-  "import.filesFilter": "Archivos de manga",
+    "Elegir archivos de manga o PDF (zip / cbz / pdf, se permiten varios)",
+  "import.filesFilter": "Archivos de manga / PDF",
   "import.folderTitle":
     "Elegir carpetas de manga (una carpeta = un libro, se permiten varias)",
   "import.pickerUnavailable":
@@ -481,7 +481,7 @@ const es: LibraryMessages = {
     "Selector de carpetas no disponible: arrastra las carpetas",
   "import.dropTitle": "Suelta para importar",
   "import.dropHint":
-    "Admite archivos zip / cbz y carpetas, varios a la vez",
+    "Admite archivos zip / cbz / pdf y carpetas, varios a la vez",
 };
 
 const ja: LibraryMessages = {
@@ -495,7 +495,7 @@ const ja: LibraryMessages = {
   "library.flat": "フラット",
   "library.flatTitle": "各話を並べて表示",
   "library.addBooks": "本を追加",
-  "library.addBooksTitle": "アーカイブ（zip / cbz）を選択して読み込む",
+  "library.addBooksTitle": "アーカイブまたは PDF（zip / cbz / pdf）を選択して読み込む",
   "library.addFolder": "フォルダーを追加",
   "library.addFolderTitle": "フォルダーを選択（中身が 1 冊になります）",
   "library.onlineRead": "オンライン閲覧",
@@ -517,9 +517,9 @@ const ja: LibraryMessages = {
   "library.emptyFilter":
     "このソースフィルターには本がありません。「すべて」に切り替えてください",
   "library.emptyLibrary":
-    "書架は空です。cbz/zip やフォルダーをドロップするか、「本を追加」をクリックしてください",
+    "書架は空です。cbz/zip/pdf やフォルダーをドロップするか、「本を追加」をクリックしてください",
   "library.dragHint":
-    "zip / cbz アーカイブやフォルダーをウィンドウにドラッグして読み込むこともできます",
+    "zip / cbz / pdf ファイルやフォルダーをウィンドウにドラッグして読み込むこともできます",
   "library.cardHint":
     "表紙をクリックで詳細、ダブルクリックまたは Shift+Enter で読書開始。表紙を右クリックすると記録の削除やソースの削除ができます。",
   "library.selected": "選択中",
@@ -599,8 +599,8 @@ const ja: LibraryMessages = {
   "import.failed": "失敗 {count}",
   "import.itemFailed": "{path}：{message}",
   "import.failedFallback": "読み込みに失敗しました",
-  "import.filesTitle": "漫画アーカイブを選択（zip / cbz、複数可）",
-  "import.filesFilter": "漫画アーカイブ",
+  "import.filesTitle": "漫画アーカイブまたは PDF を選択（zip / cbz / pdf、複数可）",
+  "import.filesFilter": "漫画アーカイブ / PDF",
   "import.folderTitle": "漫画フォルダーを選択（1 フォルダー = 1 冊、複数可）",
   "import.pickerUnavailable":
     "ファイル選択を利用できません。ドラッグで読み込んでください",
@@ -608,7 +608,7 @@ const ja: LibraryMessages = {
     "フォルダー選択を利用できません。ドラッグで読み込んでください",
   "import.dropTitle": "ドロップして読み込む",
   "import.dropHint":
-    "zip / cbz アーカイブとフォルダーに対応、複数まとめてドロップできます",
+    "zip / cbz / pdf ファイルとフォルダーに対応、複数まとめてドロップできます",
 };
 
 const ko: LibraryMessages = {
@@ -622,7 +622,7 @@ const ko: LibraryMessages = {
   "library.flat": "펼치기",
   "library.flatTitle": "각 화를 개별 카드로 표시",
   "library.addBooks": "책 추가",
-  "library.addBooksTitle": "가져올 압축 파일(zip / cbz) 선택",
+  "library.addBooksTitle": "가져올 압축 파일 또는 PDF(zip / cbz / pdf) 선택",
   "library.addFolder": "폴더 추가",
   "library.addFolderTitle": "폴더 선택(폴더 내용 = 책 한 권)",
   "library.onlineRead": "온라인 읽기",
@@ -645,9 +645,9 @@ const ko: LibraryMessages = {
   "library.emptyFilter":
     "이 출처 필터에 책이 없습니다. “전체”로 전환해 보세요",
   "library.emptyLibrary":
-    "책장이 비어 있습니다. cbz/zip 또는 폴더를 끌어다 놓거나 “책 추가”를 누르세요",
+    "책장이 비어 있습니다. cbz/zip/pdf 또는 폴더를 끌어다 놓거나 “책 추가”를 누르세요",
   "library.dragHint":
-    "zip / cbz 압축 파일이나 폴더를 창으로 끌어다 놓아 가져올 수도 있습니다",
+    "zip / cbz / pdf 파일이나 폴더를 창으로 끌어다 놓아 가져올 수도 있습니다",
   "library.cardHint":
     "표지를 클릭하면 상세 정보, 더블 클릭 또는 Shift+Enter로 읽기 시작, 표지를 마우스 오른쪽 버튼으로 클릭하면 기록을 제거하거나 원본을 삭제할 수 있습니다.",
   "library.selected": "선택됨",
@@ -728,8 +728,8 @@ const ko: LibraryMessages = {
   "import.failed": "실패 {count}",
   "import.itemFailed": "{path}: {message}",
   "import.failedFallback": "가져오기 실패",
-  "import.filesTitle": "만화 압축 파일 선택(zip / cbz, 여러 개 가능)",
-  "import.filesFilter": "만화 압축 파일",
+  "import.filesTitle": "만화 압축 파일 또는 PDF 선택(zip / cbz / pdf, 여러 개 가능)",
+  "import.filesFilter": "만화 압축 파일 / PDF",
   "import.folderTitle":
     "만화 폴더 선택(폴더 하나 = 책 한 권, 여러 개 가능)",
   "import.pickerUnavailable":
@@ -738,7 +738,7 @@ const ko: LibraryMessages = {
     "폴더 선택기를 사용할 수 없습니다. 폴더를 끌어다 놓으세요",
   "import.dropTitle": "놓으면 가져옵니다",
   "import.dropHint":
-    "zip / cbz 압축 파일과 폴더를 지원하며 여러 개를 한 번에 놓을 수 있습니다",
+    "zip / cbz / pdf 파일과 폴더를 지원하며 여러 개를 한 번에 놓을 수 있습니다",
 };
 
 export const libraryMessages = {

@@ -621,7 +621,7 @@ mod tests {
         let err = png_dims(&bad_type).unwrap_err().to_string();
         assert!(err.contains("pdf-cover-invalid"), "got: {err}");
         // 头部不完整。
-        let err = png_dims(&super::PNG_MAGIC).unwrap_err().to_string();
+        let err = png_dims(super::PNG_MAGIC).unwrap_err().to_string();
         assert!(err.contains("pdf-cover-invalid"), "got: {err}");
 
         // JPEG：真实编码器产物与手工构造的 SOF0 都要能解出尺寸。

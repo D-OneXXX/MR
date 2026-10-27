@@ -19,6 +19,7 @@ const READER_STATE = `(() => {
   const cellErrors = [...document.querySelectorAll(".reader-cell .reader-err")];
   return {
     root: !!document.querySelector(".reader-root"),
+    hash: location.hash,
     images: imgs.length,
     loaded: imgs.filter((img) => img.complete && img.naturalWidth > 0).length,
     indexes: imgs.map((img) => Number(img.getAttribute("data-idx"))),
@@ -1295,9 +1296,24 @@ export async function runPdfSuite(ctx, report) {
     page = ctx.page;
     const watcher = watchUncaughtExceptions(page);
     const rootReady = await openReader(page, renderFailId, 30_000);
-    await sleep(4000);
-    const failState = await page.eval(READER_STATE);
+    // 高负载 runner 上 PDF.js worker 初始化 + getPage 失败可能超过固定 4s；
+    // 用有界条件等待替代固定 sleep，避免把「慢」误判为「白屏」。
+    // 断言不变：最终仍必须出现错误卡或逐页失败态；不能因为残留图片
+    // （loaded>0，例如上一本文档尚未卸载）就提前结束等待。
+    let failState = await page.eval(READER_STATE);
+    const failDeadline = Date.now() + 20_000;
+    while (
+      Date.now() < failDeadline &&
+      failState.errorCode === null &&
+      failState.pageFailures === 0
+    ) {
+      await sleep(250);
+      failState = await page.eval(READER_STATE);
+    }
     watcher.unsubscribe();
+    const openDocs = await page
+      .eval("globalThis.__moyuPdf?.openDocumentCount?.() ?? null")
+      .catch(() => null);
     const controlled =
       failState.errorCode !== null || failState.pageFailures > 0;
     const renderFailProblems = [];
@@ -1326,8 +1342,13 @@ export async function runPdfSuite(ctx, report) {
           errorCode: failState.errorCode,
           pageFailures: failState.pageFailures,
           loaded: failState.loaded,
+          cells: failState.cells,
+          images: failState.images,
+          label: failState.label,
+          hash: failState.hash,
+          openDocuments: openDocs,
           exceptions: watcher.exceptions,
-        }).slice(0, 500),
+        }).slice(0, 900),
         location: "src/features/pdf/render.ts / src/pages/Reader.tsx",
         expected: "显示错误卡或逐页失败态，且无未捕获异常",
         actual: renderFailProblems.join(" | "),

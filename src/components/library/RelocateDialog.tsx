@@ -34,13 +34,13 @@ function baseName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-function isArchivePath(path: string): boolean {
-  return /\.(zip|cbz)$/i.test(path.trim());
+function isFileSourcePath(path: string): boolean {
+  return /\.(zip|cbz|pdf)$/i.test(path.trim());
 }
 
 /**
  * 失效路径重定位引导：
- * - 文件源用文件选择器（zip/cbz），文件夹源用目录选择器；
+ * - 文件源（zip / cbz / pdf）用文件选择器，文件夹源用目录选择器；
  * - 选中后由 Rust 事务迁移进度/统计/阅读历史，前端只负责打开新 id；
  * - 另一个出口是「从书库移除」，复用软删语义，源文件与记录都保留。
  */
@@ -61,10 +61,10 @@ export default function RelocateDialog({
 
   const choose = async () => {
     if (!book || busy) return;
-    const archive = isArchivePath(book.path);
+    const fileSource = isFileSourcePath(book.path);
     let picked: string | string[] | null = null;
     try {
-      picked = archive
+      picked = fileSource
         ? await openDialog({
             title: t("import.filesTitle"),
             multiple: false,
@@ -72,7 +72,7 @@ export default function RelocateDialog({
             filters: [
               {
                 name: t("import.filesFilter"),
-                extensions: ["zip", "cbz"],
+                extensions: ["zip", "cbz", "pdf"],
               },
             ],
           })

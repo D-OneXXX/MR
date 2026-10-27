@@ -1,6 +1,6 @@
 # Third-party notices
 
-MangaReader bundles or links the components listed below. The project’s own license
+Moyu bundles or links the components listed below. The project’s own license
 (PolyForm Noncommercial 1.0.0) is separate from these third-party licenses; see
 [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
 
@@ -28,7 +28,7 @@ retain their upstream licenses and notices. The exact dependency graph is record
 
 ### Application icon and documentation artwork
 
-The MangaReader application icon, favicon, and README screenshots are original project assets.
+The Moyu application icon, favicon, and README screenshots are original project assets.
 The README screenshots use original synthetic comic pages generated for this repository; no
 third-party manga artwork is bundled.
 

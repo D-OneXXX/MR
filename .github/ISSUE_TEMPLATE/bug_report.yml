@@ -1,18 +1,18 @@
 name: Bug report
-description: Report a reproducible problem with MangaReader.
+description: Report a reproducible problem with Moyu.
 title: "[Bug]: "
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve MangaReader. Do not post personal library paths,
+        Thanks for helping improve Moyu. Do not post personal library paths,
         book titles, cookies, tokens, session headers, or private URLs. For security
         issues, use the private advisory link instead of a public issue.
         Do not assign a severity label yourself; maintainers classify P0–P4.
   - type: input
     id: version
     attributes:
-      label: MangaReader version
+      label: Moyu version
       description: Shown in Settings → About & maintenance.
       placeholder: 0.17.1
     validations:

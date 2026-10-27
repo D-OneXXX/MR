@@ -14,7 +14,7 @@ use crate::db;
 use crate::AppState;
 
 const BROWSER_LABEL: &str = "browser";
-const BROWSER_TITLE: &str = "MangaReader 浏览器";
+const BROWSER_TITLE: &str = "Moyu 浏览器";
 const BROWSER_WIDTH: f64 = 1200.0;
 const BROWSER_HEIGHT: f64 = 820.0;
 

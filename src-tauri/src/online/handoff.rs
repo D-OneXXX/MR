@@ -105,7 +105,7 @@ fn fallback_token() -> String {
 fn build_script(callback_url: &str) -> String {
     const TEMPLATE: &str = r#"
 /*
- * MangaReader 通用合集收集脚本，由用户在自己的浏览器里手动执行。
+ * Moyu 通用合集收集脚本，由用户在自己的浏览器里手动执行。
  * 只读取当前页面已渲染的图片地址与 title/location；不读取 Cookie，不翻页，不爬取。
  */
 (async () => {
@@ -130,7 +130,7 @@ fn build_script(callback_url: &str) -> String {
     list: () => load(),
     reset: () => {
       try { sessionStorage.removeItem(MR_BUCKET); } catch (_) {}
-      alert('MangaReader：已清空当前站点的章节收集');
+      alert('Moyu：已清空当前站点的章节收集');
     },
   };
   const urls = new Set();
@@ -170,10 +170,10 @@ fn build_script(callback_url: &str) -> String {
       body: JSON.stringify(payload),
     });
     alert(response.ok
-      ? `MangaReader：已提交 ${chapters.length} 章`
-      : `MangaReader：提交失败（${response.status}）`);
+      ? `Moyu：已提交 ${chapters.length} 章`
+      : `Moyu：提交失败（${response.status}）`);
   } catch (_) {
-    alert('MangaReader：无法连接本地导入服务');
+    alert('Moyu：无法连接本地导入服务');
   }
 })();
 "#;

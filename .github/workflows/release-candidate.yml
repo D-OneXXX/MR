@@ -156,7 +156,7 @@ jobs:
           MR_BUILD_ORIGIN: official
         with:
           tagName: ${{ steps.identity.outputs.tag }}
-          releaseName: MangaReader ${{ steps.identity.outputs.tag }}
+          releaseName: Moyu ${{ steps.identity.outputs.tag }}
           releaseBody: |
             Release Candidate（**Draft，未公开**）。
             审批通过后由 release-publish 工作流校验绑定并发布。

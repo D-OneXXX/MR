@@ -1,11 +1,12 @@
 <p align="center">
-  <img src="docs/assets/logo.png" width="96" height="96" alt="MangaReader icon">
+  <img src="docs/assets/logo.png" width="96" height="96" alt="Moyu icon">
 </p>
 
-<h1 align="center">MangaReader</h1>
+<h1 align="center">Moyu</h1>
 
 <p align="center">
   <strong>A local-first manga reader for Windows and Linux.</strong><br>
+  Moyu is a free desktop application for manga reading and library management.<br>
   Your library stays on your disk. No account, no cloud library, no bundled manga sources.
 </p>
 
@@ -27,11 +28,11 @@
 ## Product preview
 
 <p align="center">
-  <img src="docs/assets/screenshots/library.png" width="49%" alt="MangaReader library with three synthetic demo books">
-  <img src="docs/assets/screenshots/settings.png" width="49%" alt="MangaReader appearance and language settings">
+  <img src="docs/assets/screenshots/library.png" width="49%" alt="Moyu library with three synthetic demo books">
+  <img src="docs/assets/screenshots/settings.png" width="49%" alt="Moyu appearance and language settings">
 </p>
 <p align="center">
-  <img src="docs/assets/screenshots/reader.png" width="82%" alt="MangaReader reader showing an original synthetic comic page">
+  <img src="docs/assets/screenshots/reader.png" width="82%" alt="Moyu reader showing an original synthetic comic page">
 </p>
 <p align="center">
   <sub>Screenshots are from the real application, captured with an isolated demo library and original synthetic sample pages. No personal library data is shown.</sub>
@@ -86,7 +87,7 @@ If no public build is listed yet, use the development instructions below to buil
 
 1. Download the NSIS installer from the latest release.
 2. Run the installer and choose the installation scope and language.
-3. Launch **MangaReader**, add a folder or archive, and select a book.
+3. Launch **Moyu**, add a folder or archive, and select a book.
 
 The Windows installer is **not Authenticode-signed**. Windows SmartScreen may show a warning;
 verify that the installer came from this repository’s Releases page before running it. Update
@@ -105,6 +106,14 @@ On Windows, library data lives under `%APPDATA%\com.local.manga-reader` and cach
 package manager; remove the data directory manually if you also want to delete local library
 metadata and progress.
 
+## Name and upgrade compatibility
+
+The application calls itself **Moyu**. For existing installations, the installer product identity,
+the `.cbz` / `.zip` file-association registration names, the data directories
+(`com.local.manga-reader`), update signatures and endpoints, and some artifact filenames
+intentionally keep the legacy **MangaReader** identity so that upgrades, existing file
+associations, and existing user data remain intact.
+
 ## Quick start
 
 1. Choose **Add folder** or **Add books** and select a folder, ZIP, or CBZ.
@@ -113,7 +122,7 @@ metadata and progress.
 4. Use **Settings → General & appearance** to change the theme, interface language, and
    reading preferences.
 5. For online reading, use the browser/online entry with a URL you are authorized to access.
-   MangaReader does not bundle manga sources or subscriptions.
+   Moyu does not bundle manga sources or subscriptions.
 
 ## Configuration
 
@@ -128,7 +137,7 @@ backup files, or diagnostics.
 
 ## FAQ
 
-**Does MangaReader upload my library?**
+**Does Moyu upload my library?**
 
 No. The library database, progress, cache, and reading statistics stay on the local machine.
 There is no account or cloud sync.
@@ -159,7 +168,7 @@ follows the critical-fix channel.
 The Windows installer is not Authenticode-signed. This is separate from the updater signature,
 which is verified by the application.
 
-**Does MangaReader include manga sources?**
+**Does Moyu include manga sources?**
 
 No. You provide local files or URLs you are authorized to access. The project does not bundle
 publishers’ catalogs or scanlation feeds.
@@ -180,8 +189,9 @@ cookies, tokens, and full URLs before posting logs or screenshots.
 
 ## License
 
-MangaReader is **source-available under the PolyForm Noncommercial License 1.0.0**. It is not
-an OSI open-source project. Commercial use is not granted by this license.
+Moyu is **free for personal and other noncommercial use** under the **PolyForm Noncommercial
+License 1.0.0**. The project is source-available; it is not an OSI open-source project.
+Commercial use is not granted by this license.
 
 - [LICENSE](LICENSE)
 - [NOTICE.md](NOTICE.md) — required notice, build-origin fingerprint, and update channels
@@ -212,14 +222,15 @@ node tests/qa/run-qa.mjs --suite=static
 ```
 
 The QA harness starts the application with isolated data and cache directories. Never point it
-at a real library. See [docs/TESTING.md](docs/TESTING.md) for the full verification workflow and
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the runtime architecture. Detailed module notes
-(Chinese) are in [docs/TECHNICAL.md](docs/TECHNICAL.md).
+at a real library. The full suite is `node tests/qa/run-qa.mjs` (Node.js 22+); `--suite=static` is
+the fast guard. The harness isolates the application data directory, the render and online caches,
+and the WebView2 profile. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the runtime
+architecture and where your data lives.
 
 Bug reports and release feedback are welcome in the issue tracker. Security issues should
 follow `SECURITY.md`.
 
 ---
 
-MangaReader is not affiliated with any manga publisher, scanlation group, or online source.
+Moyu is not affiliated with any manga publisher, scanlation group, or online source.
 You are responsible for the content you import or access.

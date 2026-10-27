@@ -116,7 +116,7 @@ export function writeMarkdownReport(report, file, kb = null) {
     ]),
   );
   const lines = [
-    "# MangaReader QA 审计报告",
+    "# Moyu QA 审计报告",
     "",
     `- 运行编号：${report.runId}`,
     `- 版本：v${report.appVersion} (${report.buildCommit})`,

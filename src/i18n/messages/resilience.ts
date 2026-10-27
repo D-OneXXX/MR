@@ -139,7 +139,7 @@ const zhCN = {
   "errorBoundary.localOnly": "本地诊断",
   "errorBoundary.note":
     "诊断数据仅保存在本机内存，只有在你主动复制或导出时才会离开应用。",
-  "diagnostics.prompt.title": "MangaReader 诊断报告",
+  "diagnostics.prompt.title": "Moyu 诊断报告",
   "diagnostics.prompt.generatedAt": "生成时间：{time}",
   "diagnostics.prompt.localNote":
     "本报告在本机生成，未上传。预览前已对敏感凭据与本地漫画路径做脱敏处理。",
@@ -171,11 +171,11 @@ const zhCN = {
   "diagnostics.prompt.logsNone": "暂无记录。",
   "diagnostics.prompt.requestedTitle": "请求的诊断",
   "diagnostics.prompt.requestedRole":
-    "请以资深工程师的身份排查本地优先的 MangaReader 桌面应用（Tauri 2 + React 19 + TypeScript + Rust）。依据以上证据，输出一份简洁、可执行的报告，并严格包含以下小节：",
+    "请以资深工程师的身份排查本地优先的 Moyu 桌面应用（Tauri 2 + React 19 + TypeScript + Rust）。依据以上证据，输出一份简洁、可执行的报告，并严格包含以下小节：",
   "diagnostics.prompt.rootCause":
     "根因：归类为前端渲染/状态、Tauri IPC、Rust 本地文件/网络解析或其他类别，并说明证据。若证据不足，请指出缺少哪些信息，不要猜测。",
   "diagnostics.prompt.codeLocations":
-    "可疑代码位置：指出最可能的 MangaReader 模块、函数或文件路径，并说明为何与证据吻合；区分已确认事实与假设。",
+    "可疑代码位置：指出最可能的 Moyu 模块、函数或文件路径，并说明为何与证据吻合；区分已确认事实与假设。",
   "diagnostics.prompt.fix":
     "修复与临时方案：给出具体修复方案、最小验证/测试计划，以及安全的用户侧临时规避方案。不要建议上传私有日志或绕过本地隐私模型。",
   "diagnostics.prompt.format":
@@ -326,7 +326,7 @@ const zhTW: ResilienceMessages = {
   "errorBoundary.localOnly": "本機診斷",
   "errorBoundary.note":
     "診斷資料僅保存在本機記憶體，只有在你主動複製或匯出時才會離開應用程式。",
-  "diagnostics.prompt.title": "MangaReader 診斷報告",
+  "diagnostics.prompt.title": "Moyu 診斷報告",
   "diagnostics.prompt.generatedAt": "產生時間：{time}",
   "diagnostics.prompt.localNote":
     "本報告在本機產生，未上傳。預覽前已對敏感憑證與本機漫畫路徑進行去識別化處理。",
@@ -358,11 +358,11 @@ const zhTW: ResilienceMessages = {
   "diagnostics.prompt.logsNone": "暫無紀錄。",
   "diagnostics.prompt.requestedTitle": "請求的診斷",
   "diagnostics.prompt.requestedRole":
-    "請以資深工程師的身分排查本機優先的 MangaReader 桌面應用程式（Tauri 2 + React 19 + TypeScript + Rust）。依據以上證據，輸出一份簡潔、可執行的報告，並嚴格包含以下小節：",
+    "請以資深工程師的身分排查本機優先的 Moyu 桌面應用程式（Tauri 2 + React 19 + TypeScript + Rust）。依據以上證據，輸出一份簡潔、可執行的報告，並嚴格包含以下小節：",
   "diagnostics.prompt.rootCause":
     "根因：歸類為前端渲染/狀態、Tauri IPC、Rust 本機檔案/網路解析或其他類別，並說明證據。若證據不足，請指出缺少哪些資訊，不要臆測。",
   "diagnostics.prompt.codeLocations":
-    "可疑程式碼位置：指出最可能的 MangaReader 模組、函式或檔案路徑，並說明為何與證據吻合；區分已確認事實與假設。",
+    "可疑程式碼位置：指出最可能的 Moyu 模組、函式或檔案路徑，並說明為何與證據吻合；區分已確認事實與假設。",
   "diagnostics.prompt.fix":
     "修正與臨時方案：提出具體修正、最小驗證/測試計畫，以及安全的使用者端暫時規避方式。不要建議上傳私有日誌或繞過本機隱私模型。",
   "diagnostics.prompt.format":
@@ -515,7 +515,7 @@ const en: ResilienceMessages = {
   "errorBoundary.localOnly": "Local diagnostics",
   "errorBoundary.note":
     "Diagnostic data stays in process memory and only leaves the app when you explicitly copy or export it.",
-  "diagnostics.prompt.title": "MangaReader diagnostic report",
+  "diagnostics.prompt.title": "Moyu diagnostic report",
   "diagnostics.prompt.generatedAt": "Generated at: {time}",
   "diagnostics.prompt.localNote":
     "This report was generated locally. It has not been uploaded. Sensitive credentials and local manga paths were sanitized before preview.",
@@ -548,11 +548,11 @@ const en: ResilienceMessages = {
   "diagnostics.prompt.logsNone": "None recorded.",
   "diagnostics.prompt.requestedTitle": "Requested diagnosis",
   "diagnostics.prompt.requestedRole":
-    "Act as a senior engineer debugging the local-first MangaReader desktop app (Tauri 2 + React 19 + TypeScript + Rust). Use the evidence above and return a concise, actionable report with exactly these sections:",
+    "Act as a senior engineer debugging the local-first Moyu desktop app (Tauri 2 + React 19 + TypeScript + Rust). Use the evidence above and return a concise, actionable report with exactly these sections:",
   "diagnostics.prompt.rootCause":
     "Root cause — classify as frontend rendering/state, Tauri IPC, Rust local-file/network parsing, or another category, and explain the evidence. If evidence is insufficient, say what is missing instead of guessing.",
   "diagnostics.prompt.codeLocations":
-    "Suspected code locations — name the most likely MangaReader modules, functions, or file paths and why they fit the evidence; distinguish confirmed facts from hypotheses.",
+    "Suspected code locations — name the most likely Moyu modules, functions, or file paths and why they fit the evidence; distinguish confirmed facts from hypotheses.",
   "diagnostics.prompt.fix":
     "Fix and temporary workaround — propose a concrete fix, a minimal verification/test plan, and a safe user-facing workaround. Do not suggest uploading private logs or bypassing the local privacy model.",
   "diagnostics.prompt.format":
@@ -705,7 +705,7 @@ const es: ResilienceMessages = {
   "errorBoundary.localOnly": "Diagnóstico local",
   "errorBoundary.note":
     "Los datos de diagnóstico permanecen en la memoria del proceso y solo salen de la app cuando los copias o exportas explícitamente.",
-  "diagnostics.prompt.title": "Informe de diagnóstico de MangaReader",
+  "diagnostics.prompt.title": "Informe de diagnóstico de Moyu",
   "diagnostics.prompt.generatedAt": "Generado el: {time}",
   "diagnostics.prompt.localNote":
     "Este informe se generó localmente y no se ha subido. Las credenciales sensibles y las rutas locales de manga se desinfectaron antes de la vista previa.",
@@ -742,11 +742,11 @@ const es: ResilienceMessages = {
   "diagnostics.prompt.logsNone": "Sin registros.",
   "diagnostics.prompt.requestedTitle": "Diagnóstico solicitado",
   "diagnostics.prompt.requestedRole":
-    "Actúa como ingeniero sénior depurando la app de escritorio MangaReader, de prioridad local (Tauri 2 + React 19 + TypeScript + Rust). Usa la evidencia anterior y devuelve un informe conciso y accionable con exactamente estas secciones:",
+    "Actúa como ingeniero sénior depurando la app de escritorio Moyu, de prioridad local (Tauri 2 + React 19 + TypeScript + Rust). Usa la evidencia anterior y devuelve un informe conciso y accionable con exactamente estas secciones:",
   "diagnostics.prompt.rootCause":
     "Causa raíz: clasifícala como renderizado/estado del frontend, IPC de Tauri, análisis de archivos locales o red en Rust, u otra categoría, y explica la evidencia. Si la evidencia es insuficiente, indica qué falta en lugar de suponer.",
   "diagnostics.prompt.codeLocations":
-    "Ubicaciones de código sospechosas: nombra los módulos, funciones o rutas de archivo más probables de MangaReader y por qué encajan con la evidencia; distingue hechos confirmados de hipótesis.",
+    "Ubicaciones de código sospechosas: nombra los módulos, funciones o rutas de archivo más probables de Moyu y por qué encajan con la evidencia; distingue hechos confirmados de hipótesis.",
   "diagnostics.prompt.fix":
     "Corrección y solución temporal: propone una corrección concreta, un plan mínimo de verificación/pruebas y una alternativa segura para el usuario. No sugieras subir registros privados ni eludir el modelo de privacidad local.",
   "diagnostics.prompt.format":
@@ -899,7 +899,7 @@ const ja: ResilienceMessages = {
   "errorBoundary.localOnly": "ローカル診断",
   "errorBoundary.note":
     "診断データはプロセスメモリ内に留まり、明示的にコピーまたは書き出した時だけアプリ外へ出ます。",
-  "diagnostics.prompt.title": "MangaReader 診断レポート",
+  "diagnostics.prompt.title": "Moyu 診断レポート",
   "diagnostics.prompt.generatedAt": "生成日時：{time}",
   "diagnostics.prompt.localNote":
     "このレポートはこの端末で生成され、アップロードされていません。プレビュー前に機密の認証情報とローカルの漫画パスは匿名化済みです。",
@@ -934,11 +934,11 @@ const ja: ResilienceMessages = {
   "diagnostics.prompt.logsNone": "記録なし。",
   "diagnostics.prompt.requestedTitle": "依頼された診断",
   "diagnostics.prompt.requestedRole":
-    "ローカル優先の MangaReader デスクトップアプリ（Tauri 2 + React 19 + TypeScript + Rust）を調査するシニアエンジニアとして、上記の証拠に基づき、次の見出しだけを含む簡潔で実行可能なレポートを返してください：",
+    "ローカル優先の Moyu デスクトップアプリ（Tauri 2 + React 19 + TypeScript + Rust）を調査するシニアエンジニアとして、上記の証拠に基づき、次の見出しだけを含む簡潔で実行可能なレポートを返してください：",
   "diagnostics.prompt.rootCause":
     "根本原因：フロントエンドの描画/状態、Tauri IPC、Rust のローカルファイル/ネットワーク解析、その他のいずれかに分類し、根拠を説明してください。証拠が足りない場合は推測せず、何が不足しているかを述べてください。",
   "diagnostics.prompt.codeLocations":
-    "疑わしいコード箇所：最も可能性の高い MangaReader のモジュール、関数、ファイルパスを挙げ、証拠と一致する理由を示してください。確認済みの事実と仮説を区別してください。",
+    "疑わしいコード箇所：最も可能性の高い Moyu のモジュール、関数、ファイルパスを挙げ、証拠と一致する理由を示してください。確認済みの事実と仮説を区別してください。",
   "diagnostics.prompt.fix":
     "修正と一時的な回避策：具体的な修正、最小限の検証/テスト計画、安全なユーザー向け回避策を提案してください。非公開ログのアップロードやローカル優先のプライバシーモデルの回避は提案しないでください。",
   "diagnostics.prompt.format":
@@ -1091,7 +1091,7 @@ const ko: ResilienceMessages = {
   "errorBoundary.localOnly": "로컬 진단",
   "errorBoundary.note":
     "진단 데이터는 프로세스 메모리에만 남으며 직접 복사하거나 내보낼 때만 앱 밖으로 나갑니다.",
-  "diagnostics.prompt.title": "MangaReader 진단 보고서",
+  "diagnostics.prompt.title": "Moyu 진단 보고서",
   "diagnostics.prompt.generatedAt": "생성 시각: {time}",
   "diagnostics.prompt.localNote":
     "이 보고서는 이 기기에서 생성되었으며 업로드되지 않았습니다. 미리보기 전에 민감한 자격 증명과 로컬 만화 경로가 정리되었습니다.",
@@ -1124,11 +1124,11 @@ const ko: ResilienceMessages = {
   "diagnostics.prompt.logsNone": "기록 없음.",
   "diagnostics.prompt.requestedTitle": "요청된 진단",
   "diagnostics.prompt.requestedRole":
-    "로컬 우선 MangaReader 데스크톱 앱(Tauri 2 + React 19 + TypeScript + Rust)을 디버깅하는 시니어 엔지니어로서 위 증거를 바탕으로 다음 섹션만 포함한 간결하고 실행 가능한 보고서를 작성하세요:",
+    "로컬 우선 Moyu 데스크톱 앱(Tauri 2 + React 19 + TypeScript + Rust)을 디버깅하는 시니어 엔지니어로서 위 증거를 바탕으로 다음 섹션만 포함한 간결하고 실행 가능한 보고서를 작성하세요:",
   "diagnostics.prompt.rootCause":
     "근본 원인: 프론트엔드 렌더링/상태, Tauri IPC, Rust 로컬 파일/네트워크 파싱, 기타 중 하나로 분류하고 근거를 설명하세요. 증거가 부족하면 추측하지 말고 무엇이 빠졌는지 밝히세요.",
   "diagnostics.prompt.codeLocations":
-    "의심 코드 위치: 가장 가능성 높은 MangaReader 모듈, 함수, 파일 경로를 제시하고 증거와 맞는 이유를 설명하세요. 확인된 사실과 가설을 구분하세요.",
+    "의심 코드 위치: 가장 가능성 높은 Moyu 모듈, 함수, 파일 경로를 제시하고 증거와 맞는 이유를 설명하세요. 확인된 사실과 가설을 구분하세요.",
   "diagnostics.prompt.fix":
     "수정 및 임시 우회: 구체적인 수정안, 최소 검증/테스트 계획, 사용자를 위한 안전한 임시 우회 방법을 제안하세요. 비공개 로그 업로드나 로컬 우선 개인정보 모델 우회는 제안하지 마세요.",
   "diagnostics.prompt.format":

@@ -837,7 +837,7 @@ export function checkReleaseGovernance(root, report) {
         "无 Tag 触发的发布工作流；手动触发 + environment 审批门禁 + 发布前绑定校验；无跳过 QA/审批的开关",
       actual: errors.join(" | "),
       rootCause: "新增或修改发版工作流时引入了 Tag 触发、宽松权限或绕过开关",
-      fix: "按 docs/dev/PHASE4_RELEASE_GOVERNANCE.md 恢复：dispatch 触发 + environment + verify-draft 绑定校验",
+      fix: "按内部发布治理文档（维护者本地维护）恢复：dispatch 触发 + environment + verify-draft 绑定校验",
     });
   } else {
     ok(report, {
@@ -1058,7 +1058,7 @@ export function checkCsp(root, report) {
         "app.security.csp 至少包含 default-src 'self'、script-src 'self'、img-src 'self' data:、connect-src ipc: + tauri/ipc.localhost、style-src 'self' 'unsafe-inline'",
       actual: value || "null/missing",
       rootCause: "CSP 被置空，或收紧时漏掉 IPC/data URL/内联样式关键来源",
-      fix: "按 docs/TECHNICAL.md 的 CSP 基线恢复；devCsp 单独放行 Vite，不要放宽生产 csp",
+      fix: "按内部技术文档的 CSP 基线恢复（维护者本地维护）；devCsp 单独放行 Vite，不要放宽生产 csp",
     });
   } else {
     ok(report, {
@@ -1476,7 +1476,7 @@ export function checkReleaseSurface(root, report) {
         "文件关联 .cbz/.zip、createUpdaterArtifacts、plugins.updater、签名 CI、主窗 updater 权限、五个命令与三个用户入口齐全",
       actual: errors.join(" | "),
       rootCause: "新增发行能力时漏改配置、命令注册或权限文件",
-      fix: "按 docs/dev/RELEASE.md 与 docs/TECHNICAL.md 补齐缺失项",
+      fix: "按内部发布与技术文档（维护者本地维护）补齐缺失项",
     });
   } else {
     ok(report, {

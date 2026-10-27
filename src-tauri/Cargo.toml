@@ -1,7 +1,7 @@
 [package]
 name = "manga-reader-tauri"
 version = "0.17.2"
-description = "Local-first manga reader (Tauri 2 + React)"
+description = "Moyu - a free desktop application for manga reading and library management (Tauri 2 + React)"
 authors = ["manga-reader"]
 edition = "2021"
 rust-version = "1.90"

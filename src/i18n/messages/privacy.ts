@@ -6,7 +6,7 @@ const zhCN = {
   "privacy.tab": "隐私安全",
   "privacy.title": "隐私与安全",
   "privacy.description":
-    "MangaReader 是本地优先的阅读器：书库、进度、统计与缓存都在本机。下面列出数据边界，并提供真实的本机安全自检。",
+    "Moyu 是本地优先的阅读器：书库、进度、统计与缓存都在本机。下面列出数据边界，并提供真实的本机安全自检。",
   "privacy.badge": "Local-first",
   "privacy.statement.title": "隐私承诺",
   "privacy.statement.summary":
@@ -26,7 +26,7 @@ const zhCN = {
   "privacy.network.updates":
     "检查软件更新：仅在你配置更新清单地址后，访问该 HTTPS 清单与安装包地址。",
   "privacy.network.none": "除以上两项外，应用不发起后台网络请求。",
-  "privacy.dialog.title": "欢迎使用 MangaReader",
+  "privacy.dialog.title": "欢迎使用 Moyu",
   "privacy.dialog.subtitle": "开始之前，用半分钟了解你的数据边界。",
   "privacy.dialog.localTitle": "100% 本地",
   "privacy.dialog.localBody":
@@ -165,7 +165,7 @@ const en: Record<keyof typeof zhCN, string> = {
   "privacy.tab": "Privacy",
   "privacy.title": "Privacy & security",
   "privacy.description":
-    "MangaReader is local-first: your library, progress, stats and cache stay on this device. Here is the data boundary, plus a real local security self-check.",
+    "Moyu is local-first: your library, progress, stats and cache stay on this device. Here is the data boundary, plus a real local security self-check.",
   "privacy.badge": "Local-first",
   "privacy.statement.title": "Privacy promise",
   "privacy.statement.summary":
@@ -186,7 +186,7 @@ const en: Record<keyof typeof zhCN, string> = {
     "Update checks: only after you configure a manifest URL; only that HTTPS manifest and installer are contacted.",
   "privacy.network.none":
     "Beyond these two cases, the app makes no background network requests.",
-  "privacy.dialog.title": "Welcome to MangaReader",
+  "privacy.dialog.title": "Welcome to Moyu",
   "privacy.dialog.subtitle":
     "Before you start, here is a 30-second overview of your data boundary.",
   "privacy.dialog.localTitle": "100% local",
@@ -327,7 +327,7 @@ const zhTW: Record<keyof typeof zhCN, string> = {
   "privacy.tab": "隱私安全",
   "privacy.title": "隱私與安全",
   "privacy.description":
-    "MangaReader 是本機優先的閱讀器：書庫、進度、統計與快取都留在這台裝置上。以下說明資料邊界，並提供實際的本機安全自我檢查。",
+    "Moyu 是本機優先的閱讀器：書庫、進度、統計與快取都留在這台裝置上。以下說明資料邊界，並提供實際的本機安全自我檢查。",
   "privacy.badge": "本機優先",
   "privacy.statement.title": "隱私承諾",
   "privacy.statement.summary":
@@ -348,7 +348,7 @@ const zhTW: Record<keyof typeof zhCN, string> = {
     "檢查軟體更新：只在你設定更新清單網址後，存取該 HTTPS 清單與安裝程式網址。",
   "privacy.network.none":
     "除了上述兩種情況，應用程式不會發起背景網路請求。",
-  "privacy.dialog.title": "歡迎使用 MangaReader",
+  "privacy.dialog.title": "歡迎使用 Moyu",
   "privacy.dialog.subtitle": "開始之前，花半分鐘了解你的資料邊界。",
   "privacy.dialog.localTitle": "100% 本機",
   "privacy.dialog.localBody":
@@ -486,7 +486,7 @@ const es: Record<keyof typeof zhCN, string> = {
   "privacy.tab": "Privacidad",
   "privacy.title": "Privacidad y seguridad",
   "privacy.description":
-    "MangaReader es local-first: tu biblioteca, tu progreso, tus estadísticas y la caché se quedan en este dispositivo. Aquí tienes los límites de tus datos y una comprobación de seguridad local real.",
+    "Moyu es local-first: tu biblioteca, tu progreso, tus estadísticas y la caché se quedan en este dispositivo. Aquí tienes los límites de tus datos y una comprobación de seguridad local real.",
   "privacy.badge": "Prioridad local",
   "privacy.statement.title": "Compromiso de privacidad",
   "privacy.statement.summary":
@@ -507,7 +507,7 @@ const es: Record<keyof typeof zhCN, string> = {
     "Búsqueda de actualizaciones: solo tras configurar una URL de manifiesto; solo se contacta con ese manifiesto HTTPS y el instalador.",
   "privacy.network.none":
     "Aparte de estos dos casos, la aplicación no hace solicitudes de red en segundo plano.",
-  "privacy.dialog.title": "Te damos la bienvenida a MangaReader",
+  "privacy.dialog.title": "Te damos la bienvenida a Moyu",
   "privacy.dialog.subtitle":
     "Antes de empezar, un resumen de 30 segundos sobre el límite de tus datos.",
   "privacy.dialog.localTitle": "100 % local",
@@ -653,7 +653,7 @@ const ja: Record<keyof typeof zhCN, string> = {
   "privacy.tab": "プライバシー",
   "privacy.title": "プライバシーとセキュリティ",
   "privacy.description":
-    "MangaReader はローカル優先のリーダーです。書庫、読書進捗、統計、キャッシュはすべてこの端末に保存されます。以下ではデータの境界を示し、実際のローカルセキュリティチェックも提供します。",
+    "Moyu はローカル優先のリーダーです。書庫、読書進捗、統計、キャッシュはすべてこの端末に保存されます。以下ではデータの境界を示し、実際のローカルセキュリティチェックも提供します。",
   "privacy.badge": "ローカル優先",
   "privacy.statement.title": "プライバシーへの約束",
   "privacy.statement.summary":
@@ -674,7 +674,7 @@ const ja: Record<keyof typeof zhCN, string> = {
     "アップデートの確認：更新マニフェストの URL を設定した場合に限り、その HTTPS マニフェストとインストーラーだけにアクセスします。",
   "privacy.network.none":
     "上記の 2 つの場合を除き、アプリはバックグラウンドでネットワークリクエストを送信しません。",
-  "privacy.dialog.title": "MangaReader へようこそ",
+  "privacy.dialog.title": "Moyu へようこそ",
   "privacy.dialog.subtitle":
     "始める前に、30 秒でデータの境界を確認しましょう。",
   "privacy.dialog.localTitle": "100% ローカル",
@@ -816,7 +816,7 @@ const ko: Record<keyof typeof zhCN, string> = {
   "privacy.tab": "개인정보",
   "privacy.title": "개인정보 보호 및 보안",
   "privacy.description":
-    "MangaReader는 로컬 우선 리더입니다. 서재, 읽기 진행률, 통계, 캐시가 모두 이 기기에 저장됩니다. 아래에서 데이터 경계를 설명하고, 실제 로컬 보안 자가 점검도 제공합니다.",
+    "Moyu는 로컬 우선 리더입니다. 서재, 읽기 진행률, 통계, 캐시가 모두 이 기기에 저장됩니다. 아래에서 데이터 경계를 설명하고, 실제 로컬 보안 자가 점검도 제공합니다.",
   "privacy.badge": "로컬 우선",
   "privacy.statement.title": "개인정보 보호 약속",
   "privacy.statement.summary":
@@ -837,7 +837,7 @@ const ko: Record<keyof typeof zhCN, string> = {
     "업데이트 확인: 업데이트 매니페스트 URL을 설정한 경우에만 해당 HTTPS 매니페스트와 설치 프로그램에 접속합니다.",
   "privacy.network.none":
     "위의 두 경우를 제외하면 앱은 백그라운드 네트워크 요청을 보내지 않습니다.",
-  "privacy.dialog.title": "MangaReader에 오신 것을 환영합니다",
+  "privacy.dialog.title": "Moyu에 오신 것을 환영합니다",
   "privacy.dialog.subtitle":
     "시작하기 전에 30초 동안 데이터 경계를 확인해 보세요.",
   "privacy.dialog.localTitle": "100% 로컬",

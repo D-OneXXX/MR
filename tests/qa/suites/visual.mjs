@@ -82,7 +82,7 @@ const CONTRAST_PROBE = `(() => {
     if (!visible(el)) continue;
     if (el.closest("[disabled],[aria-disabled=true],[inert],[aria-hidden=true]")) continue;
     // The brand lockup is a logotype (WCAG 1.4.3 exempts logotypes).
-    if (el.closest('header a[aria-label*="MangaReader"]')) continue;
+    if (el.closest('header a[aria-label*="Moyu"]')) continue;
     if (el.matches("input,textarea,select,option,script,style,pre,code")) continue;
     const directText = [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && (node.textContent || "").trim());
     if (!directText) continue;

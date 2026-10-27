@@ -181,7 +181,7 @@ jobs:
             echo "Draft 已存在，复用：$TAG"
           else
             gh release create "$TAG" --verify-tag --draft \
-              --title "MangaReader $TAG (Draft · Linux critical · 待审批)" \
+              --title "Moyu $TAG (Draft · Linux critical · 待审批)" \
               --notes "Release Candidate：待人工审批后才会发布。"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"

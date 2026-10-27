@@ -1,6 +1,6 @@
 const zhCN = {
-  "app.title": "MangaReader · 本地漫画书库",
-  "nav.brand": "MangaReader 书库",
+  "app.title": "Moyu · 本地漫画书库",
+  "nav.brand": "Moyu 书库",
   "nav.library": "书库",
   "nav.continue": "继续阅读",
   "nav.browser": "浏览器",
@@ -104,7 +104,7 @@ const zhCN = {
   "dbRecovery.healthUnavailable":
     "无法读取数据库健康状态；请打开数据目录查看日志。",
   "dbRecovery.selectTitle": "选择 .mrbackup 备份",
-  "dbRecovery.filterName": "MangaReader 备份",
+  "dbRecovery.filterName": "Moyu 备份",
   "cache.writeFailed":
     "缓存写入失败：磁盘可能已满；阅读不受影响，请到设置中清理缓存或释放磁盘空间。",
   "error.requestFailed": "调用 {cmd} 失败",
@@ -114,7 +114,7 @@ const zhCN = {
   "error.archiveNotZip": "该文件不是有效的 ZIP/CBZ 压缩包，请转为标准无密码 ZIP/CBZ",
   "error.archiveEncrypted": "压缩包已加密或包含加密条目，请转为标准无密码 ZIP/CBZ 后再导入",
   "error.backupFileMissing": "备份文件不存在或不可读",
-  "error.backupInvalidFormat": "这不是有效的 MangaReader 备份文件",
+  "error.backupInvalidFormat": "这不是有效的 Moyu 备份文件",
   "error.backupUnsupportedSchema": "备份格式版本不受支持，请升级应用后重试",
   "error.backupIntegrity": "备份完整性校验失败，当前书库未被修改",
   "error.backupTooLarge": "备份文件超过 1 GiB 上限",
@@ -131,8 +131,8 @@ const zhCN = {
 type CommonMessages = { [K in keyof typeof zhCN]: string };
 
 const zhTW: CommonMessages = {
-  "app.title": "MangaReader · 本機漫畫書庫",
-  "nav.brand": "MangaReader 書庫",
+  "app.title": "Moyu · 本機漫畫書庫",
+  "nav.brand": "Moyu 書庫",
   "nav.library": "書庫",
   "nav.continue": "繼續閱讀",
   "nav.browser": "瀏覽器",
@@ -236,7 +236,7 @@ const zhTW: CommonMessages = {
   "dbRecovery.healthUnavailable":
     "無法讀取資料庫健康狀態；請開啟資料目錄查看日誌。",
   "dbRecovery.selectTitle": "選擇 .mrbackup 備份",
-  "dbRecovery.filterName": "MangaReader 備份",
+  "dbRecovery.filterName": "Moyu 備份",
   "cache.writeFailed":
     "快取寫入失敗：磁碟可能已滿；閱讀不受影響，請到設定中清理快取或釋放磁碟空間。",
   "error.requestFailed": "呼叫 {cmd} 失敗",
@@ -246,7 +246,7 @@ const zhTW: CommonMessages = {
   "error.archiveNotZip": "該檔案不是有效的 ZIP/CBZ 壓縮包，請轉為標準無密碼 ZIP/CBZ",
   "error.archiveEncrypted": "壓縮包已加密或包含加密條目，請轉為標準無密碼 ZIP/CBZ 後再匯入",
   "error.backupFileMissing": "備份檔案不存在或無法讀取",
-  "error.backupInvalidFormat": "這不是有效的 MangaReader 備份檔案",
+  "error.backupInvalidFormat": "這不是有效的 Moyu 備份檔案",
   "error.backupUnsupportedSchema": "備份格式版本不受支援，請先更新應用程式再試",
   "error.backupIntegrity": "備份完整性校驗失敗，目前書庫未被修改",
   "error.backupTooLarge": "備份檔案超過 1 GiB 上限",
@@ -261,8 +261,8 @@ const zhTW: CommonMessages = {
 };
 
 const en: CommonMessages = {
-  "app.title": "MangaReader · Library",
-  "nav.brand": "MangaReader library",
+  "app.title": "Moyu · Library",
+  "nav.brand": "Moyu library",
   "nav.library": "Library",
   "nav.continue": "Continue",
   "nav.browser": "Browser",
@@ -369,7 +369,7 @@ const en: CommonMessages = {
   "dbRecovery.healthUnavailable":
     "Could not read database health. Open the data folder to inspect the log.",
   "dbRecovery.selectTitle": "Choose a .mrbackup backup",
-  "dbRecovery.filterName": "MangaReader backup",
+  "dbRecovery.filterName": "Moyu backup",
   "cache.writeFailed":
     "Cache write failed. The disk may be full; reading is unaffected. Clear the cache or free disk space in Settings.",
   "error.requestFailed": "Request failed: {cmd}",
@@ -379,7 +379,7 @@ const en: CommonMessages = {
   "error.archiveNotZip": "This file is not a valid ZIP/CBZ archive. Please convert it to a standard, unencrypted ZIP/CBZ.",
   "error.archiveEncrypted": "This archive is encrypted or contains encrypted entries. Please convert it to a standard, unencrypted ZIP/CBZ and import again.",
   "error.backupFileMissing": "The backup file is missing or unreadable.",
-  "error.backupInvalidFormat": "This is not a valid MangaReader backup.",
+  "error.backupInvalidFormat": "This is not a valid Moyu backup.",
   "error.backupUnsupportedSchema": "This backup format version is not supported. Update the app and try again.",
   "error.backupIntegrity": "Backup integrity check failed. Your current library was not modified.",
   "error.backupTooLarge": "The backup exceeds the 1 GiB limit.",
@@ -394,8 +394,8 @@ const en: CommonMessages = {
 };
 
 const es: CommonMessages = {
-  "app.title": "MangaReader · Biblioteca",
-  "nav.brand": "MangaReader, biblioteca",
+  "app.title": "Moyu · Biblioteca",
+  "nav.brand": "Moyu, biblioteca",
   "nav.library": "Biblioteca",
   "nav.continue": "Continuar",
   "nav.browser": "Navegador",
@@ -504,7 +504,7 @@ const es: CommonMessages = {
   "dbRecovery.healthUnavailable":
     "No se pudo leer el estado de la base de datos. Abre la carpeta de datos para revisar el registro.",
   "dbRecovery.selectTitle": "Elegir una copia .mrbackup",
-  "dbRecovery.filterName": "Copia de MangaReader",
+  "dbRecovery.filterName": "Copia de Moyu",
   "cache.writeFailed":
     "Falló la escritura en caché. El disco puede estar lleno; la lectura no se ve afectada. Borra la caché o libera espacio en Ajustes.",
   "error.requestFailed": "Error al llamar a {cmd}",
@@ -514,7 +514,7 @@ const es: CommonMessages = {
   "error.archiveNotZip": "Este archivo no es un ZIP/CBZ válido. Conviértelo a un ZIP/CBZ estándar sin contraseña.",
   "error.archiveEncrypted": "Este comprimido está cifrado o contiene entradas cifradas. Conviértelo a un ZIP/CBZ estándar sin contraseña e impórtalo de nuevo.",
   "error.backupFileMissing": "El archivo de copia no existe o no se puede leer.",
-  "error.backupInvalidFormat": "Este no es un archivo de copia válido de MangaReader.",
+  "error.backupInvalidFormat": "Este no es un archivo de copia válido de Moyu.",
   "error.backupUnsupportedSchema": "La versión del formato de copia no es compatible. Actualiza la aplicación e inténtalo de nuevo.",
   "error.backupIntegrity": "Falló la verificación de integridad. Tu biblioteca actual no se modificó.",
   "error.backupTooLarge": "La copia supera el límite de 1 GiB.",
@@ -529,8 +529,8 @@ const es: CommonMessages = {
 };
 
 const ja: CommonMessages = {
-  "app.title": "MangaReader · 漫画ライブラリ",
-  "nav.brand": "MangaReader 書庫",
+  "app.title": "Moyu · 漫画ライブラリ",
+  "nav.brand": "Moyu 書庫",
   "nav.library": "書庫",
   "nav.continue": "続きを読む",
   "nav.browser": "ブラウザ",
@@ -639,7 +639,7 @@ const ja: CommonMessages = {
   "dbRecovery.healthUnavailable":
     "データベースの状態を読み取れません。データフォルダーを開いてログを確認してください。",
   "dbRecovery.selectTitle": ".mrbackup バックアップを選択",
-  "dbRecovery.filterName": "MangaReader バックアップ",
+  "dbRecovery.filterName": "Moyu バックアップ",
   "cache.writeFailed":
     "キャッシュの書き込みに失敗しました。ディスクが満杯の可能性があります。読書には影響しません。設定でキャッシュを消去するか、空き容量を確保してください。",
   "error.requestFailed": "{cmd} の呼び出しに失敗しました",
@@ -649,7 +649,7 @@ const ja: CommonMessages = {
   "error.archiveNotZip": "このファイルは有効な ZIP/CBZ 圧縮ファイルではありません。パスワードなしの標準 ZIP/CBZ に変換してください。",
   "error.archiveEncrypted": "この圧縮ファイルは暗号化されているか、暗号化されたエントリを含みます。パスワードなしの標準 ZIP/CBZ に変換してから読み込んでください。",
   "error.backupFileMissing": "バックアップファイルが存在しないか、読み取れません。",
-  "error.backupInvalidFormat": "有効な MangaReader バックアップではありません。",
+  "error.backupInvalidFormat": "有効な Moyu バックアップではありません。",
   "error.backupUnsupportedSchema": "このバックアップ形式のバージョンは未対応です。アプリを更新してから再試行してください。",
   "error.backupIntegrity": "バックアップの整合性チェックに失敗しました。現在の書庫は変更されていません。",
   "error.backupTooLarge": "バックアップが 1 GiB の上限を超えています。",
@@ -664,8 +664,8 @@ const ja: CommonMessages = {
 };
 
 const ko: CommonMessages = {
-  "app.title": "MangaReader · 만화 라이브러리",
-  "nav.brand": "MangaReader 서재",
+  "app.title": "Moyu · 만화 라이브러리",
+  "nav.brand": "Moyu 서재",
   "nav.library": "서재",
   "nav.continue": "이어 읽기",
   "nav.browser": "브라우저",
@@ -774,7 +774,7 @@ const ko: CommonMessages = {
   "dbRecovery.healthUnavailable":
     "데이터베이스 상태를 읽을 수 없습니다. 데이터 폴더를 열어 로그를 확인하세요.",
   "dbRecovery.selectTitle": ".mrbackup 백업 선택",
-  "dbRecovery.filterName": "MangaReader 백업",
+  "dbRecovery.filterName": "Moyu 백업",
   "cache.writeFailed":
     "캐시 쓰기에 실패했습니다. 디스크가 가득 찼을 수 있습니다. 읽기에는 영향이 없습니다. 설정에서 캐시를 지우거나 디스크 공간을 확보하세요.",
   "error.requestFailed": "{cmd} 호출 실패",
@@ -784,7 +784,7 @@ const ko: CommonMessages = {
   "error.archiveNotZip": "이 파일은 유효한 ZIP/CBZ 압축 파일이 아닙니다. 암호 없는 표준 ZIP/CBZ로 변환하세요.",
   "error.archiveEncrypted": "이 압축 파일은 암호화되어 있거나 암호화된 항목을 포함합니다. 암호 없는 표준 ZIP/CBZ로 변환한 뒤 다시 가져오세요.",
   "error.backupFileMissing": "백업 파일이 없거나 읽을 수 없습니다.",
-  "error.backupInvalidFormat": "유효한 MangaReader 백업 파일이 아닙니다.",
+  "error.backupInvalidFormat": "유효한 Moyu 백업 파일이 아닙니다.",
   "error.backupUnsupportedSchema": "지원하지 않는 백업 형식 버전입니다. 앱을 업데이트한 뒤 다시 시도하세요.",
   "error.backupIntegrity": "백업 무결성 검사에 실패했습니다. 현재 서재는 변경되지 않았습니다.",
   "error.backupTooLarge": "백업 파일이 1 GiB 한도를 초과했습니다.",

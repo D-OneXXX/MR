@@ -111,7 +111,7 @@ jobs:
 
       # 直接 zip 已升级 9.1.1；Tauri updater 2.14.0 仍带 zip 4.6.1，
       # 其 extract 仅用于 .zip 更新包，当前 NSIS 通道不触发。
-      # 例外必须在 docs/TECHNICAL.md 记录，不得无理由新增。
+      # 例外必须在内部技术文档（维护者本地维护）记录，不得无理由新增。
       - name: Cargo audit (blocking with documented updater zip exceptions)
         run: |
           cargo audit --file src-tauri/Cargo.lock \

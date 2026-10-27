@@ -53,7 +53,7 @@ The fingerprint exists so that bugs introduced by third-party modifications are
 not misattributed to official builds. When reporting a bug, attach the
 diagnostics snapshot so the build origin is unambiguous. Community builds
 receive **no official updater signatures**; the community build script
-(`npm run build:community`, see `docs/TECHNICAL.md`) disables updater artifact
+(`npm run build:community`) disables updater artifact
 generation automatically so unsigned local builds compile out of the box.
 
 ## 4. Update channels

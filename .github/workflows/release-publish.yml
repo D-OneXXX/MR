@@ -241,7 +241,7 @@ jobs:
             `- Same identity self-review: \`${same ? "YES — process-only separation" : "no"}\``,
             "",
             "当前 Environment 允许 self-review；若 actor 与 approver 相同，AI 与维护者共用身份时无法技术区分。",
-            "要获得技术隔离，请维护者配置 GitHub App/第二账号审批身份（见 docs/dev/RELEASE_APPROVAL_BOUNDARY.md）。",
+            "要获得技术隔离，请维护者配置 GitHub App/第二账号审批身份（见维护者本地发布审批文档）。",
           ];
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
           console.log(lines.join("\n"));
@@ -261,7 +261,7 @@ jobs:
           TAG: ${{ steps.identity.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release edit "$TAG" --draft=false --verify-tag --title "MangaReader $TAG"
+          gh release edit "$TAG" --draft=false --verify-tag --title "Moyu $TAG"
 
       - name: Channel hand-off (carry the other channel manifest)
         if: steps.state.outputs.published != 'true'

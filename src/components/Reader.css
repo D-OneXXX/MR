@@ -130,6 +130,18 @@
 .reader-spin { animation: reader-rot 0.9s linear infinite; }
 @keyframes reader-rot { to { transform: rotate(360deg); } }
 
+/* ============ PDF 适应宽度 ============ */
+/* 整宽模式：页宽铺满画布，整页高度可以溢出视口，
+   超出部分用阅读器既有的拖拽平移查看（画布 overflow:hidden 负责裁切）。
+   整页模式沿用 `.reader-cell` 的居中 + `.reader-img` 的 contain 约束。 */
+.reader-cell-pdf-width {
+  align-items: flex-start;
+}
+.reader-img-pdf-width {
+  max-height: none;
+  height: auto;
+}
+
 /* ============ 条漫模式 ============ */
 /* 纵向滚动容器：深色画布 + 滚动锚定。切片高度在布局阶段就固定，
    图片加载/解码不会改变 total height，浏览器锚定只作兜底。 */

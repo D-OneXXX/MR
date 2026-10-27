@@ -22,6 +22,7 @@ import {
 import { runStaticSuite } from "./suites/static.mjs";
 import { runVisualSuite } from "./suites/visual.mjs";
 import { runReaderSuite } from "./suites/reader.mjs";
+import { runPdfSuite } from "./suites/pdf.mjs";
 import { runOnlineSuite } from "./suites/online.mjs";
 import { runCacheSuite } from "./suites/cache.mjs";
 import { runPrivacySuite } from "./suites/privacy.mjs";
@@ -41,10 +42,13 @@ const KB_PATH = path.join(QA_ROOT, "qa-knowledge-base.json");
 const CDP_PORT = Number(process.env.QA_CDP_PORT || "9334");
 const KEEP_DATA = process.argv.includes("--keep-data");
 const ONLY = process.argv.find((arg) => arg.startsWith("--suite="))?.split("=")[1];
+/** --suite=a,b 可一次跑多个套件（同一应用实例），用于跨套件串扰排查。 */
+const ONLY_LIST = ONLY ? ONLY.split(",").map((name) => name.trim()).filter(Boolean) : null;
 /** 需要拉起隔离应用（而不是只跑静态检查）的 suite 白名单。 */
 const E2E_SUITES = new Set([
   "visual",
   "reader",
+  "pdf",
   "online",
   "cache",
   "privacy",
@@ -133,6 +137,41 @@ function okInfra(report, id, title) {
   });
 }
 
+/**
+ * 把工作区重置失败记录成该套件的基础设施缺陷。
+ *
+ * `ctx.resetWorkspace()` 失败时会往 `ctx.resetFailures` 留档，因此即便某个套件
+ * 用 `.catch(() => {})` 把异常吞了，这里也能把它捞出来——重置失败绝不能静默。
+ */
+const resetFailureCounts = new Map();
+
+function recordResetFailures(report, ctx, suiteId) {
+  const pending = Array.isArray(ctx?.resetFailures) ? ctx.resetFailures.splice(0) : [];
+  pending.forEach((failure) => {
+    const seen = (resetFailureCounts.get(suiteId) ?? 0) + 1;
+    resetFailureCounts.set(suiteId, seen);
+    const id =
+      seen === 1
+        ? `qa:workspace-reset:${suiteId}`
+        : `qa:workspace-reset:${suiteId}#${seen}`;
+    fail(report, {
+      id,
+      suite: suiteId,
+      layer: "infrastructure",
+      title: `工作区重置失败：套件 ${suiteId} 可能运行在脏状态`,
+      severity: "P2",
+      details: failure.stack || failure.message,
+      location: "tests/qa/lib/app.mjs",
+      rootCause: "页面重载后主窗口未恢复，或阅读器在卸载时崩溃",
+      fix: "修复重置流程后重跑；若同一套件反复重置失败，按 P1 升级处理",
+    });
+    note(
+      report,
+      `工作区重置失败（${suiteId}）：${failure.message}；该套件继续执行，结果需结合这条缺陷判读。`,
+    );
+  });
+}
+
 async function runOne(report, ctx, suite) {
   try {
     await suite.run(ctx, report);
@@ -167,7 +206,7 @@ async function main() {
   const staticResult = { id: "static", title: "静态与版本红线", run: runStaticSuite };
   await runOne(report, { root: ROOT, artifactDir: ARTIFACT_ROOT }, staticResult);
 
-  if (ONLY && !E2E_SUITES.has(ONLY)) {
+  if (ONLY_LIST && !ONLY_LIST.some((name) => E2E_SUITES.has(name))) {
     finalize(report);
     return;
   }
@@ -191,6 +230,7 @@ async function main() {
     const suites = [
       { id: "visual", title: "双主题与六语种排版", run: runVisualSuite },
       { id: "reader", title: "阅读器与条漫压测", run: runReaderSuite },
+      { id: "pdf", title: "PDF 渲染、进度与安全策略", run: runPdfSuite },
       { id: "online", title: "在线直读与噪音过滤", run: runOnlineSuite },
       { id: "cache", title: "磁盘缓存上限与清理隔离", run: runCacheSuite },
       { id: "privacy", title: "隐私脱敏与版本展示", run: runPrivacySuite },
@@ -200,16 +240,36 @@ async function main() {
           "架构宪法回归（路由兜底 / 存储清洗 / 快捷键隔离 / 超高条漫逻辑页 / 设置 5 分区与深链 / 后置 i18n）",
         run: runArchitectureSuite,
       },
-    ].filter((suite) => !ONLY || suite.id === ONLY);
+    ].filter((suite) => !ONLY_LIST || ONLY_LIST.includes(suite.id));
     for (const suite of suites) {
       console.log(`[qa] running ${suite.id} — ${suite.title}`);
+      // 每个套件开始前重置工作区页签：阅读页签有数量上限，上一个套件开满页签会让
+      // 下一个套件的路由跳转被「回退到上一个页签」静默拒绝。
+      //
+      // 重置失败必须**显式记录**成该套件的基础设施缺陷，不能静默吞掉：
+      // 吞掉既会让套件在脏状态（页签没清干净）下跑出误导性结果，也会掩盖
+      // 「阅读器卸载即崩溃」这类真实缺陷。但它不能中断整轮 QA，所以只记录不抛出。
+      try {
+        await ctx.resetWorkspace();
+      } catch (error) {
+        note(
+          report,
+          `工作区重置失败（${suite.id}）：${error.message}；该套件继续执行，结果需结合这条缺陷判读。`,
+        );
+      }
+      recordResetFailures(report, ctx, suite.id);
       await runOne(report, ctx, suite);
+      // 套件内部自己调用 resetWorkspace 时可能仍把异常吞掉：
+      // 这里再扫一次兜底记录，确保重置失败不会从报告里消失。
+      recordResetFailures(report, ctx, suite.id);
     }
 
     // 混沌套件最后在**全新应用实例 + 独立数据目录**上运行：它会冻结
     // 主线程并重建窗口，既不能污染后续套件，也不应继承前面压测留下的
     // 半僵死 WebView 状态（否则偶发 CDP Runtime.evaluate 超时）。
-    if (!ONLY || ONLY === "chaos") {
+    if (!ONLY_LIST || ONLY_LIST.includes("chaos")) {
+      // 换实例前把旧实例残留的重置失败记录捞干净，别随实例一起丢掉。
+      recordResetFailures(report, ctx, "chaos");
       await ctx.close().catch(() => {});
       await new Promise((resolve) => setTimeout(resolve, 1200));
       ctx = await startQaApp({
@@ -227,6 +287,8 @@ async function main() {
         title: "混沌、安全模式与恢复",
         run: runChaosSuite,
       });
+      // 混沌套件内部也会重置工作区：失败同样要落到报告里。
+      recordResetFailures(report, ctx, "chaos");
     }
   } catch (error) {
     fail(report, {

@@ -118,6 +118,17 @@ const zhCN = {
   "reader.cover.label": "首页封面",
   "reader.cover.on": "单独成页",
   "reader.cover.off": "成对拼合",
+
+  "reader.pdf.opening": "正在打开 PDF…",
+  "reader.pdf.errorTitle": "无法打开这个 PDF",
+  "reader.pdf.fit.label": "PDF 适配",
+  "reader.pdf.fit.page": "整页",
+  "reader.pdf.fit.width": "整宽",
+  "reader.pdf.fit.hint": "整页：整张纸都在画面内；整宽：页宽铺满，超出部分用拖拽查看。",
+  "reader.pdf.mode.reason": "PDF 文档只有单页版式",
+  "reader.pdf.mode.note": "PDF 文档只有单页版式，不支持双页与条漫。",
+  "reader.pdf.toc.page": "第 {page} 页",
+  "reader.pdf.pageCount": "共 {count} 页",
 } as const;
 
 type ReaderMessages = { [K in keyof typeof zhCN]: string };
@@ -238,6 +249,17 @@ const zhTW: ReaderMessages = {
   "reader.cover.label": "首頁封面",
   "reader.cover.on": "單獨成頁",
   "reader.cover.off": "成對拼合",
+
+  "reader.pdf.opening": "正在開啟 PDF…",
+  "reader.pdf.errorTitle": "無法開啟這個 PDF",
+  "reader.pdf.fit.label": "PDF 適配",
+  "reader.pdf.fit.page": "整頁",
+  "reader.pdf.fit.width": "整寬",
+  "reader.pdf.fit.hint": "整頁：整張紙都在畫面內；整寬：頁寬鋪滿，超出部分用拖曳查看。",
+  "reader.pdf.mode.reason": "PDF 文件只有單頁版式",
+  "reader.pdf.mode.note": "PDF 文件只有單頁版式，不支援雙頁與條漫。",
+  "reader.pdf.toc.page": "第 {page} 頁",
+  "reader.pdf.pageCount": "共 {count} 頁",
 };
 
 const en: ReaderMessages = {
@@ -356,6 +378,17 @@ const en: ReaderMessages = {
   "reader.cover.label": "First page",
   "reader.cover.on": "Solo cover",
   "reader.cover.off": "Paired from page 1",
+
+  "reader.pdf.opening": "Opening PDF…",
+  "reader.pdf.errorTitle": "This PDF could not be opened",
+  "reader.pdf.fit.label": "PDF fit",
+  "reader.pdf.fit.page": "Page",
+  "reader.pdf.fit.width": "Width",
+  "reader.pdf.fit.hint": "Page keeps the whole sheet visible; Width fills the viewport and the overflow is reached by dragging.",
+  "reader.pdf.mode.reason": "PDF documents are single page only",
+  "reader.pdf.mode.note": "PDF documents are single page only — double page and webtoon are unavailable.",
+  "reader.pdf.toc.page": "Page {page}",
+  "reader.pdf.pageCount": "{count} pages",
 };
 
 const es: ReaderMessages = {
@@ -474,6 +507,17 @@ const es: ReaderMessages = {
   "reader.cover.label": "Primera página",
   "reader.cover.on": "Portada sola",
   "reader.cover.off": "En parejas desde la página 1",
+
+  "reader.pdf.opening": "Abriendo el PDF…",
+  "reader.pdf.errorTitle": "No se pudo abrir este PDF",
+  "reader.pdf.fit.label": "Ajuste del PDF",
+  "reader.pdf.fit.page": "Página",
+  "reader.pdf.fit.width": "Ancho",
+  "reader.pdf.fit.hint": "Página mantiene la hoja completa visible; Ancho llena la ventana y el resto se alcanza arrastrando.",
+  "reader.pdf.mode.reason": "Los documentos PDF solo admiten una página",
+  "reader.pdf.mode.note": "Los documentos PDF solo admiten una página: no hay doble página ni webtoon.",
+  "reader.pdf.toc.page": "Página {page}",
+  "reader.pdf.pageCount": "{count} páginas",
 };
 
 const ja: ReaderMessages = {
@@ -592,6 +636,17 @@ const ja: ReaderMessages = {
   "reader.cover.label": "最初のページ",
   "reader.cover.on": "単独ページ",
   "reader.cover.off": "1 ページ目から見開き",
+
+  "reader.pdf.opening": "PDF を開いています…",
+  "reader.pdf.errorTitle": "この PDF を開けませんでした",
+  "reader.pdf.fit.label": "PDF の表示",
+  "reader.pdf.fit.page": "全体",
+  "reader.pdf.fit.width": "幅",
+  "reader.pdf.fit.hint": "全体は用紙全体を表示します。幅は画面幅いっぱいに表示し、余りはドラッグで確認します。",
+  "reader.pdf.mode.reason": "PDF は単ページ表示のみです",
+  "reader.pdf.mode.note": "PDF は単ページ表示のみです。見開きと縦読みは使えません。",
+  "reader.pdf.toc.page": "{page} ページ",
+  "reader.pdf.pageCount": "全 {count} ページ",
 };
 
 const ko: ReaderMessages = {
@@ -710,6 +765,17 @@ const ko: ReaderMessages = {
   "reader.cover.label": "첫 페이지",
   "reader.cover.on": "단독 페이지",
   "reader.cover.off": "1페이지부터 짝으로 묶기",
+
+  "reader.pdf.opening": "PDF를 여는 중…",
+  "reader.pdf.errorTitle": "이 PDF를 열 수 없습니다",
+  "reader.pdf.fit.label": "PDF 표시 방식",
+  "reader.pdf.fit.page": "페이지",
+  "reader.pdf.fit.width": "너비",
+  "reader.pdf.fit.hint": "페이지는 용지 전체를 화면에 담고, 너비는 화면 너비에 맞춥니다. 넘치는 부분은 끌어서 확인합니다.",
+  "reader.pdf.mode.reason": "PDF 문서는 단일 페이지만 지원합니다",
+  "reader.pdf.mode.note": "PDF 문서는 단일 페이지만 지원합니다. 양면 페이지와 웹툰은 사용할 수 없습니다.",
+  "reader.pdf.toc.page": "{page}페이지",
+  "reader.pdf.pageCount": "총 {count}페이지",
 };
 
 export const readerMessages = {

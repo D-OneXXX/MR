@@ -521,6 +521,8 @@ pub fn upsert_online_book(
 ///
 /// - 保留 `scroll_pct` / `updated_at` / `source_type` / `meta_json` / `format`，清 `removed`；
 /// - `current_page` 按新页数钳制（`MIN(current_page, page_count-1)`）；
+///   **页数未知（`page_count == 0`，PDF 重定位恒如此）时保持原值不动**，
+///   否则一次「文件搬家」就会把阅读进度清零；
 /// - 阅读历史随书迁移：同日冲突取 `SUM(existing, migrated)`，两段阅读都保留；
 /// - 过滤事件尽力迁移（唯一索引冲突忽略），不阻断主流程。
 pub fn relocate_book(
@@ -564,16 +566,27 @@ fn relocate_book_inner(
     // 前校验，等下面把子行合并/迁移到新 id 后再统一验证。
     tx.execute_batch("PRAGMA defer_foreign_keys=ON")?;
     // format=None 时**不碰** format 列：沿用原书的来源格式，绝不静默重置。
+    //
+    // 页数语义（两个分支一致）：
+    // - `?5 > 0`（页数已知）：写入新页数，并把 current_page 钳到 `?5 - 1`；
+    // - `?5 = 0`（页数未知，PDF 重定位恒如此）：**原样保留** page_count 与
+    //   current_page。旧实现无条件写 `MIN(current_page, MAX(?5-1,0))`，
+    //   在页数未知时等于把阅读进度清零——一次「文件搬家」就会毁掉 PDF 的
+    //   阅读位置（AGENTS.md §5「失效路径无损重定位」）。
     let updated = match format {
         Some(format) => tx.execute(
-            "UPDATE books SET id=?2, path=?3, title=?4, page_count=?5,
-                current_page=MIN(current_page, MAX(?5 - 1, 0)), removed=0, format=?6
+            "UPDATE books SET id=?2, path=?3, title=?4,
+                page_count=CASE WHEN ?5 > 0 THEN ?5 ELSE page_count END,
+                current_page=CASE WHEN ?5 > 0 THEN MIN(current_page, ?5 - 1) ELSE current_page END,
+                removed=0, format=?6
              WHERE id=?1",
             params![old_id, new_id, path, title, page_count as i64, format],
         )?,
         None => tx.execute(
-            "UPDATE books SET id=?2, path=?3, title=?4, page_count=?5,
-                current_page=MIN(current_page, MAX(?5 - 1, 0)), removed=0
+            "UPDATE books SET id=?2, path=?3, title=?4,
+                page_count=CASE WHEN ?5 > 0 THEN ?5 ELSE page_count END,
+                current_page=CASE WHEN ?5 > 0 THEN MIN(current_page, ?5 - 1) ELSE current_page END,
+                removed=0
              WHERE id=?1",
             params![old_id, new_id, path, title, page_count as i64],
         )?,
@@ -728,6 +741,26 @@ pub fn set_progress(
         )?;
     }
     tx.commit()?;
+    Ok(())
+}
+
+/// 只更新 `books.page_count`（PDF-2）：其余列一个都不动。
+///
+/// 用途：前端 PDF.js 解析出真实页数后回写（PDF 导入时页数留 0）。
+/// 刻意**不**触碰 `id` / `path` / `format` / `current_page` / `scroll_pct` /
+/// `updated_at`：页数变化不得影响阅读进度，也不得把书从书库里「改头换面」。
+pub fn set_book_page_count(
+    conn: &Connection,
+    id: &str,
+    page_count: u32,
+) -> Result<(), BackendError> {
+    let updated = conn.execute(
+        "UPDATE books SET page_count=?2 WHERE id=?1",
+        params![id, page_count as i64],
+    )?;
+    if updated == 0 {
+        return Err(BackendError::Msg("书籍不存在".into()));
+    }
     Ok(())
 }
 
@@ -1724,6 +1757,61 @@ mod tests {
         assert!(get_book(&conn, "x").unwrap().is_none());
     }
 
+    /// 页数未知（`page_count == 0`）时重定位**不得**清零页数与阅读进度。
+    ///
+    /// PDF 重定位恒传 `page_count = 0`（后端不解析 PDF 页数），
+    /// 旧实现无条件写 `MIN(current_page, MAX(0-1,0))` = 0，
+    /// 等于一次「文件搬家」就毁掉 PDF 的阅读位置（AGENTS.md §5）。
+    #[test]
+    fn relocate_book_keeps_progress_when_page_count_is_unknown() {
+        let conn = mem();
+        // Some(format) 分支：PDF 重定位。
+        upsert_book_with_format(&conn, "old", "p/old.pdf", "旧 PDF", 42, BOOK_FORMAT_PDF).unwrap();
+        set_progress(&conn, "old", 37, None).unwrap();
+
+        let row = relocate_book_with_format(
+            &conn,
+            "old",
+            "new",
+            "q/新书.pdf",
+            "新书",
+            0,
+            BOOK_FORMAT_PDF,
+        )
+        .unwrap();
+        assert_eq!(row.page_count, 42, "页数未知时不得把 page_count 清零");
+        assert_eq!(row.current_page, 37, "页数未知时不得把阅读进度清零");
+        assert_eq!(row.format, BOOK_FORMAT_PDF);
+
+        // None 分支：普通书重定位（页数同样未知）也必须保留进度。
+        upsert_book(&conn, "b1", "p/b1", "普通书", 30).unwrap();
+        set_progress(&conn, "b1", 12, None).unwrap();
+        let row = relocate_book(&conn, "b1", "b2", "q/新书.cbz", "新书", 0).unwrap();
+        assert_eq!(row.page_count, 30, "页数未知时不得把 page_count 清零");
+        assert_eq!(row.current_page, 12, "页数未知时不得把阅读进度清零");
+    }
+
+    /// 页数已知时钳制语义保持不变（图片书 37 → 9）。
+    #[test]
+    fn relocate_book_still_clamps_progress_when_page_count_is_known() {
+        let conn = mem();
+        upsert_book(&conn, "old", "p/old", "旧书", 42).unwrap();
+        set_progress(&conn, "old", 37, None).unwrap();
+
+        let row = relocate_book(&conn, "old", "new", "q/新书.cbz", "新书", 10).unwrap();
+        assert_eq!(row.page_count, 10, "页数已知时必须写入新页数");
+        assert_eq!(row.current_page, 9, "页数缩小时 current_page 必须被钳制");
+
+        // PDF 分支同样保持钳制语义。
+        upsert_book_with_format(&conn, "p1", "p/p1.pdf", "旧 PDF", 42, BOOK_FORMAT_PDF).unwrap();
+        set_progress(&conn, "p1", 37, None).unwrap();
+        let row =
+            relocate_book_with_format(&conn, "p1", "p2", "q/新书.pdf", "新书", 10, BOOK_FORMAT_PDF)
+                .unwrap();
+        assert_eq!(row.page_count, 10);
+        assert_eq!(row.current_page, 9, "页数已知时仍必须钳制到最后一页");
+    }
+
     /* ---------------- 跨版本数据兼容（升级 / 回滚安全性） ---------------- */
 
     /// 造一个「旧版本留下的」书库文件：books 缺列、reading_log 是 (date) 主键形态、
@@ -2044,5 +2132,79 @@ mod tests {
             assert_eq!(schema_version(&conn).unwrap(), 2);
         }
         cleanup_db_files(&path);
+    }
+
+    /* ---------------- PDF-2：books.page_count 回写 ---------------- */
+
+    /// `set_book_page_count` 只改 `page_count`：id / path / format / 进度 /
+    /// 滚动偏移 / updated_at 一律保持原值（PDF-2：前端 PDF.js 解析出页数后回写）。
+    #[test]
+    fn set_book_page_count_only_touches_page_count() {
+        let conn = mem();
+        upsert_book_with_format(
+            &conn,
+            "p1",
+            "C:/Books/Comic.pdf",
+            "Comic",
+            0,
+            BOOK_FORMAT_PDF,
+        )
+        .unwrap();
+        set_progress(&conn, "p1", 0, None).unwrap();
+        // 固定 updated_at，便于断言「不被改动」。
+        conn.execute(
+            "UPDATE books SET updated_at='2026-01-01 00:00:00', scroll_pct=0.25 WHERE id='p1'",
+            [],
+        )
+        .unwrap();
+
+        let before = get_book(&conn, "p1").unwrap().expect("PDF 书存在");
+        set_book_page_count(&conn, "p1", 42).unwrap();
+        let after = get_book(&conn, "p1").unwrap().expect("PDF 书仍在");
+
+        assert_eq!(after.page_count, 42, "页数必须被写入");
+        assert_eq!(after.id, before.id, "id 不得改变");
+        assert_eq!(after.path, before.path, "path 不得改变");
+        assert_eq!(after.title, before.title, "title 不得改变");
+        assert_eq!(after.format, before.format, "format 不得改变");
+        assert_eq!(after.current_page, before.current_page, "阅读进度不得改变");
+        assert_eq!(after.scroll_pct, before.scroll_pct, "滚动偏移不得改变");
+        assert_eq!(after.updated_at, before.updated_at, "updated_at 不得改变");
+        assert_eq!(after.source_type, before.source_type, "来源类型不得改变");
+
+        // 不存在的书 → 报错，不静默成功。
+        assert!(set_book_page_count(&conn, "missing", 3).is_err());
+    }
+
+    /// 页数回写不得影响阅读历史与其它书。
+    #[test]
+    fn set_book_page_count_does_not_touch_reading_history() {
+        let conn = mem();
+        upsert_book_with_format(&conn, "p1", "p/1.pdf", "一", 0, BOOK_FORMAT_PDF).unwrap();
+        upsert_book(&conn, "b2", "p/b2", "二", 10).unwrap();
+        set_progress(&conn, "p1", 0, None).unwrap();
+        set_progress(&conn, "b2", 4, None).unwrap();
+
+        set_book_page_count(&conn, "p1", 7).unwrap();
+
+        assert_eq!(
+            get_book(&conn, "p1").unwrap().unwrap().page_count,
+            7,
+            "PDF 页数必须落库"
+        );
+        assert_eq!(
+            get_book(&conn, "b2").unwrap().unwrap().page_count,
+            10,
+            "其它书的页数不得被影响"
+        );
+        assert!(
+            reading_log_days(&conn, Some("p1"), 7).unwrap().is_empty(),
+            "页数回写不得凭空写出阅读历史"
+        );
+        assert_eq!(
+            reading_log_days(&conn, Some("b2"), 7).unwrap(),
+            vec![(today_str(), 4)],
+            "其它书的阅读历史不得被影响"
+        );
     }
 }

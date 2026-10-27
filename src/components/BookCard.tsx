@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, BookOpen, Check, Layers } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { api, type BookInfo } from "@/lib/tauri";
+import { ensurePdfCover, hasPdfErrorCode } from "@/features/pdf";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -79,14 +80,25 @@ export default function BookCard({
     let alive = true;
     setCover(null);
     setCoverLoading(true);
+    const isPdf = book.format === "pdf";
     api.getThumbnail(book.id, 256).then(
       (img) => {
         if (!alive) return;
         setCover(img.dataUrl);
         setCoverLoading(false);
       },
-      () => {
+      (error) => {
         if (!alive) return;
+        // PDF：封面缺失不是错误——用 pdf.js 渲染首页并回写缓存。
+        // 封面生成走模块级串行队列，整座书库同一时刻只开一份 PDF。
+        if (isPdf && hasPdfErrorCode(error, "pdf-cover-missing")) {
+          void ensurePdfCover(book.id, 256).then((dataUrl) => {
+            if (!alive) return;
+            setCover(dataUrl);
+            setCoverLoading(false);
+          });
+          return;
+        }
         setCover(null);
         setCoverLoading(false);
       },
@@ -94,7 +106,7 @@ export default function BookCard({
     return () => {
       alive = false;
     };
-  }, [book.id, inView]);
+  }, [book.id, book.format, inView]);
 
   const pct =
     book.pageCount > 0

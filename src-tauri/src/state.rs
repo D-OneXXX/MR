@@ -555,11 +555,12 @@ impl AppState {
             })
             .map_err(crate::source::BackendError::Msg)?;
 
-        // PDF-1：PDF 只做识别与入库，尚无渲染器（PDF-2）。
+        // PDF-2：PDF 不进入 ZIP/图片取页管线（页面由前端 PDF.js 渲染）。
         // 在取页口统一拦下，避免用 ZIP/图片源的逻辑误读 PDF。
+        // 稳定错误码 `pdf-source-unsupported`（前端据此提示「该 PDF 不支持按图片取页」）。
         if format == crate::db::BOOK_FORMAT_PDF {
             return Err(crate::source::BackendError::Msg(
-                "PDF 阅读功能尚未实现（pdf-render-unsupported）".into(),
+                "PDF 源不支持按图片取页（pdf-source-unsupported）".into(),
             ));
         }
 

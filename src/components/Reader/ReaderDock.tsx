@@ -54,6 +54,10 @@ interface Props {
   mode: PageMode;
   webtoonAllowed: boolean;
   webtoonReason: string;
+  /** 双页模式是否可用（PDF 文档只有单页版式）。 */
+  doubleAllowed: boolean;
+  /** 双页模式不可用的原因（点击时提示）。 */
+  doubleReason: string;
   modeLocked?: boolean;
   onMode: (mode: PageMode) => void;
   /** 双页模式「首页封面单独成页」开关（仅 double 模式显示）。 */
@@ -86,6 +90,8 @@ export default function ReaderDock({
   mode,
   webtoonAllowed,
   webtoonReason,
+  doubleAllowed = true,
+  doubleReason = "",
   modeLocked = false,
   onMode,
   coverOffset,
@@ -144,19 +150,22 @@ export default function ReaderDock({
           role="group"
           aria-label={t("reader.mode.group")}
         >
-          {!webtoonAllowed && (
-            <span id="reader-webtoon-disabled-reason" className="sr-only">
-              {webtoonReason}
+          {!webtoonAllowed || !doubleAllowed ? (
+            <span id="reader-mode-disabled-reason" className="sr-only">
+              {!doubleAllowed ? doubleReason : webtoonReason}
             </span>
-          )}
+          ) : null}
           {MODES.map(({ key, labelKey, shortKey }) => {
             const disabled =
               (modeLocked && key !== "single") ||
+              (key === "double" && !doubleAllowed) ||
               (key === "webtoon" && !webtoonAllowed);
             const label = t(labelKey);
             const disabledReason = modeLocked
               ? t("safeMode.readerLocked")
-              : webtoonReason;
+              : key === "double" && !doubleAllowed
+                ? doubleReason
+                : webtoonReason;
             return (
               <Button
                 key={key}
@@ -172,7 +181,7 @@ export default function ReaderDock({
                 }}
                 aria-disabled={disabled}
                 aria-describedby={
-                  disabled ? "reader-webtoon-disabled-reason" : undefined
+                  disabled ? "reader-mode-disabled-reason" : undefined
                 }
                 aria-pressed={mode === key}
                 title={
@@ -235,6 +244,7 @@ export default function ReaderDock({
               buttonVariants({ variant: "pill-ghost", size: "icon" }),
               moreOpen && "bg-accent text-accent-foreground",
             )}
+            data-testid="reader-more-open"
             aria-label={t("reader.more")}
             title={t("reader.more")}
           >
@@ -250,6 +260,7 @@ export default function ReaderDock({
             <button
               type="button"
               className={cn(MENU_ITEM, settingsOpen && "bg-accent")}
+              data-testid="reader-settings-open"
               onClick={onSettings}
             >
               <Settings className="size-4 text-muted-foreground" />

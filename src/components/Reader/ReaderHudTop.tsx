@@ -93,6 +93,7 @@ export default function ReaderHudTop({
           size="icon"
           onClick={() => onZoom(1 / 1.25)}
           disabled={zoom <= minZoom + 1e-6}
+          data-testid="reader-zoom-out"
           aria-label={t("reader.hud.zoomOut")}
           title={t("reader.hud.zoomOut")}
         >
@@ -103,6 +104,7 @@ export default function ReaderHudTop({
           size="icon"
           onClick={() => onZoom(1.25)}
           disabled={zoom >= maxZoom - 1e-6}
+          data-testid="reader-zoom-in"
           aria-label={t("reader.hud.zoomIn")}
           title={t("reader.hud.zoomIn")}
         >

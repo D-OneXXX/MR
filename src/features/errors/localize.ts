@@ -30,6 +30,8 @@ const STABLE_ERROR_CODES: ReadonlyArray<{ code: string; key: string }> = [
   { code: "update-unsupported-format", key: "error.updateUnsupportedFormat" },
   { code: "non-utf8-path", key: "error.nonUtf8Path" },
   { code: "online-page-count-drop", key: "error.onlinePageCountDrop" },
+  { code: "pdf-not-valid", key: "error.pdfNotValid" },
+  { code: "pdf-render-unsupported", key: "error.pdfRenderUnsupported" },
 ];
 
 /**

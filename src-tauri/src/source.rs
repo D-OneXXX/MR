@@ -220,6 +220,56 @@ pub fn is_archive_path(path: &Path) -> bool {
     )
 }
 
+/// PDF 文档魔数：文件头 5 字节 `%PDF-`。
+const PDF_MAGIC: &[u8] = b"%PDF-";
+
+/// 该路径是否是 PDF 文档（仅看扩展名，大小写不敏感）。
+///
+/// - `.pdf` / `.PDF` / `.Pdf` → true；`.cbz` / `.zip` / 无扩展名 → false；
+/// - 目录路径一律 false（目录名带 `.pdf` 后缀也不是 PDF 文档）；
+/// - 不读文件内容：真正的合法性由 `validate_pdf_document` 校验文件头。
+///
+/// PDF 不属于压缩包：`is_archive_path` 保持只认 ZIP/CBZ，二者互不重叠。
+pub fn is_pdf_path(path: &Path) -> bool {
+    if path.is_dir() {
+        return false;
+    }
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("pdf")
+    )
+}
+
+/// 校验该文件确实是 PDF 文档：读取文件头 5 字节，必须是 `%PDF-`。
+///
+/// - 只读文件头，不整包读取、不解析 PDF 结构、不统计页数；
+/// - 文件头不匹配（空文件、截断文件、实为 ZIP 的伪装文件）→ 返回
+///   `BackendError::Msg`，文案尾部带稳定错误码 `（pdf-not-valid）`；
+/// - 读取失败（IO 错误）→ 返回 `BackendError::Io`，不 panic。
+pub fn validate_pdf_document(path: &Path) -> Result<(), BackendError> {
+    use std::io::Read as _;
+    let mut file = File::open(path)?;
+    let mut head = [0u8; 5];
+    let mut filled = 0;
+    while filled < head.len() {
+        match file.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) => return Err(BackendError::Io(e.to_string())),
+        }
+    }
+    if head[..filled].starts_with(PDF_MAGIC) {
+        Ok(())
+    } else {
+        Err(BackendError::Msg(
+            "该文件不是有效的 PDF 文档（pdf-not-valid）".into(),
+        ))
+    }
+}
+
 /// 单页原始字节 + 扩展名提示（供解码器选用）。
 pub struct RawPage {
     pub bytes: Vec<u8>,
@@ -1314,5 +1364,104 @@ mod tests {
             .expect("在线源 header 探测应返回错误")
             .to_string();
         assert_eq!(err, "在线源不支持 header 探测");
+    }
+
+    #[test]
+    fn is_pdf_path_matches_extension_case_insensitively() {
+        use super::is_pdf_path;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("mr-pdf-dir-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        // 扩展名判定与大小写无关（用绝对临时路径，避免 CWD 相对路径歧义）。
+        // 注意：Windows 文件名大小写不敏感，`a.pdf` 与 `A.pdf` 是同一个文件，
+        // 因此大小写用例必须用不同的基名，否则实际只测到同一份文件。
+        for name in ["lower.pdf", "upper.PDF", "mixed.Pdf"] {
+            let p = root.join(name);
+            std::fs::write(&p, b"%PDF-1.7\n").unwrap();
+            assert!(is_pdf_path(&p), "{name} 应被识别为 PDF");
+        }
+        for name in ["archive.cbz", "archive.zip", "noext"] {
+            let p = root.join(name);
+            std::fs::write(&p, b"%PDF-1.7\n").unwrap();
+            assert!(!is_pdf_path(&p), "{name} 不应被识别为 PDF");
+        }
+
+        // 目录路径即便带 `.pdf` 名字也不是 PDF 文档。
+        let dir = root.join("folder.pdf");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!is_pdf_path(&dir), "目录路径不应被识别为 PDF");
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn validate_pdf_document_requires_pdf_magic() {
+        use super::validate_pdf_document;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("mr-pdf-validate-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let write = |name: &str, bytes: &[u8]| {
+            let p = root.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+
+        // 正常 PDF：文件头 `%PDF-`。
+        let ok = write("ok.pdf", b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+        assert!(validate_pdf_document(&ok).is_ok(), "合法 PDF 头应通过");
+
+        // 头部合法但正文是垃圾字节：只校验文件头，不做完整解析。
+        let garbage = write("garbage.pdf", b"%PDF-1.4 this body is not a real pdf");
+        assert!(
+            validate_pdf_document(&garbage).is_ok(),
+            "只校验文件头，正文不解析"
+        );
+
+        // 实为 ZIP 却改了后缀：必须按 pdf-not-valid 拒绝（绝不当压缩包处理）。
+        let fake_zip = write("fake.pdf", &[0x50, 0x4B, 0x03, 0x04, 0x00, 0x00]);
+        let err = validate_pdf_document(&fake_zip).unwrap_err().to_string();
+        assert!(err.contains("pdf-not-valid"), "got: {err}");
+
+        // 空文件：没有文件头 → 拒绝。
+        let empty = write("empty.pdf", b"");
+        let err = validate_pdf_document(&empty).unwrap_err().to_string();
+        assert!(err.contains("pdf-not-valid"), "got: {err}");
+
+        // 截断文件（不足 5 字节）→ 拒绝。
+        let truncated = write("truncated.pdf", b"%PD");
+        let err = validate_pdf_document(&truncated).unwrap_err().to_string();
+        assert!(err.contains("pdf-not-valid"), "got: {err}");
+
+        // 读取失败（文件不存在）→ IO 变体，不是 Msg。
+        let missing = root.join("missing.pdf");
+        let err = validate_pdf_document(&missing).unwrap_err();
+        let text = err.to_string();
+        assert!(matches!(err, super::BackendError::Io(_)), "got: {text}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pdf_paths_are_not_treated_as_archives() {
+        use super::is_archive_path;
+
+        assert!(
+            !is_archive_path(Path::new("book.pdf")),
+            "PDF 不得被当成 ZIP/CBZ 压缩包"
+        );
+        assert!(is_archive_path(Path::new("book.cbz")));
+        assert!(is_archive_path(Path::new("book.zip")));
+        assert!(is_archive_path(Path::new("book.ZIP")));
     }
 }

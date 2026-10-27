@@ -40,6 +40,10 @@ pub(crate) fn err(e: impl ToString) -> String {
 /// 条漫布局会在用户显式进入条漫时按页探测并回写尺寸，因此这里只要求
 /// 有页面；绝不因为缺尺寸就把整本书的条漫能力永久关死。
 fn webtoon_ready(r: &db::BookRow, stored: Option<&crate::online::StoredMeta>) -> bool {
+    // PDF-1：PDF 文档尚无渲染器（PDF-2），条漫能力不适用。
+    if r.format == db::BOOK_FORMAT_PDF {
+        return false;
+    }
     if r.source_type == "local" {
         return true;
     }
@@ -80,6 +84,7 @@ fn to_book_info(r: db::BookRow) -> BookInfo {
         updated_at: r.updated_at,
         scroll_pct: r.scroll_pct,
         source_type: r.source_type,
+        format: r.format,
         webtoon_ready,
         series_id: stored.as_ref().and_then(|m| m.series_id.clone()),
         series_title: stored.as_ref().and_then(|m| m.series_title.clone()),
@@ -361,7 +366,7 @@ fn title_for(path: &Path) -> String {
         return name.to_string();
     }
     match name.rsplit_once('.') {
-        Some((stem, ext)) if ["zip", "cbz"].contains(&ext.to_ascii_lowercase().as_str()) => {
+        Some((stem, ext)) if ["zip", "cbz", "pdf"].contains(&ext.to_ascii_lowercase().as_str()) => {
             stem.to_string()
         }
         _ => name.to_string(),
@@ -397,6 +402,17 @@ fn scan_single_book(conn: &rusqlite::Connection, path: &Path) -> Result<BookInfo
     // Windows 下同一路径的 `/`、`\` 与大小写写法必须落到同一本书。
     let id = db::find_book_id_by_path(conn, &path_str)?
         .unwrap_or_else(|| db::book_id_for_path(&path_str));
+    // PDF-1：PDF 只做**识别与入库**——校验文件头、写入 format='pdf'，
+    // 页数留 0（PDF-2 之前没有阅读能力，也不需要任何 PDF 依赖）。
+    if source::is_pdf_path(path) {
+        source::validate_pdf_document(path)?;
+        let title = title_for(path);
+        db::upsert_book_with_format(conn, &id, &path_str, &title, 0, db::BOOK_FORMAT_PDF)?;
+        let _ = db::clear_source_stamp(conn, &id);
+        return db::get_book(conn, &id)?
+            .ok_or_else(|| BackendError::Msg("入库后回读失败".into()))
+            .map(to_book_info);
+    }
     let stamp = archive_stamp(path);
     if let (Some(stamp), Ok(Some(row))) = (stamp, db::get_book(conn, &id)) {
         if row.source_type == "local"
@@ -472,7 +488,7 @@ fn collect_book_paths(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
         }
         if kid.is_dir() {
             collect_book_paths(&kid, depth + 1, out);
-        } else if source::is_archive_path(&kid) {
+        } else if source::is_archive_path(&kid) || source::is_pdf_path(&kid) {
             out.push(kid);
         }
     }
@@ -492,11 +508,11 @@ fn blocking_scan(
     let mut candidates = Vec::new();
     if path.is_dir() {
         collect_book_paths(&path, 0, &mut candidates);
-    } else if path.is_file() && source::is_archive_path(&path) {
+    } else if path.is_file() && (source::is_archive_path(&path) || source::is_pdf_path(&path)) {
         candidates.push(path.clone());
     } else {
         return Err(BackendError::Msg(format!(
-            "扫描路径无效（需要目录或 .zip/.cbz）：{root}"
+            "扫描路径无效（需要目录或 .zip/.cbz/.pdf）：{root}"
         )));
     }
     let mut seen = std::collections::HashSet::new();
@@ -614,11 +630,11 @@ pub(crate) fn import_blocking(
             continue;
         }
         if p.is_file() {
-            if !source::is_archive_path(&p) {
+            if !source::is_archive_path(&p) && !source::is_pdf_path(&p) {
                 out.push(import_outcome(
                     &path,
                     "failed",
-                    "不支持的文件（需要 .zip/.cbz；图片文件夹请拖文件夹）".into(),
+                    "不支持的文件（需要 .zip/.cbz/.pdf；图片文件夹请拖文件夹）".into(),
                     None,
                 ));
             } else {
@@ -643,7 +659,7 @@ pub(crate) fn import_blocking(
                     out.push(import_outcome(
                         &path,
                         "failed",
-                        "目录中没有可识别的书籍（需要：直下图片 / 含图片的嵌套目录 / zip/cbz）"
+                        "目录中没有可识别的书籍（需要：直下图片 / 含图片的嵌套目录 / zip/cbz/pdf）"
                             .into(),
                         None,
                     ));
@@ -793,21 +809,28 @@ fn relocate_book_impl(
     if !path.exists() {
         return Err(BackendError::Msg("目标路径不存在，请重新选择".to_string()));
     }
-    if path.is_file() && !source::is_archive_path(&path) {
+    if path.is_file() && !source::is_archive_path(&path) && !source::is_pdf_path(&path) {
         return Err(BackendError::Msg(
-            "只支持 .zip/.cbz 压缩包或图片文件夹".to_string(),
+            "只支持 .zip/.cbz 压缩包、.pdf 文档或图片文件夹".to_string(),
         ));
     }
-    let source_handle = source::open_source(&path)?;
-    let page_count = source_handle.page_count()? as u32;
-    if page_count == 0 {
-        return Err(BackendError::Msg(
-            "新位置没有可读图片，无法重定位".to_string(),
-        ));
-    }
-
     let old =
         db::get_book(conn, old_id)?.ok_or_else(|| BackendError::Msg("书籍不存在".to_string()))?;
+    // PDF-1：PDF 目标只做识别与身份迁移，不解析页数（PDF-1 无渲染器，页数记 0）。
+    let (page_count, format) = if source::is_pdf_path(&path) {
+        source::validate_pdf_document(&path)?;
+        (0u32, db::BOOK_FORMAT_PDF.to_string())
+    } else {
+        let source_handle = source::open_source(&path)?;
+        let count = source_handle.page_count()? as u32;
+        if count == 0 {
+            return Err(BackendError::Msg(
+                "新位置没有可读图片，无法重定位".to_string(),
+            ));
+        }
+        (count, db::BOOK_FORMAT_IMAGE.to_string())
+    };
+
     if old.source_type != "local" {
         return Err(BackendError::Msg("只能重定位本地书籍".to_string()));
     }
@@ -818,6 +841,19 @@ fn relocate_book_impl(
     }
     if new_id != old.id && db::get_book(conn, &new_id)?.is_some() {
         return Err(BackendError::Msg("目标路径已在书库中".to_string()));
+    }
+    // 普通书沿用原重定位（format 保持不变）；PDF 走带 format 的变体，
+    // 在同一事务里把来源格式写成 pdf。
+    if format == db::BOOK_FORMAT_PDF {
+        return db::relocate_book_with_format(
+            conn,
+            old_id,
+            &new_id,
+            &dest,
+            &title_for(&path),
+            page_count,
+            &format,
+        );
     }
     db::relocate_book(conn, old_id, &new_id, &dest, &title_for(&path), page_count)
 }
@@ -2887,7 +2923,7 @@ fn sensitive_user_dirs() -> Vec<PathBuf> {
 ///
 /// 规则：
 /// - 必须是绝对路径、当前存在；
-/// - 文件必须是 `.zip`/`.cbz`（绝不删除 library.db、日志或任意普通文件）；
+/// - 文件必须是 `.zip`/`.cbz`/`.pdf`（绝不删除 library.db、日志或任意普通文件）；
 /// - 目录不得是文件系统根、系统目录、用户主目录/文档/桌面/下载等宽目录本身；
 /// - 允许这些目录的**子目录**作为漫画书目录，避免误伤正常书库。
 ///
@@ -2899,7 +2935,12 @@ pub(crate) fn is_safe_library_source_path(path: &Path) -> bool {
     let Some(canon) = canonical_existing(path) else {
         return false;
     };
-    if canon.is_file() && !crate::source::is_archive_path(&canon) {
+    // PDF-1：PDF 是单文件书源，与压缩包同一边界（绝对路径、真实存在、
+    // 不在系统/应用目录内）；其余普通文件仍然一律拒绝删除。
+    if canon.is_file()
+        && !crate::source::is_archive_path(&canon)
+        && !crate::source::is_pdf_path(&canon)
+    {
         return false;
     }
     if canon.parent().is_none() {
@@ -3082,6 +3123,119 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mr-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("创建临时目录");
         dir
+    }
+
+    /// PDF-1：合法 PDF 应被识别并入库，format='pdf'，页数 0（PDF-1 无渲染器）。
+    #[test]
+    fn import_pdf_document_is_recognized_and_stored_with_pdf_format() {
+        let dir = test_temp_dir("import-pdf");
+        let db = dir.join("lib.db");
+        let pdf = dir.join("漫画第一话.pdf");
+        std::fs::write(&pdf, b"%PDF-1.7 header bytes").unwrap();
+
+        let items = import_blocking(db.clone(), vec![pdf.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, "added", "message={}", items[0].message);
+        let book = items[0].book.as_ref().expect("PDF 应返回书籍信息");
+        assert_eq!(book.format, "pdf");
+        assert_eq!(book.source_type, "local");
+        assert_eq!(book.page_count, 0, "PDF-1 不解析页数");
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let row = db::get_book(&conn, &book.id).unwrap().expect("PDF 应入库");
+        assert_eq!(row.format, db::BOOK_FORMAT_PDF);
+        assert_eq!(row.path, pdf.to_string_lossy().to_string());
+        assert_eq!(
+            book.id,
+            db::book_id_for_path(&pdf.to_string_lossy()),
+            "PDF 书 id 必须仍是 sha256(path)"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// PDF-1：魔数不符的 .pdf 必须安全失败，且不得入库、不得被当成压缩包。
+    #[test]
+    fn import_malformed_pdf_fails_safely_without_creating_a_book() {
+        let dir = test_temp_dir("import-bad-pdf");
+        let db = dir.join("lib.db");
+
+        // 1) 内容不是 PDF（伪装成 .pdf 的普通文本）。
+        let fake = dir.join("fake.pdf");
+        std::fs::write(&fake, b"this is not a pdf at all").unwrap();
+        let items = import_blocking(db.clone(), vec![fake.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(items[0].status, "failed");
+        assert!(
+            items[0].message.contains("pdf-not-valid"),
+            "message={}",
+            items[0].message
+        );
+        assert!(items[0].book.is_none());
+
+        // 2) 实际是 ZIP 但改了后缀：既不能当 PDF，也不能当压缩包入库。
+        let disguised = dir.join("disguised.pdf");
+        build_zip(&disguised);
+        let items =
+            import_blocking(db.clone(), vec![disguised.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(items[0].status, "failed");
+        assert!(
+            items[0].message.contains("pdf-not-valid"),
+            "message={}",
+            items[0].message
+        );
+        assert!(items[0].book.is_none());
+
+        // 3) 失败不得留下任何书记录。
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "失败的 PDF 导入不得留下书记录");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// PDF-1 回归：既有 ZIP/CBZ 与图片文件夹导入行为不受影响，且 format 仍是 image。
+    #[test]
+    fn import_archives_and_folders_keep_image_format_after_pdf_introduction() {
+        let dir = test_temp_dir("import-image-regression");
+        let db = dir.join("lib.db");
+        let zip = dir.join("book.zip");
+        build_zip(&zip);
+        let cbz = dir.join("book.cbz");
+        build_zip(&cbz);
+        let folder = dir.join("folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        tiny_png(&folder.join("p1.png"));
+
+        let items = import_blocking(
+            db.clone(),
+            vec![
+                zip.to_string_lossy().to_string(),
+                cbz.to_string_lossy().to_string(),
+                folder.to_string_lossy().to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(items.len(), 3);
+        for item in &items {
+            assert_eq!(item.status, "added", "message={}", item.message);
+            let book = item.book.as_ref().expect("应有书籍信息");
+            assert_eq!(book.format, "image", "既有书源格式必须保持 image");
+        }
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let formats: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT format FROM books ORDER BY id")
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(formats.len(), 3);
+        assert!(formats.iter().all(|f| f == "image"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -3349,6 +3503,7 @@ mod tests {
             scroll_pct: -1.0,
             source_type: "local".into(),
             meta_json: "{}".into(),
+            format: db::BOOK_FORMAT_IMAGE.into(),
         };
         assert!(to_book_info(local).webtoon_ready);
 
@@ -3357,6 +3512,7 @@ mod tests {
             page_count: 2, current_page: 0, updated_at: String::new(),
             scroll_pct: -1.0, source_type: "generic_manga".into(),
             meta_json: r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg","width":800,"height":1200},{"url":"http://x/2.jpg"}]}"#.into(),
+            format: db::BOOK_FORMAT_IMAGE.into(),
         };
         // 缺尺寸不再永久关闭条漫：进入条漫时按页探测并回写。
         assert!(to_book_info(online).webtoon_ready);
@@ -3366,6 +3522,7 @@ mod tests {
             page_count: 1, current_page: 0, updated_at: String::new(),
             scroll_pct: -1.0, source_type: "generic_manga".into(),
             meta_json: r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg","width":800,"height":1200}]}"#.into(),
+            format: db::BOOK_FORMAT_IMAGE.into(),
         };
         assert!(to_book_info(online_ok).webtoon_ready);
 
@@ -3380,6 +3537,7 @@ mod tests {
             scroll_pct: -1.0,
             source_type: "generic_manga".into(),
             meta_json: "{not-json".into(),
+            format: db::BOOK_FORMAT_IMAGE.into(),
         };
         assert!(!to_book_info(corrupt).webtoon_ready);
     }
@@ -3881,6 +4039,7 @@ mod tests {
             scroll_pct: -1.0,
             source_type: source_type.into(),
             meta_json: "{}".into(),
+            format: db::BOOK_FORMAT_IMAGE.into(),
         }
     }
 

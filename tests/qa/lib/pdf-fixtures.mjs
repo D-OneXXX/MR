@@ -38,6 +38,9 @@ const PAD = Buffer.from([
 ]);
 
 function md5(...buffers) {
+  // PDF 32000-1 的 RC4 标准安全处理器**规定**使用 MD5；这里仅用于生成
+  // 「加密 PDF 必须被拒绝」的测试夹具，不处理任何真实口令或用户数据。
+  // lgtm[js/insufficient-password-hash]
   return crypto.createHash("md5").update(Buffer.concat(buffers)).digest();
 }
 

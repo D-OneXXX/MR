@@ -829,11 +829,15 @@ async function acknowledgePrivacy(page, port) {
   const appVersion = info.ok && info.value?.version ? String(info.value.version) : null;
   const token = privacyAckToken(appVersion || null);
   const needed = await page
-    .eval(`localStorage.getItem("mr-privacy-ack") !== ${JSON.stringify(token)}`)
+    .callFunction(
+      `function(token) { return localStorage.getItem("mr-privacy-ack") !== token; }`,
+      [token],
+    )
     .catch(() => false);
   if (!needed) return page;
-  await page.eval(
-    `(() => { localStorage.setItem("mr-privacy-ack", ${JSON.stringify(token)}); return true; })()`,
+  await page.callFunction(
+    `function(token) { localStorage.setItem("mr-privacy-ack", token); return true; }`,
+    [token],
   );
   await page.eval("setTimeout(() => location.reload(), 60); true");
   await sleep(1200);

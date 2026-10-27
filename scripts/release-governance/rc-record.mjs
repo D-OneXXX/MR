@@ -29,7 +29,17 @@ export const CHANNELS = {
     // 常规通道标签不带 Linux 后缀。
     tagPattern: /^v(\d+\.\d+\.\d+)$/,
     // 检查项名称与安装脚本实际产出的证据字段一致（唯一事实源）。
-    requiredChecks: ["freshInstall", "upgrade", "dataIntegrity", "recovery"],
+    // 后四项为 PDF 阅读 / 跨重启进度 / 备份恢复 / 数据库回滚，与 evidence.mjs 保持同步。
+    requiredChecks: [
+      "freshInstall",
+      "upgrade",
+      "dataIntegrity",
+      "recovery",
+      "pdfReading",
+      "progressRestart",
+      "backupRestore",
+      "databaseRollback",
+    ],
   },
   "linux-critical": {
     id: "linux-critical",

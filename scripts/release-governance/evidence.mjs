@@ -34,7 +34,18 @@ export const DEFAULT_MAX_AGE_DAYS = 30;
 
 /** 各通道必须完成的安装/升级验证项。 */
 export const CHANNEL_REQUIRED_CHECKS = {
-  windows: ["freshInstall", "upgrade", "dataIntegrity", "recovery"],
+  // Windows 通道除安装/升级/数据完整性/回滚外，还必须证明 PDF 阅读、跨重启进度、
+  // 备份导出/恢复（含旧版备份迁移）与数据库快照回滚全部通过。
+  windows: [
+    "freshInstall",
+    "upgrade",
+    "dataIntegrity",
+    "recovery",
+    "pdfReading",
+    "progressRestart",
+    "backupRestore",
+    "databaseRollback",
+  ],
   "linux-critical": ["freshInstall", "upgrade", "dataIntegrity"],
 };
 

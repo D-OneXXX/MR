@@ -45,6 +45,9 @@ pub struct BookInfo {
     pub scroll_pct: f64,
     /// local | generic_manga | anime（预留）。
     pub source_type: String,
+    /// 书籍来源格式：image（图片目录 / ZIP / CBZ）| pdf（PDF 文档，PDF-1 仅识别与入库，
+    /// 尚不能阅读；PDF-2 提供渲染后再开放阅读）。
+    pub format: String,
     /// 条漫是否可用：本地 true；在线取决于清单尺寸。
     pub webtoon_ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

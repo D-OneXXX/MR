@@ -82,6 +82,25 @@ const BOOK_COLUMNS: &[&str] = &[
     "scroll_pct",
     "source_type",
     "meta_json",
+    "format",
+];
+
+/// 备份校验所需的**最小**列集合（不含 PDF-1 新增的 `format`）。
+///
+/// PDF-1 之前导出的备份没有 `format` 列，若把它算进必需列，
+/// 老备份会直接变成“不可恢复”。因此校验用这份最小集合，
+/// 真正的复制语句再按备份库**实际**拥有的列生成。
+const BOOK_COLUMNS_REQUIRED: &[&str] = &[
+    "id",
+    "path",
+    "title",
+    "page_count",
+    "current_page",
+    "updated_at",
+    "removed",
+    "scroll_pct",
+    "source_type",
+    "meta_json",
 ];
 const READING_LOG_COLUMNS: &[&str] = &["date", "book_id", "pages"];
 const PROFILE_COLUMNS: &[&str] = &[
@@ -160,6 +179,8 @@ pub struct BackupRestoreResult {
 struct ValidatedBackup {
     allowed_books: Vec<String>,
     skipped_books: Vec<SkippedBook>,
+    /// 备份库的 books 表是否带 `format` 列（PDF-1 之前导出的备份没有）。
+    backup_has_format: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -690,7 +711,12 @@ fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestor
 
     // 校验全部通过之前绝不触碰活库。
     let validated = validate_restored_db(extracted.path(), &manifest)?;
-    apply_restore(db_path, extracted.path(), &validated.allowed_books)?;
+    apply_restore(
+        db_path,
+        extracted.path(),
+        &validated.allowed_books,
+        validated.backup_has_format,
+    )?;
     let restored_counts = count_live_core_rows(db_path)?;
 
     let created_at = (!manifest.created_at.trim().is_empty()).then_some(manifest.created_at);
@@ -805,18 +831,23 @@ fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<Valida
             return Err(format!("备份数据库缺少表：{table}"));
         }
     }
-    require_columns(&conn, "books", BOOK_COLUMNS)?;
+    // 只校验**必需**列：PDF-1 新增的 `format` 列在老备份里不存在，
+    // 不能因为它而拒绝恢复（老备份必须仍然可恢复）。
+    require_columns(&conn, "books", BOOK_COLUMNS_REQUIRED)?;
     require_columns(&conn, "reading_log", READING_LOG_COLUMNS)?;
     require_columns(&conn, "online_filter_profiles", PROFILE_COLUMNS)?;
     require_columns(&conn, "online_filter_rules", RULE_COLUMNS)?;
     require_columns(&conn, "settings", &["k", "v"])?;
+
+    // 备份库实际有没有 `format` 列：决定复制语句是否带上该列。
+    let backup_has_format = backup_has_format_column(&conn)?;
 
     let counts = count_core_rows(&conn)?;
     if counts != manifest.counts {
         return Err("备份清单计数与数据库不一致（backup-integrity-failed）".into());
     }
 
-    // 本地书路径逐行校验：必须存在、是目录/.zip/.cbz，且不能命中宽目录。
+    // 本地书路径逐行校验：必须存在、是目录/.zip/.cbz/.pdf，且不能命中宽目录。
     // 在线书（URL 路径）不参与本地文件校验；无效本地书跳过而不是整包失败。
     let mut allowed_books = Vec::new();
     let mut skipped_books = Vec::new();
@@ -844,9 +875,9 @@ fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<Valida
             Some("path-relative")
         } else if !path_buf.exists() {
             Some("path-missing")
-        } else if path_buf.is_file() && !crate::source::is_archive_path(&path_buf) {
+        } else if path_buf.is_file() && !is_local_book_file(&path_buf) {
             Some("path-not-book")
-        } else if !crate::commands::is_safe_library_source_path(&path_buf) {
+        } else if !is_safe_book_source_path(&path_buf) {
             Some("path-unsafe")
         } else {
             None
@@ -863,18 +894,27 @@ fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<Valida
     Ok(ValidatedBackup {
         allowed_books,
         skipped_books,
+        backup_has_format,
     })
 }
 
-fn apply_restore(db_path: &Path, backup_db: &Path, allowed_books: &[String]) -> Result<(), String> {
+fn apply_restore(
+    db_path: &Path,
+    backup_db: &Path,
+    allowed_books: &[String],
+    backup_has_format: bool,
+) -> Result<(), String> {
     let backup = backup_db
         .to_str()
         .ok_or_else(|| "备份临时路径不是 UTF-8".to_string())?;
     // 活库连接仍走唯一入口 db::open（WAL + busy_timeout + foreign_keys）。
     let conn = db::open(db_path).map_err(|e| format!("打开书库失败：{e}"))?;
+    // 与启动路径一致地补齐活库结构：旧库可能还没有 `format` 列，
+    // 带该列的 INSERT 会直接失败；缺表时复制也会失败。
+    db::init_schema(&conn).map_err(|e| format!("准备书库结构失败：{e}"))?;
     conn.execute("ATTACH DATABASE ?1 AS backup_db", params![backup])
         .map_err(|e| format!("挂载备份数据库失败：{e}"))?;
-    let applied = copy_from_backup(&conn, allowed_books);
+    let applied = copy_from_backup(&conn, allowed_books, backup_has_format);
     let detached = conn
         .execute("DETACH DATABASE backup_db", [])
         .map_err(|e| format!("卸载备份数据库失败：{e}"));
@@ -885,10 +925,14 @@ fn apply_restore(db_path: &Path, backup_db: &Path, allowed_books: &[String]) -> 
     }
 }
 
-fn copy_from_backup(conn: &Connection, allowed_books: &[String]) -> Result<(), String> {
+fn copy_from_backup(
+    conn: &Connection,
+    allowed_books: &[String],
+    backup_has_format: bool,
+) -> Result<(), String> {
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("开始恢复事务失败：{e}"))?;
-    match copy_all_tables(conn, allowed_books) {
+    match copy_all_tables(conn, allowed_books, backup_has_format) {
         Ok(()) => match conn.execute_batch("COMMIT") {
             Ok(()) => Ok(()),
             Err(error) => {
@@ -903,7 +947,11 @@ fn copy_from_backup(conn: &Connection, allowed_books: &[String]) -> Result<(), S
     }
 }
 
-fn copy_all_tables(conn: &Connection, allowed_books: &[String]) -> Result<(), String> {
+fn copy_all_tables(
+    conn: &Connection,
+    allowed_books: &[String],
+    backup_has_format: bool,
+) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS restore_allowed_books(id TEXT PRIMARY KEY);
          DELETE FROM restore_allowed_books;",
@@ -930,9 +978,20 @@ fn copy_all_tables(conn: &Connection, allowed_books: &[String]) -> Result<(), St
          INSERT INTO settings(k, v)
             SELECT k, v FROM backup_db.settings WHERE k IN ({keys});"
     );
+    // 备份库可能来自 PDF-1 之前（books 表没有 `format` 列）：
+    // 这时复制语句不带该列，活库表的 DEFAULT 'image' 生效。
+    let book_columns: Vec<&str> = if backup_has_format {
+        BOOK_COLUMNS.to_vec()
+    } else {
+        BOOK_COLUMNS
+            .iter()
+            .copied()
+            .filter(|column| *column != "format")
+            .collect()
+    };
     sql.push_str(&copy_sql_where(
         "books",
-        BOOK_COLUMNS,
+        &book_columns,
         "id IN (SELECT id FROM restore_allowed_books)",
     ));
     // 旧备份的 book_id='' 是全局旧史，迁移为新 schema 的 NULL；
@@ -1010,6 +1069,133 @@ fn require_columns(conn: &Connection, table: &str, columns: &[&str]) -> Result<(
         }
     }
     Ok(())
+}
+
+/// 备份库的 books 表是否带 `format` 列（PDF-1 之前导出的备份没有该列）。
+///
+/// 只读探测备份库自身的表结构，决定复制语句是否带上 `format`。
+fn backup_has_format_column(conn: &Connection) -> Result<bool, String> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name='format'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("读取备份表结构失败：{e}"))?;
+    Ok(count > 0)
+}
+
+// ---------- 本地书源判定（目录 / 压缩包 / PDF） ----------
+
+/// 书源**文件**判定：`.zip`/`.cbz` 压缩包或 `.pdf` 文件。
+///
+/// PDF-1 只做导入与格式识别（尚无渲染器），但 PDF 书必须能随备份/恢复存活。
+/// PDF 判定复用 `source::is_pdf_path`（唯一事实源）。
+fn is_local_book_file(path: &Path) -> bool {
+    crate::source::is_archive_path(path) || crate::source::is_pdf_path(path)
+}
+
+/// 书源路径安全校验。
+///
+/// - 目录 / 压缩包：沿用统一判定 `is_safe_library_source_path`；
+/// - PDF 文件：走单文件判定（见 [`is_safe_pdf_book_path`]）。
+fn is_safe_book_source_path(path: &Path) -> bool {
+    if path.is_file() && crate::source::is_pdf_path(path) {
+        return is_safe_pdf_book_path(path);
+    }
+    crate::commands::is_safe_library_source_path(path)
+}
+
+/// PDF 书源文件的安全判定。
+///
+/// 与目录/压缩包不同，PDF 一定是**单个文件**：删源文件时
+/// `is_safe_library_source_path` 会因为「不是压缩包文件」而拒绝删除，
+/// 因此这里只需挡住真正危险的路径：应用数据/缓存目录内部与系统目录内部。
+fn is_safe_pdf_book_path(path: &Path) -> bool {
+    if !path.is_absolute() || !path.is_file() || !crate::source::is_pdf_path(path) {
+        return false;
+    }
+    let mut protected: Vec<PathBuf> = Vec::new();
+    if let Ok(data) = crate::data_dir() {
+        protected.push(data);
+    }
+    if let Some(cache) = crate::paths::cache_dir() {
+        protected.push(cache.to_path_buf());
+    }
+    if protected.iter().any(|root| is_within(path, root)) {
+        return false;
+    }
+    if system_dirs().iter().any(|root| is_within(path, root)) {
+        return false;
+    }
+    true
+}
+
+/// 路径比较键：Windows 归一反斜杠并忽略大小写；Unix 保持原样。
+fn path_key(path: &Path) -> String {
+    let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(windows)]
+    {
+        let raw = canon.to_string_lossy().replace('/', "\\");
+        // Windows canonicalize 会加 `\\?\` 逐字前缀；去掉它（UNC 保留），
+        // 否则「存在路径」与「不存在路径」的前缀不一致，比较会失真。
+        let trimmed = match raw.strip_prefix("\\\\?\\") {
+            Some(rest) if !rest.starts_with("UNC\\") => Some(rest.to_string()),
+            _ => None,
+        };
+        let text = trimmed.unwrap_or(raw);
+        text.trim_end_matches('\\').to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        canon.to_string_lossy().trim_end_matches('/').to_string()
+    }
+}
+
+/// 目标路径是否位于 root 之内（含 root 本身）。
+fn is_within(target: &Path, root: &Path) -> bool {
+    let target_key = path_key(target);
+    let root_key = path_key(root);
+    if root_key.is_empty() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        target_key == root_key || target_key.starts_with(&format!("{root_key}\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        target_key == root_key || target_key.starts_with(&format!("{root_key}/"))
+    }
+}
+
+/// 系统目录清单：这些目录内部的文件不是书源。
+fn system_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(windows)]
+    {
+        for key in [
+            "SystemRoot",
+            "windir",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramData",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                dirs.push(PathBuf::from(value));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for path in [
+            "/usr", "/etc", "/var", "/opt", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev",
+            "/proc", "/sys", "/run",
+        ] {
+            dirs.push(PathBuf::from(path));
+        }
+    }
+    dirs
 }
 
 fn unique_token() -> String {
@@ -1474,6 +1660,11 @@ mod tests {
         assert_eq!(book.title, "旧书");
         assert_eq!(book.current_page, 12);
         assert_eq!(
+            book.format,
+            db::BOOK_FORMAT_IMAGE,
+            "0.16 老备份没有 format 列，恢复后必须落到默认 image"
+        );
+        assert_eq!(
             db::reading_log_days(&conn, None, 3650)
                 .unwrap()
                 .iter()
@@ -1766,6 +1957,227 @@ mod tests {
             Some("Cookie: secret=1")
         );
         drop(conn);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /* ---------------- PDF-1：books.format 的备份/恢复 ---------------- */
+
+    /// 造一个「PDF-1 之前」形态的备份库：books 表**没有** format 列。
+    fn legacy_backup_db(path: &Path, book_path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE books(
+                id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+                page_count INTEGER NOT NULL DEFAULT 0, current_page INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT '', removed INTEGER NOT NULL DEFAULT 0,
+                scroll_pct REAL NOT NULL DEFAULT -1, source_type TEXT NOT NULL DEFAULT 'local',
+                meta_json TEXT NOT NULL DEFAULT '{}'
+             );
+             CREATE TABLE reading_log(
+                date TEXT NOT NULL, book_id TEXT NOT NULL DEFAULT '',
+                pages INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(date, book_id)
+             );
+             CREATE TABLE settings(k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '');
+             CREATE TABLE online_filter_profiles(
+                host TEXT PRIMARY KEY, main_selector TEXT, cdn_pattern TEXT,
+                width_min INTEGER, width_max INTEGER, aspect_max REAL,
+                uses INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT ''
+             );
+             CREATE TABLE online_filter_rules(
+                id TEXT PRIMARY KEY, host TEXT NOT NULL, action TEXT NOT NULL,
+                source TEXT NOT NULL, pattern_json TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '',
+                hits INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO reading_log(date, book_id, pages) VALUES ('2026-01-01', '', 10);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO books(id, path, title, page_count, current_page)
+             VALUES ('b1', ?1, '旧书', 20, 12)",
+            params![book_path.to_string_lossy()],
+        )
+        .unwrap();
+    }
+
+    /// 导出 → 恢复必须保留 format：PDF 书仍是 pdf，普通书仍是 image。
+    #[test]
+    fn export_restore_roundtrip_preserves_book_format() {
+        let dir = temp_dir("format-roundtrip");
+        let db_path = seeded_db(&dir);
+        let pdf_path = dir.join("books/漫画.pdf");
+        fs::create_dir_all(pdf_path.parent().unwrap()).unwrap();
+        fs::write(&pdf_path, b"%PDF-1.7 placeholder").unwrap();
+        {
+            let conn = db::open(&db_path).unwrap();
+            db::upsert_book_with_format(
+                &conn,
+                "p1",
+                &pdf_path.to_string_lossy(),
+                "PDF 书",
+                0,
+                db::BOOK_FORMAT_PDF,
+            )
+            .unwrap();
+        }
+
+        let backup = dir.join("format.mrbackup");
+        export_backup_blocking(&db_path, &backup, None, "0.17.3").unwrap();
+
+        let result = restore_backup_blocking(&db_path, &backup).unwrap();
+        assert_eq!(result.books, 3);
+        assert!(
+            result.skipped_books.is_empty(),
+            "PDF 书不得被跳过：{:?}",
+            result.skipped_books
+        );
+
+        let conn = db::open(&db_path).unwrap();
+        assert_eq!(
+            db::get_book(&conn, "p1").unwrap().unwrap().format,
+            db::BOOK_FORMAT_PDF,
+            "PDF 书的 format 必须随备份往返"
+        );
+        assert_eq!(
+            db::get_book(&conn, "b1").unwrap().unwrap().format,
+            db::BOOK_FORMAT_IMAGE
+        );
+        assert_eq!(
+            db::get_book(&conn, "b1").unwrap().unwrap().current_page,
+            12,
+            "恢复不得丢阅读进度"
+        );
+        drop(conn);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 老备份（books 表没有 format 列）必须仍然可恢复，
+    /// 恢复后的书按活库默认值读回 image，不得报「缺少列」。
+    #[test]
+    fn restore_legacy_backup_without_format_column_still_succeeds() {
+        let dir = temp_dir("legacy-format");
+        let legacy_path = dir.join("legacy.db");
+        let legacy_book = dir.join("旧书.cbz");
+        fs::write(&legacy_book, b"legacy-cbz-placeholder").unwrap();
+        legacy_backup_db(&legacy_path, &legacy_book);
+
+        let counts = {
+            let conn = Connection::open(&legacy_path).unwrap();
+            count_core_rows(&conn).unwrap()
+        };
+        let manifest = manifest_json(&counts);
+        let archive = dir.join("legacy-format.mrbackup");
+        write_test_zip(
+            &archive,
+            Some(manifest.as_bytes()),
+            Some(&legacy_path),
+            None,
+        );
+
+        let live = dir.join("live.db");
+        {
+            let conn = db::open(&live).unwrap();
+            db::init_schema(&conn).unwrap();
+        }
+        let restored = restore_backup_blocking(&live, &archive).expect("老备份必须仍可恢复");
+        assert_eq!(restored.books, 1);
+        assert!(restored.skipped_books.is_empty());
+
+        let conn = db::open(&live).unwrap();
+        let book = db::get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(
+            book.format,
+            db::BOOK_FORMAT_IMAGE,
+            "老备份没有 format 列，恢复后必须落到默认值 image"
+        );
+        assert_eq!(book.current_page, 12, "老备份的阅读进度必须保留");
+        assert_eq!(book.title, "旧书");
+        drop(conn);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `.pdf` 本地书路径必须被接受（不能当作非法路径跳过）。
+    #[test]
+    fn restore_keeps_pdf_local_book_path() {
+        let dir = temp_dir("pdf-path");
+        let pdf = dir.join("books/漫画.pdf");
+        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+        fs::write(&pdf, b"%PDF-1.7 placeholder").unwrap();
+
+        let backup_db = dir.join("pdf-backup.db");
+        {
+            let conn = db::open(&backup_db).unwrap();
+            db::init_schema(&conn).unwrap();
+            db::upsert_book_with_format(
+                &conn,
+                "p1",
+                &pdf.to_string_lossy(),
+                "PDF 书",
+                0,
+                db::BOOK_FORMAT_PDF,
+            )
+            .unwrap();
+        }
+        let counts = {
+            let conn = Connection::open(&backup_db).unwrap();
+            count_core_rows(&conn).unwrap()
+        };
+        let manifest = manifest_json(&counts);
+        let archive = dir.join("pdf.mrbackup");
+        write_test_zip(&archive, Some(manifest.as_bytes()), Some(&backup_db), None);
+
+        let live = dir.join("live.db");
+        {
+            let conn = db::open(&live).unwrap();
+            db::init_schema(&conn).unwrap();
+        }
+        let result = restore_backup_blocking(&live, &archive).unwrap();
+        assert_eq!(result.books, 1);
+        assert!(
+            result.skipped_books.is_empty(),
+            "PDF 书不得被当作非法路径跳过：{:?}",
+            result.skipped_books
+        );
+
+        let conn = db::open(&live).unwrap();
+        let book = db::get_book(&conn, "p1").unwrap().unwrap();
+        assert_eq!(book.path, pdf.to_string_lossy().to_string());
+        assert_eq!(book.format, db::BOOK_FORMAT_PDF);
+        drop(conn);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 非书籍文件（未知扩展名）依旧必须被跳过，PDF 放行不得放宽其它扩展名。
+    #[test]
+    fn restore_still_skips_unknown_file_extensions() {
+        let dir = temp_dir("unknown-ext");
+        let text = dir.join("books/notes.txt");
+        fs::create_dir_all(text.parent().unwrap()).unwrap();
+        fs::write(&text, b"not a book").unwrap();
+
+        let backup_db = dir.join("unknown.db");
+        {
+            let conn = db::open(&backup_db).unwrap();
+            db::init_schema(&conn).unwrap();
+            db::upsert_book(&conn, "t1", &text.to_string_lossy(), "文本", 1).unwrap();
+        }
+        let counts = {
+            let conn = Connection::open(&backup_db).unwrap();
+            count_core_rows(&conn).unwrap()
+        };
+        let manifest = manifest_json(&counts);
+        let archive = dir.join("unknown.mrbackup");
+        write_test_zip(&archive, Some(manifest.as_bytes()), Some(&backup_db), None);
+
+        let live = dir.join("live.db");
+        {
+            let conn = db::open(&live).unwrap();
+            db::init_schema(&conn).unwrap();
+        }
+        let result = restore_backup_blocking(&live, &archive).unwrap();
+        assert_eq!(result.books, 0);
+        assert_eq!(result.skipped_books.len(), 1);
+        assert_eq!(result.skipped_books[0].reason, "path-not-book");
         fs::remove_dir_all(&dir).ok();
     }
 }

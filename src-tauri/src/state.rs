@@ -545,15 +545,23 @@ impl AppState {
                 return Ok(h.clone());
             }
         }
-        let (path, source_type, meta_json) = self
+        let (path, source_type, meta_json, format) = self
             .db
             .with(|conn| {
                 crate::db::get_book(conn, book_id)
                     .map_err(|e| e.to_string())?
-                    .map(|b| (b.path, b.source_type, b.meta_json))
+                    .map(|b| (b.path, b.source_type, b.meta_json, b.format))
                     .ok_or_else(|| "书籍不存在".to_string())
             })
             .map_err(crate::source::BackendError::Msg)?;
+
+        // PDF-1：PDF 只做识别与入库，尚无渲染器（PDF-2）。
+        // 在取页口统一拦下，避免用 ZIP/图片源的逻辑误读 PDF。
+        if format == crate::db::BOOK_FORMAT_PDF {
+            return Err(crate::source::BackendError::Msg(
+                "PDF 阅读功能尚未实现（pdf-render-unsupported）".into(),
+            ));
+        }
 
         let handle = if source_type == "local" {
             Arc::new(SourceHandle::open(std::path::Path::new(&path))?)

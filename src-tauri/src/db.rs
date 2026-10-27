@@ -99,8 +99,14 @@ pub fn find_book_id_by_path(conn: &Connection, path: &str) -> Result<Option<Stri
 /// 书库 schema 版本（`PRAGMA user_version`）。
 ///
 /// 1 = 0.17.0 起：reading_log 可空外键 + 表达式唯一索引 + source_stats。
+/// 2 = PDF-1：books.format 记录书籍来源格式（image / pdf），增量 ALTER，老库默认 image。
 /// 只增不减；前向库（更高版本）保持原值，绝不降级。
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
+
+/// 书籍来源格式：图片（目录 / `.zip` / `.cbz` / 在线书）。
+pub const BOOK_FORMAT_IMAGE: &str = "image";
+/// 书籍来源格式：PDF 文件（PDF-1：仅导入与格式识别，尚无渲染器）。
+pub const BOOK_FORMAT_PDF: &str = "pdf";
 
 pub fn schema_version(conn: &Connection) -> Result<i32, BackendError> {
     Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
@@ -128,7 +134,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
             removed INTEGER NOT NULL DEFAULT 0,
             scroll_pct REAL NOT NULL DEFAULT -1,
             source_type TEXT NOT NULL DEFAULT 'local',
-            meta_json TEXT NOT NULL DEFAULT '{}'
+            meta_json TEXT NOT NULL DEFAULT '{}',
+            format TEXT NOT NULL DEFAULT 'image'
         );
         CREATE TABLE IF NOT EXISTS source_stats(
             book_id TEXT PRIMARY KEY
@@ -217,7 +224,7 @@ pub fn wal_checkpoint(conn: &Connection) -> Result<(), BackendError> {
 
 /// 旧库列迁移：
 /// - reading_log(date PK) → (date, book_id)，旧数据并入 book_id=''（全局视图仍聚合）；
-/// - books 加 removed / scroll_pct / source_type / meta_json 列。
+/// - books 加 removed / scroll_pct / source_type / meta_json / format 列。
 fn table_exists(conn: &Connection, name: &str) -> Result<bool, BackendError> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -392,6 +399,18 @@ fn migrate_book_columns(conn: &Connection) -> Result<(), BackendError> {
             [],
         )?;
     }
+    // PDF-1：记录书籍来源格式（image / pdf）。老库一律按 image 处理。
+    let books_has_format: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name='format'",
+        [],
+        |r| r.get(0),
+    )?;
+    if books_has_format == 0 {
+        conn.execute(
+            "ALTER TABLE books ADD COLUMN format TEXT NOT NULL DEFAULT 'image'",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -406,6 +425,8 @@ pub struct BookRow {
     pub scroll_pct: f64,
     pub source_type: String,
     pub meta_json: String,
+    /// 来源格式：`image`（目录/压缩包/在线）或 `pdf`（PDF-1）。
+    pub format: String,
 }
 
 fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<BookRow> {
@@ -419,6 +440,10 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<BookRow> {
         scroll_pct: row.get::<_, f64>(6).unwrap_or(-1.0),
         source_type: row.get(7)?,
         meta_json: row.get(8)?,
+        // 老库迁移后 format 必有值；仍容忍 NULL/缺失，避免历史脏行读崩。
+        format: row
+            .get::<_, Option<String>>(9)?
+            .unwrap_or_else(|| BOOK_FORMAT_IMAGE.to_string()),
     })
 }
 
@@ -430,15 +455,32 @@ pub fn upsert_book(
     title: &str,
     page_count: u32,
 ) -> Result<(), BackendError> {
+    upsert_book_with_format(conn, id, path, title, page_count, BOOK_FORMAT_IMAGE)
+}
+
+/// 入库/刷新（带来源格式）：PDF-1 引入。
+///
+/// - `format` 在插入与冲突更新时都会落库（`format=excluded.format`），
+///   重导入同一路径不会把 PDF 静默降级回 `image`；
+/// - 进度字段（`current_page` / `scroll_pct`）不参与更新，续读不受影响。
+pub fn upsert_book_with_format(
+    conn: &Connection,
+    id: &str,
+    path: &str,
+    title: &str,
+    page_count: u32,
+    format: &str,
+) -> Result<(), BackendError> {
     let now = now_str();
     conn.execute(
-        "INSERT INTO books(id, path, title, page_count, updated_at, source_type, meta_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'local', '{}')
+        "INSERT INTO books(id, path, title, page_count, updated_at, source_type, meta_json, format)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'local', '{}', ?6)
          ON CONFLICT(id) DO UPDATE SET
             path=excluded.path, title=excluded.title,
             page_count=excluded.page_count, updated_at=excluded.updated_at,
-            removed=0, source_type='local', meta_json='{}'",
-        params![id, path, title, page_count as i64, now],
+            removed=0, source_type='local', meta_json='{}',
+            format=excluded.format",
+        params![id, path, title, page_count as i64, now, format],
     )?;
     Ok(())
 }
@@ -477,7 +519,7 @@ pub fn upsert_online_book(
 
 /// 无损重定位：把一本书从旧 id/path 迁到新 id/path（单事务）。
 ///
-/// - 保留 `scroll_pct` / `updated_at` / `source_type` / `meta_json`，清 `removed`；
+/// - 保留 `scroll_pct` / `updated_at` / `source_type` / `meta_json` / `format`，清 `removed`；
 /// - `current_page` 按新页数钳制（`MIN(current_page, page_count-1)`）；
 /// - 阅读历史随书迁移：同日冲突取 `SUM(existing, migrated)`，两段阅读都保留；
 /// - 过滤事件尽力迁移（唯一索引冲突忽略），不阻断主流程。
@@ -489,16 +531,53 @@ pub fn relocate_book(
     title: &str,
     page_count: u32,
 ) -> Result<BookRow, BackendError> {
+    relocate_book_inner(conn, old_id, new_id, path, title, page_count, None)
+}
+
+/// 无损重定位（可改写来源格式）：PDF-1 引入。
+///
+/// 与 [`relocate_book`] 的唯一差别：事务内的 UPDATE 会写入新的 `format`
+/// （例如重定位到 `.pdf` 时写 `pdf`）。进度与阅读历史的保留语义完全一致。
+pub fn relocate_book_with_format(
+    conn: &Connection,
+    old_id: &str,
+    new_id: &str,
+    path: &str,
+    title: &str,
+    page_count: u32,
+    format: &str,
+) -> Result<BookRow, BackendError> {
+    relocate_book_inner(conn, old_id, new_id, path, title, page_count, Some(format))
+}
+
+fn relocate_book_inner(
+    conn: &Connection,
+    old_id: &str,
+    new_id: &str,
+    path: &str,
+    title: &str,
+    page_count: u32,
+    format: Option<&str>,
+) -> Result<BookRow, BackendError> {
     let tx = conn.unchecked_transaction()?;
     // id 变更会短暂让 reading_log 旧子行指向不存在的父行；延迟到事务提交
     // 前校验，等下面把子行合并/迁移到新 id 后再统一验证。
     tx.execute_batch("PRAGMA defer_foreign_keys=ON")?;
-    let updated = tx.execute(
-        "UPDATE books SET id=?2, path=?3, title=?4, page_count=?5,
-            current_page=MIN(current_page, MAX(?5 - 1, 0)), removed=0
-         WHERE id=?1",
-        params![old_id, new_id, path, title, page_count as i64],
-    )?;
+    // format=None 时**不碰** format 列：沿用原书的来源格式，绝不静默重置。
+    let updated = match format {
+        Some(format) => tx.execute(
+            "UPDATE books SET id=?2, path=?3, title=?4, page_count=?5,
+                current_page=MIN(current_page, MAX(?5 - 1, 0)), removed=0, format=?6
+             WHERE id=?1",
+            params![old_id, new_id, path, title, page_count as i64, format],
+        )?,
+        None => tx.execute(
+            "UPDATE books SET id=?2, path=?3, title=?4, page_count=?5,
+                current_page=MIN(current_page, MAX(?5 - 1, 0)), removed=0
+             WHERE id=?1",
+            params![old_id, new_id, path, title, page_count as i64],
+        )?,
+    };
     if updated == 0 {
         return Err(BackendError::Msg("书籍不存在".into()));
     }
@@ -525,7 +604,7 @@ pub fn relocate_book(
 
 pub fn get_book(conn: &Connection, id: &str) -> Result<Option<BookRow>, BackendError> {
     let mut stmt = conn.prepare(
-        "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json FROM books WHERE id=?1",
+        "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json, format FROM books WHERE id=?1",
     )?;
     let mut rows = stmt.query(params![id])?;
     if let Some(r) = rows.next()? {
@@ -591,12 +670,12 @@ pub fn book_is_removed(conn: &Connection, id: &str) -> Result<bool, BackendError
 pub fn list_books(conn: &Connection, query: Option<&str>) -> Result<Vec<BookRow>, BackendError> {
     let (sql, param): (&str, Option<String>) = match query {
         Some(q) if !q.trim().is_empty() => (
-            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json FROM books
+            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json, format FROM books
              WHERE removed=0 AND (title LIKE ?1 OR path LIKE ?1) ORDER BY updated_at DESC",
             Some(format!("%{}%", q.trim())),
         ),
         _ => (
-            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json FROM books
+            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json, format FROM books
              WHERE removed=0 ORDER BY updated_at DESC",
             None,
         ),
@@ -1702,6 +1781,10 @@ mod tests {
             assert!((row.scroll_pct - (-1.0)).abs() < f64::EPSILON);
             assert_eq!(row.source_type, "local");
             assert_eq!(row.meta_json, "{}");
+            assert_eq!(
+                row.format, BOOK_FORMAT_IMAGE,
+                "PDF-1 之前的老库必须按 image 处理"
+            );
             // 旧 reading_log(date) 必须保留：迁移前没有 book_id 的历史落在
             // NULL 桶里（AGENTS.md §5：可空外键承载迁移前全局旧史）。
             let legacy_history: (Option<String>, i64) = conn
@@ -1769,6 +1852,196 @@ mod tests {
                 "更高版本库里的书不得丢失"
             );
             assert!(quick_check(&conn).is_ok());
+        }
+        cleanup_db_files(&path);
+    }
+
+    /* ---------------- PDF-1：books.format（来源格式） ---------------- */
+
+    /// 旧库（books 表没有 format 列）必须被增量迁移：
+    /// 新列存在、旧行取默认值 image、进度与阅读历史一点不动。
+    #[test]
+    fn legacy_books_without_format_column_is_migrated_and_keeps_progress() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE books(
+                id TEXT PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                page_count INTEGER NOT NULL DEFAULT 0,
+                current_page INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE reading_log(
+                date TEXT NOT NULL,
+                book_id TEXT REFERENCES books(id) ON DELETE CASCADE,
+                pages INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO books(id, path, title, page_count, current_page, updated_at)
+                VALUES('legacy-1', 'C:/Books/Legacy.cbz', '旧书', 12, 5, '2026-01-01');
+            INSERT INTO reading_log(date, book_id, pages) VALUES('2026-01-01', 'legacy-1', 7);
+            PRAGMA user_version = 1;",
+        )
+        .unwrap();
+
+        init_schema(&conn).expect("迁移旧库");
+
+        // format 列必须被补上。
+        let format_columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name='format'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(format_columns, 1, "init_schema 必须为旧库补上 format 列");
+
+        // 旧行按默认值读回，且原有字段一个都不能变。
+        let row = get_book(&conn, "legacy-1").unwrap().expect("旧书仍在");
+        assert_eq!(row.format, BOOK_FORMAT_IMAGE, "老库一律按 image 处理");
+        assert_eq!(row.page_count, 12);
+        assert_eq!(row.current_page, 5, "阅读进度不得在迁移中丢失");
+        assert!((row.scroll_pct - (-1.0)).abs() < f64::EPSILON);
+        assert_eq!(row.source_type, "local");
+        assert_eq!(row.meta_json, "{}");
+        assert_eq!(
+            reading_log_days(&conn, Some("legacy-1"), 3650).unwrap(),
+            vec![("2026-01-01".into(), 7)],
+            "阅读历史不得受迁移影响"
+        );
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    /// `upsert_book_with_format` 落库 format；冲突更新保留 format（不降级）。
+    #[test]
+    fn upsert_book_with_format_persists_format_on_insert_and_conflict() {
+        let conn = mem();
+        upsert_book_with_format(
+            &conn,
+            "p1",
+            "C:/Books/Comic.pdf",
+            "Comic",
+            0,
+            BOOK_FORMAT_PDF,
+        )
+        .unwrap();
+        assert_eq!(
+            get_book(&conn, "p1").unwrap().unwrap().format,
+            BOOK_FORMAT_PDF,
+            "PDF 书必须落库 format=pdf"
+        );
+
+        // 同 id/path 重导入（PDF 导入路径）：format 不得被静默降级成 image。
+        upsert_book_with_format(
+            &conn,
+            "p1",
+            "C:/Books/Comic.pdf",
+            "Comic 修订",
+            0,
+            BOOK_FORMAT_PDF,
+        )
+        .unwrap();
+        let row = get_book(&conn, "p1").unwrap().unwrap();
+        assert_eq!(row.format, BOOK_FORMAT_PDF);
+        assert_eq!(row.title, "Comic 修订");
+    }
+
+    /// 普通 `upsert_book` 固定写 image（图片书导入路径的既有语义）。
+    #[test]
+    fn plain_upsert_book_writes_image_format() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "第一卷", 10).unwrap();
+        assert_eq!(
+            get_book(&conn, "b1").unwrap().unwrap().format,
+            BOOK_FORMAT_IMAGE
+        );
+        // 覆盖同一 id 时按 upsert_book 的语义写回 image；PDF 导入必须走
+        // upsert_book_with_format，否则会被降级。
+        upsert_book_with_format(
+            &conn,
+            "p1",
+            "C:/Books/Comic.pdf",
+            "Comic",
+            0,
+            BOOK_FORMAT_PDF,
+        )
+        .unwrap();
+        upsert_book(&conn, "p1", "C:/Books/Comic.pdf", "Comic", 0).unwrap();
+        assert_eq!(
+            get_book(&conn, "p1").unwrap().unwrap().format,
+            BOOK_FORMAT_IMAGE
+        );
+    }
+
+    /// 列表与单本读取都必须带上 format（SELECT 列序与 row_to_book 一致）。
+    #[test]
+    fn list_books_exposes_format_column() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "第一卷", 10).unwrap();
+        upsert_book_with_format(&conn, "p2", "p/b2.pdf", "第二卷", 0, BOOK_FORMAT_PDF).unwrap();
+        let books = list_books(&conn, None).unwrap();
+        assert_eq!(books.len(), 2);
+        let formats: Vec<String> = books.iter().map(|b| b.format.clone()).collect();
+        assert!(formats.contains(&BOOK_FORMAT_IMAGE.to_string()));
+        assert!(formats.contains(&BOOK_FORMAT_PDF.to_string()));
+    }
+
+    /// 重定位不得重置 format（进度保留的同时，来源格式也要保留）。
+    #[test]
+    fn relocate_book_preserves_format() {
+        let conn = mem();
+        upsert_book_with_format(&conn, "old", "p/old.pdf", "旧书", 10, BOOK_FORMAT_PDF).unwrap();
+        set_progress(&conn, "old", 3, None).unwrap();
+        let row = relocate_book(&conn, "old", "new", "q/新书.pdf", "新书", 10).unwrap();
+        assert_eq!(row.format, BOOK_FORMAT_PDF, "重定位不得重置 format");
+        assert_eq!(row.current_page, 3, "重定位不得丢阅读进度");
+    }
+
+    /// 重定位到 PDF 时允许改写 format；进度与历史照旧保留。
+    #[test]
+    fn relocate_book_with_format_writes_new_format() {
+        let conn = mem();
+        upsert_book(&conn, "old", "p/old", "旧书", 10).unwrap();
+        set_progress(&conn, "old", 4, None).unwrap();
+        let row = relocate_book_with_format(
+            &conn,
+            "old",
+            "new",
+            "q/新书.pdf",
+            "新书",
+            10,
+            BOOK_FORMAT_PDF,
+        )
+        .unwrap();
+        assert_eq!(row.format, BOOK_FORMAT_PDF);
+        assert_eq!(row.current_page, 4, "改写 format 不得丢阅读进度");
+        assert_eq!(
+            reading_log_days(&conn, Some("new"), 7).unwrap(),
+            vec![(today_str(), 4)],
+            "改写 format 不得丢阅读历史"
+        );
+    }
+
+    /// schema 版本：PDF-1 起必须是 2；v1 库升级后 user_version 变成 2。
+    #[test]
+    fn schema_version_is_two_and_v1_database_is_upgraded() {
+        assert_eq!(SCHEMA_VERSION, 2, "PDF-1 起 schema 版本必须是 2");
+        let path = unique_temp_db("schema-v2");
+        {
+            let conn = open(&path).expect("打开临时库");
+            conn.pragma_update(None, "user_version", 1).unwrap();
+        }
+        {
+            let conn = open(&path).expect("重开临时库");
+            init_schema(&conn).expect("迁移");
+            assert_eq!(
+                schema_version(&conn).unwrap(),
+                2,
+                "v1 库升级后 user_version 必须变成 2"
+            );
+            // 幂等：重复 init 不得改写版本。
+            init_schema(&conn).expect("重复迁移");
+            assert_eq!(schema_version(&conn).unwrap(), 2);
         }
         cleanup_db_files(&path);
     }

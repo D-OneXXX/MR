@@ -1524,7 +1524,16 @@ export default function Reader() {
         ) : n === 0 ? (
           <div className="reader-center">
             <div className="reader-err">
-              <PixelPet mode="empty" message={t("reader.emptyBook")} />
+              <PixelPet
+                mode="empty"
+                message={
+                  // PDF-1：PDF 已可识别与入库，但尚无渲染器（PDF-2）。
+                  // 这里必须给真实原因，不能谎称「没有可读页面」。
+                  book?.format === "pdf"
+                    ? t("error.pdfRenderUnsupported")
+                    : t("reader.emptyBook")
+                }
+              />
               <Button variant="pill" size="pill-sm" onClick={() => nav("/")}>
                 <ArrowLeft className="size-3.5" /> {t("reader.backToLibrary")}
               </Button>

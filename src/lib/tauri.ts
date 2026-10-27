@@ -14,6 +14,8 @@ export interface BookInfo {
   scrollPct: number;
   /** local | generic_manga | anime（预留）。 */
   sourceType: string;
+  /** 来源格式：image（图片目录 / ZIP / CBZ）| pdf（PDF 文档，仅识别与导入，尚不可阅读）。 */
+  format: string;
   /** 条漫是否可用：本地 true；在线取决于清单尺寸。 */
   webtoonReady: boolean;
   /** 同一系列的标识；用于下一话解析。 */

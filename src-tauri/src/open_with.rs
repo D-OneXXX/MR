@@ -240,6 +240,7 @@ mod tests {
             updated_at: String::new(),
             scroll_pct: -1.0,
             source_type: "local".into(),
+            format: "image".into(),
             webtoon_ready: true,
             series_id: None,
             series_title: None,

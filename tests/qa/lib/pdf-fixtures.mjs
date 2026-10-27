@@ -11,7 +11,7 @@
  * - truncated    合法文档被截断
  * - badMagic     文件头签名错误
  * - wrongExt     内容合法但扩展名不是 .pdf
- * - encrypted    RC4 40-bit 标准安全处理器加密文档（**单层**加密，见 encryptBytes）
+ * - encrypted    RC4 40-bit 标准安全处理器加密文档（静态夹具，见 ENCRYPTED_PDF_BASE64）
  * - empty        0 字节文件
  * - large        体积明显大于其它夹具（跨多个分块读取）
  * - manyPages    高页数文档
@@ -30,65 +30,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-/** RC4 算法的 32 字节填充口令（PDF 32000-1 节的算法 2）。 */
-const PAD = Buffer.from([
-  0x28, 0xbf, 0x4e, 0x5e, 0x4e, 0x75, 0x8a, 0x41, 0x64, 0x00, 0x4e, 0x56, 0xff,
-  0xfa, 0x01, 0x08, 0x2e, 0x2e, 0x00, 0xb6, 0xd0, 0x68, 0x3e, 0x80, 0x2f, 0x0c,
-  0xa9, 0xfe, 0x64, 0x53, 0x69, 0x7a,
-]);
-
-function md5(...buffers) {
-  // PDF 32000-1 的 RC4 标准安全处理器**规定**使用 MD5；这里仅用于生成
-  // 「加密 PDF 必须被拒绝」的测试夹具，不处理任何真实口令或用户数据。
-  // lgtm[js/insufficient-password-hash]
-  // codeql[js/insufficient-password-hash]
-  return crypto.createHash("md5").update(Buffer.concat(buffers)).digest();
-}
-
-/** 纯 JS RC4：Node 的 OpenSSL 3 默认不提供 rc4 加密原语。 */
-function rc4(key, data) {
-  const state = new Uint8Array(256);
-  for (let i = 0; i < 256; i += 1) state[i] = i;
-  let j = 0;
-  for (let i = 0; i < 256; i += 1) {
-    j = (j + state[i] + key[i % key.length]) & 0xff;
-    const tmp = state[i];
-    state[i] = state[j];
-    state[j] = tmp;
-  }
-  const out = Buffer.alloc(data.length);
-  let x = 0;
-  let y = 0;
-  for (let k = 0; k < data.length; k += 1) {
-    x = (x + 1) & 0xff;
-    y = (y + state[x]) & 0xff;
-    const tmp = state[x];
-    state[x] = state[y];
-    state[y] = tmp;
-    out[k] = data[k] ^ state[(state[x] + state[y]) & 0xff];
-  }
-  return out;
-}
-
-/** 加密对象/流所用的对称密钥（算法 1）。 */
-function objectKey(baseKey, objectNumber, generation) {
-  const extra = Buffer.alloc(5);
-  extra.writeUInt8(objectNumber & 0xff, 0);
-  extra.writeUInt8((objectNumber >> 8) & 0xff, 1);
-  extra.writeUInt8((objectNumber >> 16) & 0xff, 2);
-  extra.writeUInt8(generation & 0xff, 3);
-  extra.writeUInt8((generation >> 8) & 0xff, 4);
-  const length = Math.min(baseKey.length + 5, 16);
-  return md5(baseKey, extra).subarray(0, length);
-}
-
-function padPassword(password) {
-  const buffer = Buffer.alloc(32);
-  buffer.write(password.slice(0, 32), "latin1");
-  PAD.copy(buffer, password.length);
-  return buffer;
-}
-
 function pdfLiteral(text) {
   const escaped = text
     .replace(/\\/g, "\\\\")
@@ -96,10 +37,6 @@ function pdfLiteral(text) {
     .replace(/\)/g, "\\)")
     .replace(/[\r\n]/g, " ");
   return `(${escaped})`;
-}
-
-function pdfHexFromBuffer(buffer) {
-  return `<${buffer.toString("hex")}>`;
 }
 
 /**
@@ -134,26 +71,35 @@ const JS_ACTION_BODY =
   "app.alert('moyu-qa'); globalThis.__moyuQaJsExecuted = true;";
 
 /**
- * RC4 40 位（R2/V1）标准安全处理器的加密材料。
- * 只用于生成「加密 PDF」夹具，验证应用按既定策略拒绝带口令的文档。
+ * 加密 PDF 夹具（RC4 40-bit / R2 标准安全处理器，口令 `moyu-owner`）。
+ *
+ * 该字节流按 PDF 32000-1 的算法一次性生成后提交为**静态夹具**：
+ * - 仓库运行时不计算 MD5/口令哈希，也不包含任何弱哈希实现；
+ * - 夹具确定性，便于字节级回归；
+ * - 仅用于验证「加密 PDF 必须被拒绝」，不含真实用户文档或口令。
  */
-function buildEncryption(userPassword, ownerPassword, permissionBits) {
-  const id = crypto.randomBytes(16);
-  const paddedUser = padPassword(userPassword);
-  const permissions = Buffer.alloc(4);
-  permissions.writeInt32LE(permissionBits, 0);
-
-  // 步骤 1：临时文件密钥（算法 2 的第一轮）。
-  const provisional = md5(paddedUser, PAD, permissions, id).subarray(0, 5);
-  // 步骤 2：O 值（算法 3，R2 只做一次 RC4）。
-  const o = rc4(provisional, paddedUser);
-  // 步骤 3：用最终 O 重算文件密钥（算法 2）。
-  const fileKey = md5(paddedUser, o, permissions, id).subarray(0, 5);
-  // 步骤 4：U 值（算法 4，R2：RC4(PAD, fileKey)）。
-  const u = rc4(fileKey, PAD);
-
-  return { id, o, u, permissions, fileKey };
-}
+const ENCRYPTED_PDF_BASE64 = [
+  "JVBERi0xLjcKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoK",
+  "PDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFs1IDAgUiA3IDAgUl0gL0NvdW50IDIgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUg",
+  "L0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nID4+",
+  "CmVuZG9iago0IDAgb2JqCjw8IC9MZW5ndGggMTUyID4+CnN0cmVhbQp9HSdGFCYVhGQeuNoNGkB/H8EYEmGvzArRePR2dXlC",
+  "1ROhEaGAmXUFYSF/Qu0dgqlapaXQNrtw4Pp6wR27xHV0biZE6Sy5oy5UcZlsbg9LQwjV9c8LTzMuGfKXB+EoA28HwDKo69vi",
+  "YLSebwXDlb7/D2+4WXTGG8NLDq2HNAwwhEhufAN5tfjXRyfW2ZcM9LY/VOuz2O6PQwplbmRzdHJlYW0KZW5kb2JqCjUgMCBv",
+  "YmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1OTUgODQyXSAvUmVzb3VyY2VzIDw8IC9G",
+  "b250IDw8IC9GMSAzIDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjYgMCBvYmoKPDwgL0xlbmd0aCAxNTIg",
+  "Pj4Kc3RyZWFtClT6Iqpciirkif8x2Ev7jDMBGWHVshy0DW2x73yp0EhZJvZfzoEYhMAIeVs9jMc/gGlI+6kUiwdYIxaXoVYs",
+  "JSyEOUOaofAT6MbMflR6z8myW/+0EdAIf0RDfTUtNuBrmTF5hGVlk/dBXLMkvvkDAZCVJ1W+uPXkCaHaT8QitmBQpCSy5tMr",
+  "ubyN9KnIeAHqz+FioQr3fd6sCmVuZHN0cmVhbQplbmRvYmoKNyAwIG9iago8PCAvVHlwZSAvUGFnZSAvUGFyZW50IDIgMCBS",
+  "IC9NZWRpYUJveCBbMCAwIDU5NSA4NDJdIC9SZXNvdXJjZXMgPDwgL0ZvbnQgPDwgL0YxIDMgMCBSID4+ID4+IC9Db250ZW50",
+  "cyA2IDAgUiA+PgplbmRvYmoKOCAwIG9iago8PCAvRmlsdGVyIC9TdGFuZGFyZCAvViAxIC9SIDIgL08gPDk3NDQyMmZmMTA4",
+  "OWZmOWQ2NGI5Y2VkYjU2Y2QzZmUzMGEwZmNjMmUzNTEzMWQ0MzUyZjU0ZWZiYmZmYWJkMTI+IC9VIDxjMmE3NDA0ZTYwNWVm",
+  "MTM3Mjk1MTU4Yjg0YjY1NWNjZWE0MTQ5NDRjMjM3NTdlNTE5OGUzNjgyMDczMTNlNjQ5PiAvUCAtMSA+PgplbmRvYmoKeHJl",
+  "ZgowIDkKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAwNjQgMDAwMDAgbiAKMDAwMDAw",
+  "MDEyNyAwMDAwMCBuIAowMDAwMDAwMjI0IDAwMDAwIG4gCjAwMDAwMDA0MjcgMDAwMDAgbiAKMDAwMDAwMDU1MyAwMDAwMCBu",
+  "IAowMDAwMDAwNzU2IDAwMDAwIG4gCjAwMDAwMDA4ODIgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA5IC9Sb290IDEgMCBS",
+  "IC9FbmNyeXB0IDggMCBSIC9JRCBbPGQzYjE3ZTRkZGYxYmMzMDNmNDBjNGMxMjYwM2FiOTczPiA8ZDNiMTdlNGRkZjFiYzMw",
+  "M2Y0MGM0YzEyNjAzYWI5NzM+XSA+PgpzdGFydHhyZWYKMTA3NwolJUVPRgo=",
+].join("");
 
 /**
  * 生成一个合成 PDF。
@@ -183,25 +129,14 @@ export function makePdf(options = {}) {
     version = "1.7",
   } = options;
 
-  const encryptor = encryption
-    ? buildEncryption(encryption, encryption, -1)
-    : null;
-
-  /**
-   * 加密只做**一层**（流层）。
-   *
-   * 真实 PDF 里内容流中的字符串通常还会再单独加密一次（于是流字节与
-   * 字符串操作数各一层）。但 PDF.js（6.x）对内容流只解一层：把流字节
-   * 解开后，字符串操作数必须已经是明文。旧实现把文本先 RC4 成十六进制、
-   * 再把整个内容流 RC4 一次，解出来的文本是乱码（实测
-   * `"Ò GÆÑmW¹ -ÕdÂrPI\" 3[‰5}"`），夹具就不再字节忠实。
-   * 因此这里保留单层：只有流字节被加密，文本是明文。
-   */
-  const encryptBytes = (objectNumber, bytes) => {
-    if (!encryptor) return bytes;
-    const key = objectKey(encryptor.fileKey, objectNumber, 0);
-    return rc4(key, bytes);
-  };
+  // 加密夹具返回预生成的静态字节（见 ENCRYPTED_PDF_BASE64）：
+  // 不在仓库内实现 MD5/RC4 口令哈希，避免把弱哈希代码带进产品仓库。
+  if (encryption) {
+    if (encryption !== "moyu-owner") {
+      throw new Error("加密夹具只支持固定的 moyu-owner 口令");
+    }
+    return Buffer.from(ENCRYPTED_PDF_BASE64, "base64");
+  }
 
   // 对象号规划：1=目录 2=页树 3=字体；每页 2 个对象（内容流 + 页面）。
   const fontNumber = 3;
@@ -212,7 +147,6 @@ export function makePdf(options = {}) {
   let nextNumber = 4 + pageCount * 2;
   const brokenImageNumber = withBrokenImage ? nextNumber++ : 0;
   const fillerNumber = fillerBytes > 0 ? nextNumber++ : 0;
-  const encryptNumber = encryptor ? nextNumber++ : 0;
 
   /** @type {{number:number, body:Buffer|string}[]} */
   const objects = [];
@@ -252,7 +186,7 @@ export function makePdf(options = {}) {
           `${pdfLiteral(`${label} page ${index + 1}`)} Tj`,
           "ET",
         ].join("\n");
-    const bytes = encryptBytes(number, Buffer.from(content, "latin1"));
+    const bytes = Buffer.from(content, "latin1");
     pushObject(
       number,
       Buffer.concat([
@@ -394,17 +328,6 @@ export function makePdf(options = {}) {
     );
   }
 
-  if (encryptor) {
-    pushObject(
-      encryptNumber,
-      `<< /Filter /Standard /V 1 /R 2 /O ${pdfHexFromBuffer(
-        encryptor.o,
-      )} /U ${pdfHexFromBuffer(encryptor.u)} /P ${encryptor.permissions.readInt32LE(
-        0,
-      )} >>`,
-    );
-  }
-
   objects.sort((a, b) => a.number - b.number);
 
   const header = Buffer.from(`%PDF-${version}\n%\xE2\xE3\xCF\xD3\n`, "latin1");
@@ -431,14 +354,9 @@ export function makePdf(options = {}) {
   }
   chunks.push(Buffer.from(xrefLines.join(""), "latin1"));
 
-  const trailerExtras = encryptor
-    ? ` /Encrypt ${encryptNumber} 0 R /ID [<${encryptor.id.toString(
-        "hex",
-      )}> <${encryptor.id.toString("hex")}>]`
-    : "";
   chunks.push(
     Buffer.from(
-      `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R${trailerExtras} >>\nstartxref\n${xrefOffset}\n%%EOF\n`,
+      `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`,
       "latin1",
     ),
   );

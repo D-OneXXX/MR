@@ -58,6 +58,32 @@ export const GOVERNANCE_FILES = new Set([
   "signature-verification.json",
 ]);
 
+/**
+ * 目录中参与制品摘要比对的文件名（排除治理文件），按名称排序。
+ *
+ * 候选工作流会在同一个 Draft 上重跑：治理文件（rc-record / rc-summary /
+ * signature-verification / install-verification）可能已经存在，若把它们当成
+ * 制品写进 RC 记录，下一次重跑就会因为记录里多出这些文件而失败。
+ */
+export function listCandidateArtifacts(dir) {
+  return fs
+    .readdirSync(dir)
+    .filter((name) => !GOVERNANCE_FILES.has(name))
+    .sort();
+}
+
+/** 从目录构造 RC 记录的制品清单（治理文件一律排除，重跑候选安全且幂等）。 */
+export function collectCandidateArtifacts(dir) {
+  return listCandidateArtifacts(dir).map((name) => {
+    const full = path.join(dir, name);
+    const stat = fs.statSync(full);
+    if (!stat.isFile()) {
+      throw new Error(`候选制品必须是普通文件：${name}`);
+    }
+    return { name, sha256: sha256File(full), size: stat.size };
+  });
+}
+
 const HEX40 = /^[0-9a-f]{40}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const SEMVER = /^\d+\.\d+\.\d+$/;

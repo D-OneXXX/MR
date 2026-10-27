@@ -208,14 +208,9 @@ jobs:
           gh release download "$TAG" --dir downloaded --clobber
           node -e '
             const fs = require("fs");
-            const path = require("path");
-            const { buildRcRecord, sha256File, renderRcSummary } = require("./scripts/release-governance/rc-record.mjs");
-            const dir = "downloaded";
-            const names = fs.readdirSync(dir).filter((n) => n !== "rc-record.json").sort();
-            const artifacts = names.map((name) => {
-              const full = path.join(dir, name);
-              return { name, sha256: sha256File(full), size: fs.statSync(full).size };
-            });
+            const { buildRcRecord, collectCandidateArtifacts, renderRcSummary } = require("./scripts/release-governance/rc-record.mjs");
+            // 治理文件不进入制品清单：候选重跑时不会被既有回执污染摘要。
+            const artifacts = collectCandidateArtifacts("downloaded");
             const record = buildRcRecord({
               tag: process.env.TAG,
               commit: process.env.COMMIT,

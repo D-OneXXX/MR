@@ -10,9 +10,12 @@ import { test } from "node:test";
 import {
   buildRcRecord,
   CHANNELS,
+  collectCandidateArtifacts,
+  GOVERNANCE_FILES,
   parseTag,
   renderRcSummary,
   sha256Bytes,
+  sha256File,
   validateInstallAttestation,
   validateRcRecord,
   verifyPublishPreconditions,
@@ -343,10 +346,109 @@ test("治理文件（记录/摘要/安装回执）不参与制品摘要比对", 
       ["rc-record.json", "c".repeat(64)],
       ["rc-summary.md", "d".repeat(64)],
       ["install-verification.json", "e".repeat(64)],
+      ["signature-verification.json", "f".repeat(64)],
     ]),
     attestation: makeAttestation(),
     channel: "windows",
     commit: COMMIT,
   });
   assert.equal(verdict.ok, true, verdict.problems.join(" | "));
+});
+
+test("collectCandidateArtifacts：重跑候选时治理文件不污染制品清单", () => {
+  const write = (dir, name, bytes) => fs.writeFileSync(path.join(dir, name), bytes);
+  const cleanDir = fs.mkdtempSync(path.join(os.tmpdir(), "mr-rc-clean-"));
+  const rerunDir = fs.mkdtempSync(path.join(os.tmpdir(), "mr-rc-rerun-"));
+  const payloads = {
+    "app-setup.exe": INSTALLER,
+    "app-setup.exe.sig": Buffer.from("sig-bytes"),
+    "latest.json": Buffer.from('{"version":"0.17.2"}'),
+  };
+  for (const dir of [cleanDir, rerunDir]) {
+    for (const [name, bytes] of Object.entries(payloads)) write(dir, name, bytes);
+  }
+  // 重跑：Draft 里已经有候选阶段回填的治理文件。
+  for (const name of GOVERNANCE_FILES) write(rerunDir, name, Buffer.from(`${name}-bytes`));
+
+  const first = collectCandidateArtifacts(cleanDir);
+  const rerun = collectCandidateArtifacts(rerunDir);
+  assert.deepEqual(rerun, first, "有无治理文件必须得到完全相同的制品清单");
+  assert.deepEqual(
+    rerun.map((item) => item.name),
+    ["app-setup.exe", "app-setup.exe.sig", "latest.json"],
+  );
+
+  const recordInput = {
+    tag: "v0.17.2",
+    commit: COMMIT,
+    qa: { runId: "42", buildCommit: COMMIT },
+  };
+  const firstRecord = buildRcRecord({ ...recordInput, artifacts: first });
+  const rerunRecord = buildRcRecord({ ...recordInput, artifacts: rerun });
+  assert.deepEqual(
+    rerunRecord.artifacts,
+    firstRecord.artifacts,
+    "有无治理文件必须生成完全相同的 RC 制品清单",
+  );
+  const digests = new Map(
+    fs.readdirSync(rerunDir).map((name) => [name, sha256File(path.join(rerunDir, name))]),
+  );
+  const verdict = verifyPublishPreconditions({
+    record: rerunRecord,
+    actualDigests: digests,
+    attestation: makeAttestation(),
+    channel: "windows",
+    commit: COMMIT,
+  });
+  assert.equal(verdict.ok, true, verdict.problems.join(" | "));
+  fs.rmSync(cleanDir, { recursive: true, force: true });
+  fs.rmSync(rerunDir, { recursive: true, force: true });
+});
+
+test("verifyPublishPreconditions：治理文件之外的多余文件仍被拒绝", () => {
+  const verdict = verifyPublishPreconditions({
+    record: makeRecord(),
+    actualDigests: new Map([
+      ["app-setup.exe", INSTALLER_SHA],
+      ["rc-record.json", "c".repeat(64)],
+      ["rc-summary.md", "d".repeat(64)],
+      ["install-verification.json", "e".repeat(64)],
+      ["signature-verification.json", "f".repeat(64)],
+      ["surprise.exe", INSTALLER_SHA],
+    ]),
+    attestation: makeAttestation(),
+    channel: "windows",
+    commit: COMMIT,
+  });
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.problems.some((p) => p.includes("记录之外的制品")));
+});
+
+test("runVerification：Draft 中的治理文件按治理文件处理，不参与摘要比对", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mr-verify-governance-"));
+  fs.writeFileSync(path.join(dir, "app-setup.exe"), INSTALLER);
+  for (const name of GOVERNANCE_FILES) {
+    fs.writeFileSync(path.join(dir, name), Buffer.from(`${name}-bytes`));
+  }
+  const verdict = runVerification({
+    record: makeRecord(),
+    assetsDir: dir,
+    attestation: makeAttestation(),
+    tag: "v0.17.2",
+    channel: "windows",
+    commit: COMMIT,
+  });
+  assert.equal(verdict.ok, true, verdict.problems.join(" | "));
+  fs.writeFileSync(path.join(dir, "surprise.exe"), Buffer.from("extra"));
+  const rejected = runVerification({
+    record: makeRecord(),
+    assetsDir: dir,
+    attestation: makeAttestation(),
+    tag: "v0.17.2",
+    channel: "windows",
+    commit: COMMIT,
+  });
+  assert.equal(rejected.ok, false);
+  assert.ok(rejected.problems.some((p) => p.includes("记录之外的制品")));
+  fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -174,6 +174,40 @@ export class CdpPage {
     return result.result?.value;
   }
 
+  /**
+   * 以参数形式调用页面函数，避免把运行时值拼进表达式。
+   * 测试夹具里写 localStorage 时使用，杜绝动态代码拼接。
+   */
+  async callFunction(functionDeclaration, args = [], { timeout = 15_000 } = {}) {
+    const global = await this.send(
+      "Runtime.evaluate",
+      { expression: "globalThis", returnByValue: false },
+      timeout,
+    );
+    const objectId = global.result?.objectId;
+    if (!objectId) throw new Error("无法取得页面全局对象");
+    const result = await this.send(
+      "Runtime.callFunctionOn",
+      {
+        functionDeclaration,
+        objectId,
+        arguments: args.map((value) => ({ value })),
+        awaitPromise: true,
+        returnByValue: true,
+        userGesture: true,
+      },
+      timeout,
+    );
+    if (result.exceptionDetails) {
+      const text =
+        result.exceptionDetails.exception?.description ||
+        result.exceptionDetails.text ||
+        "页面函数异常";
+      throw new Error(text);
+    }
+    return result.result?.value;
+  }
+
   async waitFor(expression, { timeout = 10_000, interval = 100, label } = {}) {
     const deadline = Date.now() + timeout;
     let lastError = null;

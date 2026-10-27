@@ -311,6 +311,20 @@ const DYNAMIC_PREFIX_RULES: ReadonlyArray<{ prefix: string; rule: Rule }> = [
       };
     },
   },
+  {
+    prefix: "mr-pdf-fit-",
+    // PDF 按书记忆的适配模式：pages/Reader.tsx 只认 page|width。
+    rule: (value) => {
+      if (value === "page" || value === "width") {
+        return { action: "keep" };
+      }
+      return {
+        action: "remove",
+        kind: "invalid-enum",
+        reason: "PDF 适配模式非法，只允许 page|width",
+      };
+    },
+  },
 ];
 
 /** 动态前缀清单（QA 断言用）。 */

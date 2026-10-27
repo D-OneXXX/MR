@@ -346,6 +346,14 @@ async function runQaSession({
     page,
     imported,
     books,
+    /**
+     * 工作区重置失败记录（由 `resetWorkspace` 填充）。
+     *
+     * 失败的调用方可以选择自己 `catch` 后上报；但即便调用方把异常吞了
+     * （`await ctx.resetWorkspace().catch(() => {})`），这条记录也还在，
+     * 运行器可以统一扫描出来，绝不让重置失败悄悄消失。
+     */
+    resetFailures: [],
     async reconnectMain(maxAttempts = 3) {
       let lastError = null;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -364,15 +372,70 @@ async function runQaSession({
       throw lastError ?? new Error("主窗口重连失败");
     },
     async goto(hash) {
-      await page.navigateHash(hash);
-      await page.waitFor(
-        `location.hash === ${JSON.stringify(hash)}`,
-        { timeout: 5000, label: `hash ${hash}` },
+      const reach = async () => {
+        await page.navigateHash(hash);
+        const reached = await page
+          .waitFor(`location.hash === ${JSON.stringify(hash)}`, {
+            timeout: 5000,
+            label: `hash ${hash}`,
+          })
+          .then(() => true)
+          .catch(() => false);
+        if (reached) await sleep(250);
+        return reached;
+      };
+      if (await reach()) return;
+      // 路由可能被阅读器自身的历史改写（例如 ?page= 深链被 replaceState 规范化）
+      // 或被前一个套件残留的状态打断：重试一次，仍失败则带上真实 hash 报错。
+      if (await reach()) return;
+      const actual = await page.eval("location.hash").catch(() => "<unavailable>");
+      throw new Error(
+        `等待条件超时（hash ${hash}）：location.hash === ${hash}（实际 ${actual}）`,
       );
-      await sleep(250);
     },
     async targets() {
       return listTargets(cdpPort);
+    },
+    /**
+     * 重置工作区页签。
+     *
+     * 阅读页签有数量上限（`MAX_READER_TABS`）：超限时工作区会提示并**回退到上一个
+     * 页签**，这会让后一个套件的路由跳转被静默拒绝。页签只存在内存里，刷新即可清空，
+     * 因此每个套件开始前先重置一次，保证套件之间互不影响。
+     *
+     * 失败必须**抛给调用方**：重置失败既意味着后续套件会跑在脏状态里（页签没清干净、
+     * 可能撞上页签配额），也可能暴露「阅读器卸载即崩溃」这类真实缺陷——静默吞掉会
+     * 把这两种情况一起藏起来。调用方负责把它记录成该套件的基础设施缺陷。
+     */
+    async resetWorkspace() {
+      const steps = [];
+      try {
+        await page.eval("setTimeout(() => location.reload(), 60); true");
+        steps.push("已触发页面重载");
+        await sleep(1200);
+        const reconnected = await connectResponsiveMain(cdpPort);
+        steps.push("已重连主窗口");
+        // 先换引用：旧 target 可能已经随崩溃消失，指向它的求值会全部失败。
+        page = reconnected;
+        context.page = reconnected;
+        await waitForApp(reconnected);
+        steps.push("应用已就绪");
+        await reconnected.waitFor(
+          "!!document.querySelector('main') || !!document.querySelector('.reader-root')",
+          { timeout: 20_000, label: "workspace reset" },
+        );
+        steps.push("工作区外壳已渲染");
+      } catch (error) {
+        const failure = new Error(
+          `工作区重置失败（${steps.join(" → ") || "尚未开始"}）：${error.message}` +
+            `。重置失败说明重载后主窗口没有恢复，或阅读器在卸载时崩溃；` +
+            `后续套件将在脏状态下继续，且阅读页签可能撞上 MAX_READER_TABS 上限。`,
+          { cause: error },
+        );
+        // 留档：即使调用方吞掉异常，运行器也能把它记成基础设施缺陷。
+        context.resetFailures.push(failure);
+        throw failure;
+      }
     },
     async setLocale(locale) {
       await page.eval(

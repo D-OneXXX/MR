@@ -13,6 +13,7 @@ pub mod logging;
 mod online;
 mod open_with;
 mod paths;
+pub mod pdf;
 pub mod pipeline;
 mod platform;
 pub mod render_cache;
@@ -81,6 +82,16 @@ pub struct PageImage {
     pub orig_height: u32,
     pub mime: String,
     pub data_url: String,
+}
+
+/// PDF 字节分块（PDF-2）：前端 PDF.js 按区间拉取本地 PDF。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfChunk {
+    /// PDF 文件总字节数（始终是真实大小，与请求区间无关）。
+    pub total: u64,
+    /// 本次区间的原始字节（base64，**无** `data:` 前缀）。
+    pub data: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -544,6 +555,10 @@ pub fn run() {
             commands::list_entries,
             commands::get_page,
             commands::get_thumbnail,
+            // PDF-2：PDF 渲染支持（页面由前端 PDF.js 渲染，后端只供字节与封面缓存）。
+            commands::get_pdf_chunk,
+            commands::set_book_page_count,
+            commands::put_pdf_thumbnail,
             commands::clear_thumbnail_cache,
             commands::clear_temp_cache,
             commands::get_webtoon_layout,

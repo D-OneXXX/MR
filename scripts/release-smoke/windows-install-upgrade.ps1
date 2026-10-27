@@ -19,6 +19,9 @@
   - 不修改签名私钥、不接触 GitHub Release、不推送 Tag；
   - 只做安装/启动/数据存活检查，不做静默自动更新；
   - 所有数据目录必须显式隔离（MR_DATA_DIR / render_cache / online_cache / WebView2 profile）。
+  - 提供 -PdfCheckScript 时额外验证 PDF 导入/渲染/翻页/缩放/封面、跨重启进度、
+    .mrbackup 导出/恢复（含旧版备份迁移）与 v2 数据库快照回滚；四项结果写入
+    证据的 checks.pdfReading / progressRestart / backupRestore / databaseRollback。
 
 .EXAMPLE
   pwsh -File scripts/release-smoke/windows-install-upgrade.ps1 `
@@ -33,6 +36,7 @@
     -LibrarySeedScript scripts/release-smoke/library-fixture.mjs `
     -LibraryVerifyScript scripts/release-smoke/library-fixture.mjs `
     -LibraryUiCheckScript scripts/release-smoke/library-ui-check.mjs `
+    -PdfCheckScript scripts/release-smoke/pdf-release-check.mjs `
     -LibraryFixture $env:TEMP\mr-clean-vm\fixture.json `
     -CleanEnvironment -Hypervisor hyperv -VmId MR-RC-0172 `
     -VmImageSha256 <64-hex> -VmStartedAt 2026-10-26T00:00:00Z `
@@ -101,6 +105,25 @@ param(
 
   [Parameter(Mandatory = $false)]
   [string]$LibraryFixture = "",
+
+  # PDF 阅读 / 跨重启进度 / 备份恢复 / 数据库回滚（发布门禁四项新检查）。
+  [Parameter(Mandatory = $false)]
+  [string]$PdfCheckScript = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$PdfDataDir = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$PdfWorkDir = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$PdfEvidenceDir = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$PdfRestoreDataDir = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$PdfLegacyDataDir = "",
 
   [Parameter(Mandatory = $false)]
   [int]$UiCheckPort = 9333,
@@ -219,7 +242,10 @@ function Test-AppLaunch {
     [Parameter(Mandatory = $false)][string]$UiCheckScript = "",
     [Parameter(Mandatory = $false)][string]$FixturePath = "",
     [Parameter(Mandatory = $false)][string]$UiCheckOut = "",
-    [Parameter(Mandatory = $false)][int]$Port = 9333
+    [Parameter(Mandatory = $false)][int]$Port = 9333,
+    # 通用发布校验步骤：每个元素 = @{ Script=…; Args=@(…); Out=<json> }。
+    # 与 UiCheckScript 一样在应用启动后执行，结果随 .Steps 返回给调用方判定。
+    [Parameter(Mandatory = $false)][object[]]$Steps = @()
   )
 
   $exe = Join-Path $InstallLocation "MangaReader.exe"
@@ -228,7 +254,7 @@ function Test-AppLaunch {
   }
   if (-not (Test-Path $exe)) {
     Assert-True $false "安装目录里找不到主程序：$InstallLocation"
-    return [pscustomobject]@{ Running = $false; UiCheck = $null; ClosedGracefully = $false }
+    return [pscustomobject]@{ Running = $false; UiCheck = $null; Steps = @(); ClosedGracefully = $false }
   }
 
   # 隔离数据目录：绝不碰真实用户的书库与 WebView2 profile。
@@ -236,7 +262,8 @@ function Test-AppLaunch {
   $env:MR_RENDER_CACHE_DIR = Join-Path $DataDirectory "render_cache"
   $env:MR_ONLINE_CACHE_DIR = Join-Path $DataDirectory "online_cache"
   $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $DataDirectory "webview"
-  if ($UiCheckScript) {
+  $hasSteps = ($null -ne $Steps -and @($Steps).Count -gt 0)
+  if ($UiCheckScript -or $hasSteps) {
     $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS =
       "--remote-debugging-port=$Port" +
       " --disable-background-timer-throttling" +
@@ -284,6 +311,38 @@ function Test-AppLaunch {
     }
   }
 
+  # 通用发布校验步骤：只运行、不在这里断言；由调用方把结果折算成
+  # checks.pdfReading / progressRestart / backupRestore / databaseRollback。
+  $stepResults = @()
+  foreach ($step in @($Steps)) {
+    if ($null -eq $step) { continue }
+    if (-not $running) { break }
+    $stepScript = [string]$step.Script
+    if (-not $stepScript) { continue }
+    $stepArgs = @()
+    if ($null -ne $step.Args) {
+      $stepArgs = @($step.Args | ForEach-Object { [string]$_ })
+    }
+    $stepOut = [string]$step.Out
+    Write-Host "   运行发布校验步骤（$(Split-Path -Leaf $stepScript)）"
+    & node $stepScript @stepArgs | Out-Host
+    $stepExit = $LASTEXITCODE
+    $stepResult = $null
+    if ($stepOut -and (Test-Path $stepOut)) {
+      try { $stepResult = Get-Content $stepOut -Raw | ConvertFrom-Json } catch { $stepResult = $null }
+    }
+    $stepOk = ($stepExit -eq 0 -and $null -ne $stepResult -and $stepResult.ok -eq $true)
+    if (-not $stepOk) {
+      Write-Host "   步骤失败（exit $stepExit）" -ForegroundColor Red
+    }
+    $stepResults += [pscustomobject]@{
+      Script = $stepScript
+      Exit   = $stepExit
+      Ok     = [bool]$stepOk
+      Result = $stepResult
+    }
+  }
+
   # 一次性 VM：优雅关闭优先；超时才强制结束（测试清理，不是产品的静默重启）。
   $closedGracefully = $false
   if (-not $proc.HasExited) {
@@ -298,8 +357,55 @@ function Test-AppLaunch {
   return [pscustomobject]@{
     Running         = $running
     UiCheck         = $ui
+    Steps           = $stepResults
     ClosedGracefully = $closedGracefully
   }
+}
+
+# 每个 PDF 步骤使用独立 CDP 端口：应用关闭后 WebView2 子进程可能短暂残留，
+# 复用同一端口会让新实例连接到上一个实例的旧 target，断言就失去意义。
+$script:PdfPortOffset = 0
+function Get-PdfPort([int]$Base) {
+  $script:PdfPortOffset += 1
+  return $Base + 10 + $script:PdfPortOffset
+}
+
+function New-AppStep {
+  param(
+    [Parameter(Mandatory = $true)][string]$Script,
+    [Parameter(Mandatory = $false)][string[]]$Arguments = @(),
+    [Parameter(Mandatory = $false)][string]$OutPath = ""
+  )
+  return @{ Script = $Script; Args = $Arguments; Out = $OutPath }
+}
+
+function Get-StepOutcome([object]$Launch, [int]$Index = 0) {
+  if ($null -eq $Launch) { return $null }
+  $items = @($Launch.Steps)
+  if ($items.Count -le $Index) { return $null }
+  return $items[$Index]
+}
+
+# 应用关闭时的节点校验（SQLite 只读 / 快照 / 回滚 / 旧备份生成）。
+function Invoke-NodeCheck {
+  param(
+    [Parameter(Mandatory = $true)][string]$Script,
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $false)][string[]]$Arguments = @(),
+    [Parameter(Mandatory = $false)][string]$OutPath = ""
+  )
+  Write-Host "   $Label"
+  & node $Script @Arguments | Out-Host
+  $exit = $LASTEXITCODE
+  $result = $null
+  if ($OutPath -and (Test-Path $OutPath)) {
+    try { $result = Get-Content $OutPath -Raw | ConvertFrom-Json } catch { $result = $null }
+  }
+  $ok = ($exit -eq 0 -and $null -ne $result -and $result.ok -eq $true)
+  if (-not $ok) {
+    Write-Host "   FAIL $Label（exit $exit）" -ForegroundColor Red
+  }
+  return [pscustomobject]@{ Ok = [bool]$ok; Exit = $exit; Result = $result }
 }
 
 function Invoke-LibrarySeed {
@@ -477,6 +583,53 @@ if ($libraryScriptsRequested) {
   }
 }
 
+# ---------------------------------------------------------------------------
+# PDF / 备份 / 数据库回滚：四项新发布门禁的前置条件与隔离目录
+# ---------------------------------------------------------------------------
+$pdfChecksRequested = [bool]$PdfCheckScript
+if ($pdfChecksRequested) {
+  Require-True ([bool](Get-Command node -ErrorAction SilentlyContinue)) `
+    "PDF/备份/数据库回滚校验需要 Node.js 22+（找不到 node）"
+  Require-True (Test-Path $PdfCheckScript) "找不到 PDF 发布校验脚本：$PdfCheckScript"
+  # 数据库回滚检查必须先有旧版本可用于“回滚后再装回”，否则无法形成闭环。
+  Require-True ([bool]$PreviousInstaller) `
+    "PDF 发布校验包含数据库回滚，必须同时提供 -PreviousInstaller"
+  if (-not $LibraryVerifyScript) {
+    Assert-True $false "PDF 发布校验依赖书库完整性校验（-LibraryVerifyScript 为空）"
+  }
+
+  # 默认全部放在应用数据目录的**同级**：夹具书源必须位于 MR_DATA_DIR 之外，
+  # 否则产品的本地书源安全策略会拒绝读取 PDF（pdf-source-not-allowed）。
+  $siblingRoot = Split-Path -Parent $DataDirForApp
+  if (-not $PdfDataDir) { $PdfDataDir = Join-Path $siblingRoot "pdf-data" }
+  if (-not $PdfWorkDir) { $PdfWorkDir = Join-Path $siblingRoot "pdf-work" }
+  if (-not $PdfEvidenceDir) { $PdfEvidenceDir = Join-Path $siblingRoot "pdf-evidence" }
+  if (-not $PdfRestoreDataDir) { $PdfRestoreDataDir = Join-Path $siblingRoot "pdf-restore-data" }
+  if (-not $PdfLegacyDataDir) { $PdfLegacyDataDir = Join-Path $siblingRoot "pdf-legacy-data" }
+  $PdfDataDir = [IO.Path]::GetFullPath($PdfDataDir)
+  $PdfWorkDir = [IO.Path]::GetFullPath($PdfWorkDir)
+  $PdfEvidenceDir = [IO.Path]::GetFullPath($PdfEvidenceDir)
+  $PdfRestoreDataDir = [IO.Path]::GetFullPath($PdfRestoreDataDir)
+  $PdfLegacyDataDir = [IO.Path]::GetFullPath($PdfLegacyDataDir)
+
+  $dataRootPrefix = $DataDirForApp.TrimEnd('\') + '\'
+  Require-True (-not $PdfWorkDir.StartsWith($dataRootPrefix, [StringComparison]::OrdinalIgnoreCase)) `
+    "PDF 夹具工作目录不得位于应用数据目录内（-PdfWorkDir）"
+  Require-True (-not $PdfDataDir.StartsWith($dataRootPrefix, [StringComparison]::OrdinalIgnoreCase)) `
+    "PDF 验证数据目录不得位于主数据目录内（-PdfDataDir）"
+  Require-True ($PdfRestoreDataDir -ine $PdfDataDir -and $PdfLegacyDataDir -ine $PdfDataDir) `
+    "备份恢复/旧版恢复必须使用各自独立的隔离数据目录"
+
+  foreach ($dir in @($PdfDataDir, $PdfWorkDir, $PdfEvidenceDir, $PdfRestoreDataDir, $PdfLegacyDataDir)) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  }
+  foreach ($dir in @($PdfDataDir, $PdfRestoreDataDir, $PdfLegacyDataDir)) {
+    foreach ($sub in @("render_cache", "online_cache", "webview")) {
+      New-Item -ItemType Directory -Force -Path (Join-Path $dir $sub) | Out-Null
+    }
+  }
+}
+
 $beforeState = Get-LibraryState $DataDir
 Write-Host "   数据目录：$DataDir（库存在：$($beforeState.Exists)）"
 
@@ -486,6 +639,14 @@ $recoveryOk = $false
 $dataIntegrity = "fail"
 $libraryResult = $null
 $seedResult = $null
+# 四项新门禁：只有断言真实执行且通过时才允许 pass（默认 fail）。
+$pdfReadingOk = $false
+$progressRestartOk = $false
+$backupRestoreOk = $false
+$databaseRollbackOk = $false
+$pdfBookId = ""
+$pdfSnapshotPath = ""
+$pdfSnapshotOk = $false
 
 if ($PreviousInstaller) {
   Write-Step "安装旧版本（建立升级起点）"
@@ -569,6 +730,114 @@ if ($libraryResult) {
   }
 }
 
+if ($pdfChecksRequested -and $newInstall) {
+  # PDF 使用**独立的隔离数据目录**：既有的合成书库夹具断言 bookCount=1，
+  # 把 PDF 书塞进主数据目录会让回滚/升级的既有断言变红（那是削弱既有断言，
+  # 不是增强）。独立目录同样跑真实安装的 0.18.0 二进制与真实 IPC。
+  Write-Step "PDF 阅读（导入 / 渲染 / 翻页 / 缩放 / 封面）"
+  $pdfUiOut = Join-Path $PdfEvidenceDir "pdf-ui.json"
+  $pdfUiPort = Get-PdfPort $UiCheckPort
+  $pdfUiLaunch = Test-AppLaunch -InstallLocation $newInstall.InstallLocation `
+    -DataDirectory $PdfDataDir -Port $pdfUiPort `
+    -Steps @(New-AppStep -Script $PdfCheckScript -OutPath $pdfUiOut -Arguments @(
+      "ui", "--port", "$pdfUiPort", "--data-dir", $PdfWorkDir,
+      "--render-cache", (Join-Path $PdfDataDir "render_cache"), "--out", $pdfUiOut))
+  $pdfUi = Get-StepOutcome $pdfUiLaunch
+  $pdfUiOk = [bool]($pdfUi -and $pdfUi.Ok)
+  if ($pdfUi -and $pdfUi.Result -and $pdfUi.Result.bookId) {
+    $pdfBookId = [string]$pdfUi.Result.bookId
+  }
+  Assert-True $pdfUiOk "PDF 以 format=pdf 入库并完成渲染/翻页/缩放/封面断言"
+
+  if (-not $pdfBookId) {
+    Assert-True $false "PDF 未入库，跳过数据库/重启/备份/回滚断言"
+  } else {
+    Write-Step "PDF 数据库与封面缓存（应用关闭后只读校验）"
+    $pdfDbOut = Join-Path $PdfEvidenceDir "pdf-db.json"
+    $pdfDbStep = Invoke-NodeCheck -Script $PdfCheckScript `
+      -Label "library.db：format=pdf / page_count=4 / current_page=2 / user_version=2 / 封面 JPEG" `
+      -OutPath $pdfDbOut -Arguments @("db", "--data-dir", $PdfDataDir, "--book-id", $pdfBookId,
+        "--expect-page", "3", "--expect-count", "4", "--out", $pdfDbOut)
+    Assert-True $pdfDbStep.Ok "PDF 数据库与封面缓存检查通过"
+    $pdfReadingOk = [bool]($pdfUiOk -and $pdfDbStep.Ok)
+
+    Write-Step "PDF 进度：真实进程重启后恢复"
+    $pdfRestartOut = Join-Path $PdfEvidenceDir "pdf-restart.json"
+    $pdfRestartPort = Get-PdfPort $UiCheckPort
+    $pdfRestartLaunch = Test-AppLaunch -InstallLocation $newInstall.InstallLocation `
+      -DataDirectory $PdfDataDir -Port $pdfRestartPort `
+      -Steps @(New-AppStep -Script $PdfCheckScript -OutPath $pdfRestartOut -Arguments @(
+        "restart", "--port", "$pdfRestartPort", "--book-id", $pdfBookId,
+        "--expect-page", "3", "--out", $pdfRestartOut))
+    $pdfRestart = Get-StepOutcome $pdfRestartLaunch
+    $progressRestartOk = [bool]($pdfRestart -and $pdfRestart.Ok)
+    Assert-True $progressRestartOk "PDF 重启后恢复到第 3 页且画布已解码"
+
+    Write-Step "备份导出 / 恢复 / 旧版备份迁移"
+    $pdfBackupPath = Join-Path $PdfEvidenceDir "release.mrbackup"
+    $pdfBackupOut = Join-Path $PdfEvidenceDir "pdf-backup-export.json"
+    $pdfBackupPort = Get-PdfPort $UiCheckPort
+    $pdfBackupLaunch = Test-AppLaunch -InstallLocation $newInstall.InstallLocation `
+      -DataDirectory $PdfDataDir -Port $pdfBackupPort `
+      -Steps @(New-AppStep -Script $PdfCheckScript -OutPath $pdfBackupOut -Arguments @(
+        "backup-export", "--port", "$pdfBackupPort", "--dest", $pdfBackupPath,
+        "--book-id", $pdfBookId, "--expect-page", "3", "--out", $pdfBackupOut))
+    $pdfBackup = Get-StepOutcome $pdfBackupLaunch
+    $pdfBackupOk = [bool]($pdfBackup -and $pdfBackup.Ok)
+    Assert-True $pdfBackupOk ".mrbackup 含 manifest+library.db、保留 PDF 与进度且无凭据残留"
+
+    $pdfRestoreOut = Join-Path $PdfEvidenceDir "pdf-backup-restore.json"
+    $pdfRestorePort = Get-PdfPort $UiCheckPort
+    $pdfRestoreLaunch = Test-AppLaunch -InstallLocation $newInstall.InstallLocation `
+      -DataDirectory $PdfRestoreDataDir -Port $pdfRestorePort `
+      -Steps @(New-AppStep -Script $PdfCheckScript -OutPath $pdfRestoreOut -Arguments @(
+        "backup-restore", "--port", "$pdfRestorePort", "--data-dir", $PdfRestoreDataDir,
+        "--source", $pdfBackupPath, "--expect-book-id", $pdfBookId,
+        "--expect-current-page", "2", "--out", $pdfRestoreOut))
+    $pdfRestore = Get-StepOutcome $pdfRestoreLaunch
+    $pdfRestoreOk = [bool]($pdfRestore -and $pdfRestore.Ok)
+    Assert-True $pdfRestoreOk "在独立 profile 恢复 .mrbackup 后 PDF 与进度仍在（quick_check 通过）"
+
+    # 旧版（PDF-1 之前）备份：真实 zip、books 无 format 列、user_version=1。
+    $legacyBackupPath = Join-Path $PdfEvidenceDir "legacy.mrbackup"
+    $legacyBackupEvidence = Join-Path $PdfEvidenceDir "pdf-legacy-backup.json"
+    $legacyStep = Invoke-NodeCheck -Script $PdfCheckScript `
+      -Label "生成旧版 .mrbackup（无 format 列 / user_version=1）" `
+      -OutPath $legacyBackupEvidence -Arguments @("legacy-backup", "--out", $legacyBackupPath,
+        "--work-dir", (Join-Path $PdfWorkDir "legacy"), "--evidence", $legacyBackupEvidence)
+    $legacyBookId = ""
+    if ($legacyStep.Result -and $legacyStep.Result.bookId) {
+      $legacyBookId = [string]$legacyStep.Result.bookId
+    }
+    $legacyRestoreOut = Join-Path $PdfEvidenceDir "pdf-verify-legacy.json"
+    $legacyRestoreOk = $false
+    if ($legacyStep.Ok -and $legacyBookId) {
+      $legacyPort = Get-PdfPort $UiCheckPort
+      $legacyLaunch = Test-AppLaunch -InstallLocation $newInstall.InstallLocation `
+        -DataDirectory $PdfLegacyDataDir -Port $legacyPort `
+        -Steps @(New-AppStep -Script $PdfCheckScript -OutPath $legacyRestoreOut -Arguments @(
+          "verify-legacy", "--port", "$legacyPort", "--data-dir", $PdfLegacyDataDir,
+          "--source", $legacyBackupPath, "--book-id", $legacyBookId, "--out", $legacyRestoreOut))
+      $legacyRestore = Get-StepOutcome $legacyLaunch
+      $legacyRestoreOk = [bool]($legacyRestore -and $legacyRestore.Ok)
+    }
+    Assert-True ($legacyStep.Ok -and $legacyRestoreOk) `
+      "旧版备份可恢复：图片书与进度保留、quick_check 通过、user_version 升到 2"
+
+    $backupRestoreOk = [bool]($pdfBackupOk -and $pdfRestoreOk -and $legacyStep.Ok -and $legacyRestoreOk)
+
+    Write-Step "回滚前快照 v2 数据库"
+    $pdfSnapshotPath = Join-Path $PdfEvidenceDir "v2-snapshot.db"
+    $pdfSnapshotEvidence = Join-Path $PdfEvidenceDir "pdf-db-snapshot.json"
+    $pdfSnapshotStep = Invoke-NodeCheck -Script $PdfCheckScript `
+      -Label "VACUUM INTO 快照（应用已关闭）" -OutPath $pdfSnapshotEvidence `
+      -Arguments @("db-snapshot", "--data-dir", $PdfDataDir, "--out", $pdfSnapshotPath,
+        "--evidence", $pdfSnapshotEvidence)
+    $pdfSnapshotOk = [bool]$pdfSnapshotStep.Ok
+    Assert-True $pdfSnapshotOk "v2 数据库快照通过自检"
+  }
+}
+
 if ($PreviousInstaller) {
   Write-Step "回滚：重新安装旧版本"
   Invoke-Installer $PreviousInstaller
@@ -594,6 +863,67 @@ if ($PreviousInstaller) {
     $afterRollback = Get-LibraryState $DataDir
     Assert-True $afterRollback.Exists "回滚后 library.db 仍然存在"
   }
+}
+
+if ($PreviousInstaller -and $pdfChecksRequested -and [bool]$pdfBookId) {
+  Write-Step "数据库回滚：旧版本打开 v2 库 → 快照回滚 → 装回候选版本"
+  $rollbackCompatOut = Join-Path $PdfEvidenceDir "pdf-rollback-compat.json"
+  $rollbackCompatOk = $false
+  $rollbackInstallState = Get-InstalledMangaReader
+  if ($rollbackInstallState) {
+    $rollbackCompatPort = Get-PdfPort $UiCheckPort
+    $rollbackCompatLaunch = Test-AppLaunch -InstallLocation $rollbackInstallState.InstallLocation `
+      -DataDirectory $PdfDataDir -Port $rollbackCompatPort `
+      -Steps @(New-AppStep -Script $PdfCheckScript -OutPath $rollbackCompatOut -Arguments @(
+        "rollback-compat", "--port", "$rollbackCompatPort", "--data-dir", $PdfDataDir,
+        "--out", $rollbackCompatOut))
+    $rollbackCompat = Get-StepOutcome $rollbackCompatLaunch
+    $rollbackCompatOk = [bool]($rollbackCompat -and $rollbackCompat.Ok)
+  }
+  Assert-True $rollbackCompatOk `
+    "回滚到旧版本后 list_books 不崩溃且 v2 库未被降级（schema=2 / quick_check ok）"
+
+  $dbRestoreOk = $false
+  if ($pdfSnapshotOk -and $pdfSnapshotPath -and (Test-Path $pdfSnapshotPath)) {
+    $dbRestoreEvidence = Join-Path $PdfEvidenceDir "pdf-db-restore.json"
+    $dbRestoreStep = Invoke-NodeCheck -Script $PdfCheckScript `
+      -Label "从 v2 快照回滚数据库（处理 -wal/-shm 并逐字节校验）" `
+      -OutPath $dbRestoreEvidence -Arguments @("db-restore", "--data-dir", $PdfDataDir,
+        "--snapshot", $pdfSnapshotPath, "--book-id", $pdfBookId,
+        "--expect-current-page", "2", "--evidence", $dbRestoreEvidence)
+    $dbRestoreOk = [bool]$dbRestoreStep.Ok
+  }
+  Assert-True $dbRestoreOk "数据库快照回滚逐字节一致且保留 PDF 与第 3 页进度"
+
+  # 装回候选版本：证明回滚后的数据库仍能被新版本按原进度打开。
+  Invoke-Installer $Installer
+  $restoredInstall = Get-InstalledMangaReader
+  Assert-True ($null -ne $restoredInstall) "数据库回滚后重新安装候选版本成功"
+  $postRestoreOk = $false
+  $postRestoreDbOk = $false
+  if ($restoredInstall) {
+    $postRestoreOut = Join-Path $PdfEvidenceDir "pdf-restore-after-restart.json"
+    $postRestorePort = Get-PdfPort $UiCheckPort
+    $postRestoreLaunch = Test-AppLaunch -InstallLocation $restoredInstall.InstallLocation `
+      -DataDirectory $PdfDataDir -Port $postRestorePort `
+      -Steps @(New-AppStep -Script $PdfCheckScript -OutPath $postRestoreOut -Arguments @(
+        "restart", "--port", "$postRestorePort", "--book-id", $pdfBookId,
+        "--expect-page", "3", "--out", $postRestoreOut))
+    $postRestore = Get-StepOutcome $postRestoreLaunch
+    $postRestoreOk = [bool]($postRestore -and $postRestore.Ok)
+
+    $postRestoreDbOut = Join-Path $PdfEvidenceDir "pdf-db-after-restore.json"
+    $postRestoreDbStep = Invoke-NodeCheck -Script $PdfCheckScript `
+      -Label "回滚恢复后的数据库复核（format/page_count/progress/封面）" `
+      -OutPath $postRestoreDbOut -Arguments @("db", "--data-dir", $PdfDataDir,
+        "--book-id", $pdfBookId, "--expect-page", "3", "--expect-count", "4",
+        "--out", $postRestoreDbOut)
+    $postRestoreDbOk = [bool]$postRestoreDbStep.Ok
+  }
+  Assert-True $postRestoreOk "恢复后的数据库被候选版本正确打开并停在第 3 页"
+  Assert-True $postRestoreDbOk "恢复后的数据库仍为 v2，页码/页数/封面完整"
+  $databaseRollbackOk = [bool]($pdfSnapshotOk -and $rollbackCompatOk -and $dbRestoreOk -and
+    $postRestoreOk -and $postRestoreDbOk)
 }
 
 if (-not $KeepInstalled) {
@@ -635,9 +965,11 @@ if (-not $KeepInstalled) {
 
 # ---------------------------------------------------------------------------
 # 产出安装验证证据（供发布门禁消费）：
-#   kind/version/commit/platform/artifactSha256 + 四项检查 + 环境/provenance +
+#   kind/version/commit/platform/artifactSha256 + 八项检查 + 环境/provenance +
 #   library（数据库自检 + 合成书库 + 阅读进度 + 真实 list_books IPC）
 # 缺任何一项都不算通过；脚本失败时 verdict=FAIL。
+# PDF / 进度重启 / 备份恢复 / 数据库回滚只以**本次运行**为准，不从 MergeFrom 借
+# （fresh-only 证据没有这些断言，必须如实记为 fail）。
 # ---------------------------------------------------------------------------
 if ($EmitEvidence) {
   $merged = $null
@@ -670,10 +1002,19 @@ if ($EmitEvidence) {
   # 本次运行请求了书库校验时，dataIntegrity 必须以本次为准，绝不能让 fresh-only 的 pass 掩盖失败。
   $checkData = if ($LibraryVerifyScript) { $dataIntegrity } elseif ($merged -and $merged.checks -and $merged.checks.dataIntegrity -eq "pass") { "pass" } else { $dataIntegrity }
   $checkRecovery = if ($PreviousInstaller) { if ($recoveryOk) { "pass" } else { "fail" } } elseif ($merged -and $merged.checks -and $merged.checks.recovery -eq "pass") { "pass" } else { "fail" }
+  $checkPdfReading = if ($pdfReadingOk) { "pass" } else { "fail" }
+  $checkProgressRestart = if ($progressRestartOk) { "pass" } else { "fail" }
+  $checkBackupRestore = if ($backupRestoreOk) { "pass" } else { "fail" }
+  $checkDatabaseRollback = if ($databaseRollbackOk) { "pass" } else { "fail" }
 
   $finalLibrary = if ($libraryResult) { $libraryResult } elseif ($merged) { $merged.library } else { $null }
+  # fresh-only 运行没有 PDF/备份/回滚断言，四项新检查如实为 fail，但不得因此
+  # 把“全新安装验证”判死；升级运行（PdfCheckScript）则必须四项全 pass。
+  $pdfAllPass = [bool]($checkPdfReading -eq "pass" -and $checkProgressRestart -eq "pass" -and
+    $checkBackupRestore -eq "pass" -and $checkDatabaseRollback -eq "pass")
   $verdict = if ($script:Failures.Count -eq 0 -and $dataIntegrity -eq "pass" -and
-    ($checkFresh -eq "pass" -or $checkUpgrade -eq "pass")) { "PASS" } else { "FAIL" }
+    ($checkFresh -eq "pass" -or $checkUpgrade -eq "pass") -and
+    (-not $pdfChecksRequested -or $pdfAllPass)) { "PASS" } else { "FAIL" }
 
   $evidence = [ordered]@{
     kind = "manga-reader.install-verification"
@@ -693,6 +1034,10 @@ if ($EmitEvidence) {
       upgrade = $checkUpgrade
       dataIntegrity = $checkData
       recovery = $checkRecovery
+      pdfReading = $checkPdfReading
+      progressRestart = $checkProgressRestart
+      backupRestore = $checkBackupRestore
+      databaseRollback = $checkDatabaseRollback
     }
     library = $finalLibrary
     machine = [ordered]@{

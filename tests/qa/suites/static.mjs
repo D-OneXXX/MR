@@ -329,6 +329,74 @@ export async function runStaticSuite(ctx, report) {
     }
   }
 
+  // PDF 导入入口：README 承诺「Add books」可选 PDF，文件选择器与重定位
+  // 都必须把 pdf 当作文件源；否则用户只能拖拽导入，承诺与实现不一致。
+  try {
+    const librarySource = fs.readFileSync(
+      path.join(root, "src", "pages", "Library.tsx"),
+      "utf8",
+    );
+    const relocateSource = fs.readFileSync(
+      path.join(root, "src", "components", "library", "RelocateDialog.tsx"),
+      "utf8",
+    );
+    const localesSource = fs.readFileSync(
+      path.join(root, "src", "i18n", "messages", "library.ts"),
+      "utf8",
+    );
+    const problems = [];
+    if (!/extensions:\s*\[[^\]]*"pdf"/.test(librarySource)) {
+      problems.push("Library.tsx 的导入文件选择器未包含 pdf");
+    }
+    if (!/\\\.\(zip\|cbz\|pdf\)\$/.test(relocateSource)) {
+      problems.push("RelocateDialog.tsx 未把 PDF 识别为文件源");
+    }
+    if (!/extensions:\s*\[[^\]]*"pdf"/.test(relocateSource)) {
+      problems.push("RelocateDialog.tsx 的重定位选择器未包含 pdf");
+    }
+    const pdfFilterLabels = (
+      localesSource.match(/"import\.filesFilter":\s*"[^"]*PDF/g) || []
+    ).length;
+    if (pdfFilterLabels < 6) {
+      problems.push(`六语 filesFilter 提到 PDF 的只有 ${pdfFilterLabels}/6`);
+    }
+    if (problems.length) {
+      fail(report, {
+        id: "static:pdf-picker-filters",
+        suite: "static",
+        layer: "ui",
+        title: "PDF 导入/重定位入口与六语文案必须包含 PDF",
+        severity: "P1",
+        details: problems.join("; "),
+        location:
+          "src/pages/Library.tsx / src/components/library/RelocateDialog.tsx",
+        expected:
+          "导入与重定位的文件选择器扩展名包含 pdf，六语 filesFilter 标注 PDF",
+        actual: problems.join("; "),
+        rootCause:
+          "PDF-1 只接入了拖拽/IPC 导入，未覆盖 README 承诺的 Add books 文件选择器",
+        fix: "把 pdf 加入文件选择器 extensions，并同步六语文案",
+      });
+    } else {
+      ok(report, {
+        id: "static:pdf-picker-filters",
+        suite: "static",
+        layer: "ui",
+        title: "PDF 导入/重定位入口与六语文案包含 PDF",
+      });
+    }
+  } catch (error) {
+    fail(report, {
+      id: "static:pdf-picker-filters",
+      suite: "static",
+      layer: "ui",
+      title: "PDF 导入入口静态检查无法执行",
+      severity: "P1",
+      details: error.message,
+      location: "src/pages/Library.tsx",
+    });
+  }
+
   let dictionary = {};
   try {
     dictionary = collectDictionary(root);

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
+import { createPdfFixtures } from "./pdf-fixtures.mjs";
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -300,6 +301,11 @@ export function createQaFixtures(root) {
   const ultraTallHeight = 21000;
   const ultraTall = writeUltraTallWebtoon(root, ultraTallWidth, ultraTallHeight);
 
+  // PDF 夹具（PDF-2 起）：可读文档 + 各类对抗性文档。
+  // 大体积/高页数夹具不进入全局导入序列（避免书库网格批量生成封面），
+  // 由 PDF 套件按需单独导入。
+  const pdf = createPdfFixtures(path.join(root, "pdf"));
+
   return {
     root,
     folder,
@@ -311,6 +317,7 @@ export function createQaFixtures(root) {
     zipPath,
     broken,
     ultraTall,
+    pdf,
     importOrder: [
       folder,
       naturalOrder,
@@ -321,6 +328,15 @@ export function createQaFixtures(root) {
       longWebtoon,
       broken,
       ultraTall,
+      // 合法 PDF 应当入库；下面几类对抗性文档必须在导入阶段被拒绝。
+      pdf.validFile,
+      // 结构损坏但文件头合法的文档会入库，渲染期必须被安全策略拦住。
+      pdf.truncatedFile,
+      pdf.malformedFile,
+      // 合法但「危险」的文档会入库，渲染期必须被安全策略拦住。
+      pdf.encryptedFile,
+      pdf.javascriptFile,
+      pdf.externalFile,
     ],
     expected: {
       folderPages: 10,

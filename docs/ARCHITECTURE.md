@@ -51,6 +51,12 @@ browser WebView
 
 - Local sources are image folders, ZIP, and CBZ. Entry names are decoded with a
   display/lookup split so legacy encodings do not reorder or lose pages.
+- Local PDF documents are a separate source format (`books.format = "pdf"`). They are never
+  decoded through the ZIP/image pipeline: the backend only serves bounded byte ranges of the
+  file, and the frontend renders pages with a bundled PDF engine inside the application window.
+- PDF rendering is fully local. Embedded document scripts are not executed, the engine cannot
+  make the application fetch external resources, and password-protected documents are rejected
+  with an explicit message instead of a password prompt.
 - Page and chapter ordering is natural, numeric-aware, and stable across mixed extensions,
   nested folders, and leading zeroes.
 - The reader offers single-page, double-page, RTL/LTR, and continuous webtoon layouts.

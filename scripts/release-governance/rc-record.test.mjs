@@ -55,6 +55,10 @@ function makeAttestation(overrides = {}) {
       upgrade: "pass",
       dataIntegrity: "pass",
       recovery: "pass",
+      pdfReading: "pass",
+      progressRestart: "pass",
+      backupRestore: "pass",
+      databaseRollback: "pass",
     },
     library: {
       quickCheck: "ok",
@@ -139,7 +143,7 @@ test("validateRcRecord：QA 证据 Commit 必须与候选 Commit 一致", () => 
   );
 });
 
-test("validateInstallAttestation：必须 PASS 且四项检查齐全", () => {
+test("validateInstallAttestation：必须 PASS 且八项检查齐全", () => {
   assert.deepEqual(validateInstallAttestation(makeAttestation(), null), []);
   const notPass = validateInstallAttestation(makeAttestation({ verdict: "FAIL" }), null);
   assert.ok(notPass.some((p) => p.includes("不是 PASS")));
@@ -148,6 +152,16 @@ test("validateInstallAttestation：必须 PASS 且四项检查齐全", () => {
     null,
   );
   assert.ok(missing.some((p) => p.includes("upgrade")));
+  for (const key of ["pdfReading", "progressRestart", "backupRestore", "databaseRollback"]) {
+    const checks = { ...makeAttestation().checks };
+    delete checks[key];
+    assert.ok(
+      validateInstallAttestation(makeAttestation({ checks }), null).some((p) =>
+        p.includes(key),
+      ),
+      `缺少 ${key} 必须被拒绝`,
+    );
+  }
 });
 
 test("validateInstallAttestation：回执结构必须与安装脚本一致（artifactSha256）", () => {

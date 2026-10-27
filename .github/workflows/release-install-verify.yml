@@ -7,7 +7,9 @@ name: Release install verification (clean Windows VM)
 # - 全新安装；
 # - 0.17.1 → 0.17.2 覆盖升级；
 # - 回滚；
-# - 合成用户书库、阅读进度、数据库自检与真实 list_books IPC 回读。
+# - 合成用户书库、阅读进度、数据库自检与真实 list_books IPC 回读；
+# - PDF 导入/渲染/翻页/缩放/封面、跨进程重启的进度恢复、备份导出/恢复
+#   （含旧版 .mrbackup 迁移）与 v2 数据库快照回滚（发布门禁四项新检查）。
 #
 # 证据绑定：tag + Commit + 安装包 SHA-256 + ImageOS/ImageVersion + run URL。
 # 本工作流**不**写 Draft、不发布 Release、不引用任何非默认 Secret；只用
@@ -44,7 +46,11 @@ jobs:
   install-verify:
     name: Clean Windows VM install verification (windows-2022)
     runs-on: windows-2022
-    timeout-minutes: 45
+    # 45 → 60：升级任务新增 7 次真实应用生命周期（PDF 阅读 / 重启 / 备份导出 /
+    # 两个独立 profile 恢复 / 回滚兼容 / 回滚后再装回）与两次数据库快照/回滚，
+    # 实测每轮冷启动 WebView2 + SQLite 初始化约 20–40s，必须留出余量，
+    # 否则发布门禁会被基础设施超时（而不是真实断言）判红。
+    timeout-minutes: 60
     steps:
       - name: Checkout main (gate scripts)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -187,6 +193,12 @@ jobs:
               -LibraryVerifyScript "scripts/release-smoke/library-fixture.mjs" `
               -LibraryUiCheckScript "scripts/release-smoke/library-ui-check.mjs" `
               -LibraryFixture "$root\fixture.json" `
+              -PdfCheckScript "scripts/release-smoke/pdf-release-check.mjs" `
+              -PdfDataDir "$root\pdf-data" `
+              -PdfWorkDir "$root\pdf-work" `
+              -PdfEvidenceDir "$root\pdf-evidence" `
+              -PdfRestoreDataDir "$root\pdf-restore-data" `
+              -PdfLegacyDataDir "$root\pdf-legacy-data" `
               -UiCheckPort 9333 `
               -CleanEnvironment `
               -EmitEvidence "$root\install-verification.json" `
@@ -318,6 +330,18 @@ jobs:
             ${{ runner.temp }}/mr-upgrade/verify-rollback.json
             ${{ runner.temp }}/mr-upgrade/ipc-upgrade.json
             ${{ runner.temp }}/mr-upgrade/ipc-rollback.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-ui.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-db.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-restart.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-backup-export.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-backup-restore.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-legacy-backup.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-verify-legacy.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-db-snapshot.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-rollback-compat.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-db-restore.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-restore-after-restart.json
+            ${{ runner.temp }}/mr-upgrade/pdf-evidence/pdf-db-after-restore.json
             ${{ runner.temp }}/run-manifest.json
             candidate-meta/candidate.json
             candidate/rc-record.json

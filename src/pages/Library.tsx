@@ -404,14 +404,17 @@ export default function LibraryPage() {
     setSelectMode(true);
   }, [selectMode, exitSelectMode]);
 
-  // 添加压缩包：文件对话框（zip/cbz 多选）→ 每个压缩包 = 一本书。
+  // 添加文件：文件对话框（zip / cbz / pdf 多选）→ 每个压缩包或 PDF = 一本书。
   const onAddFiles = useCallback(async () => {
     try {
       const picked = await openDialog({
         multiple: true,
         title: translate("import.filesTitle"),
         filters: [
-          { name: translate("import.filesFilter"), extensions: ["zip", "cbz"] },
+          {
+            name: translate("import.filesFilter"),
+            extensions: ["zip", "cbz", "pdf"],
+          },
         ],
       });
       const paths =

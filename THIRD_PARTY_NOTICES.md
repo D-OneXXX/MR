@@ -32,6 +32,20 @@ The Moyu application icon, favicon, and README screenshots are original project 
 The README screenshots use original synthetic comic pages generated for this repository; no
 third-party manga artwork is bundled.
 
+### PDF.js runtime assets
+
+- **Used for:** rendering local PDF documents inside the application window.
+- **Components:** the `pdfjs-dist` legacy build (`pdf.min.mjs`, `pdf.worker.min.mjs`), plus the
+  `cmaps/` and `standard_fonts/` data directories copied into the application bundle.
+- **Copyright:** Copyright Mozilla Foundation and PDF.js contributors.
+- **License:** Apache-2.0.
+- **Full text:** [docs/licenses/Apache-2.0.txt](docs/licenses/Apache-2.0.txt).
+
+The WebAssembly components of PDF.js (`openjpeg.wasm`, `jbig2.wasm`, `qcms_bg.wasm`) and the
+`quickjs-eval` document-script sandbox are **not** bundled: the first group would require relaxing
+the Content Security Policy with `wasm-unsafe-eval`, and the sandbox would allow embedded PDF
+JavaScript to run, which the project's security policy forbids.
+
 ## Frontend runtime dependencies
 
 | Package | License | Notes |
@@ -45,6 +59,7 @@ third-party manga artwork is bundled.
 | `class-variance-authority` | Apache-2.0 | UI variant helper |
 | `cn` | MIT | Copyright (c) 2026 shadcn |
 | `lucide-react` | ISC | Icon set; see above |
+| `pdfjs-dist` | Apache-2.0 | Mozilla PDF.js 6.4.299; in-WebView PDF rendering (see below) |
 | `react`, `react-dom` | MIT | Copyright (c) Meta Platforms, Inc. and affiliates |
 | `react-router-dom` | MIT | Routing |
 | `tailwindcss`, `@tailwindcss/vite`, `tw-animate-css` | MIT | Styling and animation tooling |

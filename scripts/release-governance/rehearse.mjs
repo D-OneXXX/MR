@@ -179,6 +179,10 @@ function makeAttestation(record, installerSha256, overrides = {}) {
       upgrade: "pass",
       dataIntegrity: "pass",
       recovery: "pass",
+      pdfReading: "pass",
+      progressRestart: "pass",
+      backupRestore: "pass",
+      databaseRollback: "pass",
     },
     library: makeLibrary(),
     machine: {
@@ -417,7 +421,16 @@ const gateInstall = {
   previousVersion: "0.17.1",
   previousArtifactName: "MangaReader_0.17.1_x64-setup.exe",
   previousArtifactSha256: "b".repeat(64),
-  checks: { freshInstall: "pass", upgrade: "pass", dataIntegrity: "pass", recovery: "pass" },
+  checks: {
+    freshInstall: "pass",
+    upgrade: "pass",
+    dataIntegrity: "pass",
+    recovery: "pass",
+    pdfReading: "pass",
+    progressRestart: "pass",
+    backupRestore: "pass",
+    databaseRollback: "pass",
+  },
   library: makeLibrary(),
   machine: {
     os: "Windows Server 2022",
@@ -528,6 +541,19 @@ check(
       machine: { os: "Windows 11", cleanEnvironment: false },
     },
   }).ok,
+);
+// PDF 阅读 / 跨重启进度 / 备份恢复 / 数据库回滚：四项新门禁缺一即拒绝。
+["pdfReading", "progressRestart", "backupRestore", "databaseRollback"].forEach(
+  (key, index) => {
+    check(
+      `I${15 + index} 缺少 ${key} → 拒绝`,
+      !gate({
+        installEvidence: mutateInstall((evidence) => {
+          delete evidence.checks[key];
+        }),
+      }).ok,
+    );
+  },
 );
 
 // G. 标签命名约束

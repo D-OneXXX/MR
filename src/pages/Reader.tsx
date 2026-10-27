@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Ban,
+  FileWarning,
   Filter,
   Info,
   Loader2,
@@ -66,7 +67,20 @@ import TabSwitcher from "../components/Reader/TabSwitcher";
 import { useWorkspace } from "../features/workspace/WorkspaceContext";
 import { useSafeMode } from "../features/safeMode/SafeModeContext";
 import { useGlobalShortcuts } from "../features/shortcuts/useGlobalShortcuts";
-import { localizeBackendError } from "../features/errors/localize";
+import { localizeBackendError, localizeStableErrorCode } from "../features/errors/localize";
+import {
+  computePdfTarget,
+  isPdfRenderCancelled,
+  mapPdfError,
+  openPdfDocument,
+  releasePdfDocument,
+  renderPdfPage,
+  type PdfDocumentHandle,
+  type PdfErrorCode,
+  type PdfFitMode,
+  type PdfOutlineItem,
+  type PdfRenderHandle,
+} from "../features/pdf";
 import {
   recordBreadcrumb,
   updateRuntimeContext,
@@ -83,6 +97,18 @@ const WT_WIDTH_KEY = "mr-reader-wt-width";
 const WT_MIN_WIDTH = 50;
 const WT_MAX_WIDTH = 150;
 const WT_DEFAULT_WIDTH = 100;
+
+/** PDF 适配模式（按书记忆）的 localStorage 键前缀。 */
+const PDF_FIT_KEY_PREFIX = "mr-pdf-fit-";
+/** PDF 画布单边上限（设备像素），与 features/pdf 的常量一致。 */
+const PDF_MAX_EDGE = 4096;
+/**
+ * 阅读画布留给页面的内边距（Reader.css 的 .reader-cell：上下 60/96、左右 10）。
+ * 只用于估算渲染分辨率，不参与布局。
+ */
+const PDF_CELL_PADDING_X = 20;
+const PDF_CELL_PADDING_Y = 156;
+
 
 const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 const clampWtWidth = (v: number) =>
@@ -101,6 +127,59 @@ function loadWtWidth(): number {
   }
 }
 
+/** PDF 适配模式（按书记忆）：整页 / 整宽。 */
+function loadPdfFit(bookId: string): PdfFitMode {
+  try {
+    const raw = localStorage.getItem(`${PDF_FIT_KEY_PREFIX}${bookId}`);
+    return raw === "width" ? "width" : "page";
+  } catch {
+    return "page";
+  }
+}
+
+/** 记住 PDF 适配模式（只写枚举值，绝不写路径 / 书名）。 */
+function savePdfFit(bookId: string, fit: PdfFitMode): void {
+  try {
+    localStorage.setItem(`${PDF_FIT_KEY_PREFIX}${bookId}`, fit);
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 画布里真正留给页面的尺寸（扣掉 .reader-cell 的内边距）。 */
+function pdfContentBox(vw: number, vh: number): { width: number; height: number } {
+  return {
+    width: Math.max(1, vw - PDF_CELL_PADDING_X),
+    height: Math.max(1, vh - PDF_CELL_PADDING_Y),
+  };
+}
+
+/**
+ * 把 PDF 书签树拍平成目录条目。
+ *
+ * 页码去重后按页序排列；标题为空时用调用方给的本地化兜底文案。
+ */
+function flattenPdfOutline(
+  items: PdfOutlineItem[],
+  fallback: (index: number) => string,
+): PageEntry[] {
+  const out: PageEntry[] = [];
+  const seen = new Set<number>();
+  const walk = (nodes: PdfOutlineItem[]) => {
+    for (const node of nodes) {
+      const index = node.pageIndex;
+      if (index !== null && index >= 0 && !seen.has(index)) {
+        seen.add(index);
+        const title = node.title.trim();
+        out.push({ index, name: title || fallback(index + 1) });
+      }
+      if (node.children.length) walk(node.children);
+    }
+  };
+  walk(items);
+  return out.sort((a, b) => a.index - b.index);
+}
+
 /** 后端错误详情原样保留，只本地化前缀。 */
 function showFailure(prefixKey: MessageKey, detail: unknown): void {
   const prefix = translate(prefixKey);
@@ -111,6 +190,21 @@ function showFailure(prefixKey: MessageKey, detail: unknown): void {
           detail: localizeBackendError(detail),
         })
       : prefix,
+  );
+}
+
+/**
+ * PDF 失败提示：只显示本地化文案。
+ *
+ * PDF.js 的异常是英文原文，后端错误也可能带中文；两者都先归一成稳定码，
+ * 再由六语字典渲染，绝不把原始异常直出到界面。
+ */
+function showPdfFailure(code: PdfErrorCode): void {
+  toast(
+    translate("reader.error.detail", {
+      prefix: translate("reader.error.loadPage"),
+      detail: localizeStableErrorCode(code),
+    }),
   );
 }
 
@@ -210,6 +304,18 @@ export default function Reader() {
   const [tocQuery, setTocQuery] = useState("");
   const [jumpPage, setJumpPage] = useState("");
 
+  // ---------- PDF（PDF-2） ----------
+  /** PDF 文档状态：解析中 / 可读 / 出错。 */
+  const [pdfState, setPdfState] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle",
+  );
+  /** PDF 打开失败的稳定错误码（界面只显示本地化文案）。 */
+  const [pdfError, setPdfError] = useState<PdfErrorCode | null>(null);
+  /** PDF 真实页数（pdf.js 解析结果；入库时页数留 0）。 */
+  const [pdfPageCount, setPdfPageCount] = useState(0);
+  /** PDF 适配模式（按书记忆）。 */
+  const [pdfFit, setPdfFit] = useState<PdfFitMode>(() => loadPdfFit(bookId));
+
   // 条漫阅读宽度（% 视口宽，50..150，全局记忆）。
   const [wtWidth, setWtWidth] = useState(loadWtWidth);
   const applyWtWidth = useCallback((v: number) => {
@@ -232,14 +338,28 @@ export default function Reader() {
   // 缩放/resize 后静默升级清晰度而不闪烁。
   const imgKeyRef = useRef<Record<number, string>>({});
   const uiLockRef = useRef(false);
+  // ---------- PDF 运行时句柄 ----------
+  /** 已打开的 PDF 文档（页数、书签、渲染入口）。 */
+  const pdfDocRef = useRef<PdfDocumentHandle | null>(null);
+  /** 参考页尺寸（scale=1，PDF 点）：用来推导渲染分辨率。 */
+  const pdfBoxRef = useRef<{ width: number; height: number } | null>(null);
+  /** 在途的 PDF 渲染任务（按页下标）：翻页过快时取代旧任务。 */
+  const pdfTasksRef = useRef<Map<number, PdfRenderHandle>>(new Map());
   // 生效版式：按书记忆优先，否则全局偏好；仅本书不支持条漫时回退到分页。
   const rawMode: PageMode = bookMode ?? prefs.mode;
-  const webtoonAllowed = book?.webtoonReady !== false;
-  const mode: PageMode = safeMode
+  /** PDF 文档只有单页版式：双页 / 条漫一律不可用。 */
+  const isPdfBook = book?.format === "pdf";
+  const webtoonAllowed = book?.webtoonReady !== false && !isPdfBook;
+  const doubleAllowed = !isPdfBook;
+  /** 有效页数：PDF 以 pdf.js 解析出的真实页数为准（入库时页数留 0）。 */
+  const n = isPdfBook ? pdfPageCount : (book?.pageCount ?? 0);
+  const mode: PageMode = isPdfBook
     ? "single"
-    : !webtoonAllowed && rawMode === "webtoon"
-      ? prefs.mode
-      : rawMode;
+    : safeMode
+      ? "single"
+      : !webtoonAllowed && rawMode === "webtoon"
+        ? prefs.mode
+        : rawMode;
   const trackRef = useRef({
     book: null as BookInfo | null,
     page: 0,
@@ -247,6 +367,9 @@ export default function Reader() {
     dir: "rtl" as Direction,
     zoom: 1,
     sizeTick: 0,
+    isPdf: false,
+    pageCount: 0,
+    pdfFit: "page" as PdfFitMode,
   });
   trackRef.current = {
     book,
@@ -255,9 +378,11 @@ export default function Reader() {
     dir: prefs.dir,
     zoom,
     sizeTick,
+    isPdf: isPdfBook,
+    pageCount: n,
+    pdfFit,
   };
 
-  const n = book?.pageCount ?? 0;
   const currentFilterIndex = mode === "webtoon" ? wtProgress.page : page;
   // 双页配对选项：封面偏移（显式设置优先，缺省 RTL 封面单页）+ 宽页独占。
   const coverOffset = prefs.cover ?? prefs.dir === "rtl";
@@ -365,6 +490,12 @@ export default function Reader() {
     wtProgressRef.current = { pct: 0, page: 0 };
     wtKnownRef.current = false;
     setWtProgress({ pct: 0, page: 0 });
+    // PDF 运行时状态：换书时全部复位（旧文档由清理函数释放）。
+    setPdfState("idle");
+    setPdfError(null);
+    setPdfPageCount(0);
+    pdfBoxRef.current = null;
+    setPdfFit(loadPdfFit(bookId));
     try {
       const saved = localStorage.getItem(`mr-wt-${bookId}`);
       setBookMode(saved === "webtoon" || saved === "single" || saved === "double" ? saved : null);
@@ -372,14 +503,66 @@ export default function Reader() {
       setBookMode(null);
     }
     requestedRef.current.clear();
+
+    /**
+     * 恢复阅读位置：页码以「内存快照」与「后端 updated_at」的较新者为准，
+     * 并按真实页数钳制；PDF 的滚动百分比恒为 -1（只有页码位置）。
+     */
+    const applyRestore = (b: BookInfo, pageCount: number, isPdf: boolean) => {
+      const snap = initialSnapRef.current;
+      const snapNewer =
+        snap !== null && snap.at >= progressUpdatedAt(b.updatedAt);
+      const basePage = snapNewer ? snap.page : b.currentPage;
+      const safePage = Math.max(0, Math.min(pageCount - 1, basePage));
+      // 页目录跳转：?page=N（1-based）优先于阅读进度，只生效一次。
+      const hashQuery = window.location.hash.includes("?")
+        ? new URLSearchParams(window.location.hash.split("?")[1])
+        : null;
+      const requestedPage = hashQuery ? Number(hashQuery.get("page")) : NaN;
+      const jumpRequested =
+        Number.isInteger(requestedPage) &&
+        requestedPage >= 1 &&
+        requestedPage <= pageCount;
+      const initialPage = jumpRequested ? requestedPage - 1 : safePage;
+      if (jumpRequested) {
+        window.history.replaceState(null, "", `#/reader/${encodeURIComponent(b.id)}`);
+      }
+      const basePct = isPdf
+        ? -1
+        : snapNewer
+          ? snap.mode === "webtoon"
+            ? snap.scrollPct
+            : -1
+          : b.scrollPct;
+      setPage(initialPage);
+      setRestorePct(
+        basePct >= 0 ? Math.min(1, Math.max(0, basePct)) : -1,
+      );
+      if (snap && !isPdf) {
+        if (
+          snap.mode === "webtoon" ||
+          snap.mode === "single" ||
+          snap.mode === "double"
+        ) {
+          setBookMode(snap.mode);
+        }
+        setPrefs((p) => (p.dir === snap.dir ? p : { ...p, dir: snap.dir }));
+      }
+      if (basePct >= 0) {
+        const pct = Math.min(1, Math.max(0, basePct));
+        setWtProgress({ pct, page: initialPage });
+        wtProgressRef.current = { pct, page: initialPage };
+        wtKnownRef.current = true;
+      }
+    };
+
     api
       .getBook(bookId)
       .then(
         (b) => {
           if (!alive) return;
-          if (!b || b.pageCount <= 0) {
-            setBook(b ?? null);
-            setBookState(b ? "ready" : "missing");
+          if (!b) {
+            setBookState("missing");
             return;
           }
           setBook(b);
@@ -388,51 +571,64 @@ export default function Reader() {
             return;
           }
           ws.reportBook(b.id, b.title);
-          // 页码以「内存快照」与「后端 updated_at（set_progress 会刷新）」的较新者为准；
-          // 版式/方向仍取快照，因为后端不存这两项。
-          const snap = initialSnapRef.current;
-          const snapNewer =
-            snap !== null && snap.at >= progressUpdatedAt(b.updatedAt);
-          const basePage = snapNewer ? snap.page : b.currentPage;
-          const safePage = Math.max(0, Math.min(b.pageCount - 1, basePage));
-          // 页目录跳转：?page=N（1-based）优先于阅读进度，只生效一次。
-          const hashQuery = window.location.hash.includes("?")
-            ? new URLSearchParams(window.location.hash.split("?")[1])
-            : null;
-          const requestedPage = hashQuery ? Number(hashQuery.get("page")) : NaN;
-          const jumpRequested =
-            Number.isInteger(requestedPage) &&
-            requestedPage >= 1 &&
-            requestedPage <= b.pageCount;
-          const initialPage = jumpRequested ? requestedPage - 1 : safePage;
-          if (jumpRequested) {
-            window.history.replaceState(null, "", `#/reader/${encodeURIComponent(b.id)}`);
+          // PDF（PDF-2）：页数由 pdf.js 解析，入库时留 0 —— 必须先打开文档
+          // 才知道真实页数，页码恢复也按真实页数钳制。
+          if (b.format === "pdf") {
+            setPdfState("loading");
+            void openPdfDocument(b.id).then(
+              async (handle) => {
+                if (!alive) {
+                  releasePdfDocument(b.id);
+                  return;
+                }
+                pdfDocRef.current = handle;
+                setPdfState("ready");
+                setPdfPageCount(handle.numPages);
+                // 本地 book 同步真实页数：页码指示 / 进度滑杆 / 恢复位置共用它。
+                setBook((prev) =>
+                  prev && prev.id === b.id
+                    ? { ...prev, pageCount: handle.numPages }
+                    : prev,
+                );
+                // 回写真实页数（best effort；失败不影响阅读）。
+                if (b.pageCount !== handle.numPages) {
+                  void api
+                    .setBookPageCount(b.id, handle.numPages)
+                    .catch(() => {});
+                }
+                // 参考页尺寸（scale=1）：推导渲染分辨率用。
+                try {
+                  const first = await handle.getPage(0);
+                  const viewport = first.getViewport({ scale: 1 });
+                  if (alive) {
+                    pdfBoxRef.current = {
+                      width: viewport.width,
+                      height: viewport.height,
+                    };
+                  }
+                } catch {
+                  pdfBoxRef.current = null;
+                }
+                recordBreadcrumb("pdf-open");
+                applyRestore(b, handle.numPages, true);
+                if (alive) setBookState("ready");
+              },
+              (e) => {
+                if (!alive) return;
+                const code = mapPdfError(e);
+                setPdfState("error");
+                setPdfError(code);
+                recordBreadcrumb("pdf-open-failed");
+                setBookState("ready");
+              },
+            );
+            return;
           }
-          const basePct = snapNewer
-            ? snap.mode === "webtoon"
-              ? snap.scrollPct
-              : -1
-            : b.scrollPct;
-          setPage(initialPage);
-          setRestorePct(
-            basePct >= 0 ? Math.min(1, Math.max(0, basePct)) : -1,
-          );
-          if (snap) {
-            if (
-              snap.mode === "webtoon" ||
-              snap.mode === "single" ||
-              snap.mode === "double"
-            ) {
-              setBookMode(snap.mode);
-            }
-            setPrefs((p) => (p.dir === snap.dir ? p : { ...p, dir: snap.dir }));
+          if (b.pageCount <= 0) {
+            setBookState("ready");
+            return;
           }
-          if (basePct >= 0) {
-            const pct = Math.min(1, Math.max(0, basePct));
-            setWtProgress({ pct, page: initialPage });
-            wtProgressRef.current = { pct, page: initialPage };
-            wtKnownRef.current = true;
-          }
+          applyRestore(b, b.pageCount, false);
           setBookState("ready");
         },
         (e) => {
@@ -446,6 +642,12 @@ export default function Reader() {
       });
     return () => {
       alive = false;
+      // PDF：取消在途渲染并释放文档引用（文档本体留在 LRU 里，页签切回不用重解析）。
+      for (const task of pdfTasksRef.current.values()) task.cancel();
+      pdfTasksRef.current.clear();
+      const pdfDoc = pdfDocRef.current;
+      pdfDocRef.current = null;
+      if (pdfDoc) releasePdfDocument(pdfDoc.bookId);
       // 页签切换/关闭时立即落盘分页进度，避免 500ms 防抖被卸载取消而丢页。
       // 快照在 Reader 卸载时同步写一次，条漫使用 Webtoon 的最新 ref；
       // 尚未拿到可信条漫位置时不写占位 {0,0}。
@@ -463,7 +665,14 @@ export default function Reader() {
           ? latestWt?.page ?? wtProgressRef.current.page
           : t.page;
       // 页签关闭/替换后不要再复活 Workspace 已主动丢弃的快照。
-      if (tabOpen && (t.mode !== "webtoon" || wtKnownRef.current)) {
+      // 只有拿到可信页数才写位置：PDF 打开失败（加密 / 损坏 / 源文件消失）时
+      // pageCount 仍是 0，t.page 还是初始的 0；此时写回会把用户之前
+      // 已读到的位置抹掉，所以宁可不写。
+      if (
+        t.pageCount > 0 &&
+        tabOpen &&
+        (t.mode !== "webtoon" || wtKnownRef.current)
+      ) {
         ws.reportSnapshot(t.book.id, {
           page: livePage,
           scrollPct: livePct,
@@ -471,7 +680,7 @@ export default function Reader() {
           dir: t.dir,
         });
       }
-      if (t.mode !== "webtoon") {
+      if (t.pageCount > 0 && t.mode !== "webtoon") {
         void api.setProgress(t.book.id, t.page).catch(() => {});
       }
     };
@@ -479,7 +688,9 @@ export default function Reader() {
 
   /* ---------- viewport-sized request (dpr * zoom, capped 1920) ----------
      targetSize rounds to 64px buckets so pinch/zoom settling does not
-     spam distinct get_page sizes (each is a separate cache key). */
+     spam distinct get_page sizes (each is a separate cache key).
+     PDF 走同一套 key 约定（`${idx}@${w}x${h}`），但目标框来自
+     「参考页尺寸 × 适配模式 × 缩放」，并受单边 4096px 上限约束。 */
   const targetSize = useCallback((): { w: number; h: number } => {
     const t = trackRef.current;
     const el = canvasRef.current;
@@ -487,20 +698,102 @@ export default function Reader() {
     const vh = el?.clientHeight || window.innerHeight;
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
     const boost = t.zoom > 1.25 ? Math.min(t.zoom, 2) : 1;
-    const per = spreadFor(t.page, t.book?.pageCount ?? 0, t.mode, t.dir, spreadOptsRef.current)
-      .length;
     const bucket = (v: number) =>
       Math.min(MAX_EDGE, Math.max(64, Math.round(v / 64) * 64)) || 64;
+    if (t.isPdf) {
+      const pdfBucket = (v: number) =>
+        Math.min(PDF_MAX_EDGE, Math.max(64, Math.round(v / 64) * 64)) || 64;
+      const box = pdfBoxRef.current;
+      if (!box) {
+        // 文档还没解析出来：先用视口盒占位，解析完成后会自动升级清晰度。
+        return { w: pdfBucket(vw * dpr), h: pdfBucket(vh * dpr) };
+      }
+      const content = pdfContentBox(vw, vh);
+      const target = computePdfTarget({
+        page: box,
+        viewportWidth: content.width,
+        viewportHeight: content.height,
+        fit: t.pdfFit,
+        devicePixelRatio: dpr,
+        zoom: t.zoom,
+      });
+      void t.sizeTick;
+      return { w: pdfBucket(target.width), h: pdfBucket(target.height) };
+    }
+    const per = spreadFor(t.page, t.book?.pageCount ?? 0, t.mode, t.dir, spreadOptsRef.current)
+      .length;
     const w = bucket(((vw * dpr * boost) / Math.max(1, per)) || 0);
     const h = bucket(vh * dpr * boost);
     void t.sizeTick;
     return { w, h };
   }, []);
 
+  /* ---------- PDF 页渲染（取代图片页管线） ---------- */
+  const loadPdfPage = useCallback(
+    async (
+      bookId: string,
+      idx: number,
+      key: string,
+      w: number,
+      h: number,
+      opts?: { silent?: boolean },
+    ) => {
+      const doc = pdfDocRef.current;
+      if (!doc) {
+        requestedRef.current.delete(key);
+        setFailed((f) => ({ ...f, [idx]: true }));
+        if (!opts?.silent) showPdfFailure("pdf-render-unsupported");
+        return;
+      }
+      // 同一页的旧渲染立刻作废：快速翻页时只保留最后一次请求。
+      pdfTasksRef.current.get(idx)?.cancel();
+      const handle = renderPdfPage(
+        doc,
+        idx,
+        { width: w, height: h },
+        trackRef.current.pdfFit,
+      );
+      pdfTasksRef.current.set(idx, handle);
+      try {
+        const rendered = await handle.promise;
+        if (pdfTasksRef.current.get(idx) === handle) {
+          pdfTasksRef.current.delete(idx);
+        }
+        if (trackRef.current.book?.id !== bookId) return;
+        imgKeyRef.current[idx] = key;
+        setImgs((prev) => ({ ...prev, [idx]: rendered.dataUrl }));
+        setPending((p) => {
+          if (!p[idx]) return p;
+          const next = { ...p };
+          delete next[idx];
+          return next;
+        });
+      } catch (e) {
+        if (pdfTasksRef.current.get(idx) === handle) {
+          pdfTasksRef.current.delete(idx);
+        }
+        // 被新任务取代不算失败：不置 failed、不提示。
+        if (isPdfRenderCancelled(e)) return;
+        requestedRef.current.delete(key);
+        if (trackRef.current.book?.id !== bookId) return;
+        setPending((p) => {
+          if (!p[idx]) return p;
+          const next = { ...p };
+          delete next[idx];
+          return next;
+        });
+        setFailed((f) => ({ ...f, [idx]: true }));
+        recordBreadcrumb("pdf-render-failed");
+        if (!opts?.silent) showPdfFailure(mapPdfError(e));
+      }
+    },
+    [],
+  );
+
   const fetchIdx = useCallback(
     (idx: number, opts?: { silent?: boolean; force?: boolean }) => {
       const b = trackRef.current.book;
-      if (!b || idx < 0 || idx >= b.pageCount) return;
+      if (!b || idx < 0 || idx >= trackRef.current.pageCount) return;
       const { w, h } = targetSize();
       const key = `${idx}@${w}x${h}`;
       if (requestedRef.current.has(key)) return;
@@ -513,6 +806,10 @@ export default function Reader() {
           delete next[idx];
           return next;
         });
+      }
+      if (trackRef.current.isPdf) {
+        void loadPdfPage(b.id, idx, key, w, h, opts);
+        return;
       }
       api.getPage(b.id, idx, w, h).then(
         (img) => {
@@ -559,7 +856,7 @@ export default function Reader() {
         },
       );
     },
-    [targetSize],
+    [loadPdfPage, targetSize],
   );
 
   /* ---------- load visible spread (+ silent sharpness upgrade) ---------- */
@@ -816,14 +1113,14 @@ export default function Reader() {
   const go = useCallback(
     (delta: 1 | -1) => {
       const t = trackRef.current;
-      if (!t.book || t.book.pageCount === 0) return;
+      if (!t.book || t.pageCount === 0) return;
       if (t.mode === "webtoon") {
         wtHandle.current?.scrollByViewport(delta * 0.85);
         poke();
         return;
       }
       setPage((p) =>
-        stepPage(p, t.book!.pageCount, t.mode, t.dir, delta, spreadOptsRef.current),
+        stepPage(p, t.pageCount, t.mode, t.dir, delta, spreadOptsRef.current),
       );
       setPan({ x: 0, y: 0 });
       poke();
@@ -834,8 +1131,8 @@ export default function Reader() {
   const jumpTo = useCallback(
     (idx: number) => {
       const t = trackRef.current;
-      if (!t.book || t.book.pageCount === 0) return;
-      const target = Math.max(0, Math.min(t.book.pageCount - 1, idx));
+      if (!t.book || t.pageCount === 0) return;
+      const target = Math.max(0, Math.min(t.pageCount - 1, idx));
       if (t.mode === "webtoon") {
         wtHandle.current?.scrollToPage(target);
       } else {
@@ -853,6 +1150,8 @@ export default function Reader() {
     (m: PageMode) => {
       if (safeMode) return;
       if (m === "webtoon" && !webtoonAllowed) return;
+      // PDF 只有单页版式：双页 / 条漫都不接受（不静默切换任何模式）。
+      if (trackRef.current.isPdf && m !== "single") return;
       const t = trackRef.current;
       // 条漫 → 分页：优先取 Webtoon 的实时中心页；400ms 防抖 ref 可能
       // 落后于用户刚才的快速滚动。
@@ -866,7 +1165,7 @@ export default function Reader() {
             b ? { ...b, currentPage: live.page, scrollPct: live.pct } : b,
           );
         }
-        setPage(Math.max(0, Math.min(t.book.pageCount - 1, livePage)));
+        setPage(Math.max(0, Math.min(t.pageCount - 1, livePage)));
         setPan({ x: 0, y: 0 });
       }
       // 再次进入条漫时按当前页衔接，不回到本次 Reader 生命周期最初保存的
@@ -893,6 +1192,11 @@ export default function Reader() {
       toast(t("safeMode.readerLocked"));
       return;
     }
+    // PDF：只有单页版式，循环切换没有意义 —— 直接说明原因。
+    if (trackRef.current.isPdf) {
+      toast(t("reader.pdf.mode.reason"));
+      return;
+    }
     const cur = trackRef.current.mode;
     const canWebtoon = book?.webtoonReady !== false;
     const cycle: PageMode[] = canWebtoon
@@ -901,6 +1205,21 @@ export default function Reader() {
     const idx = cycle.indexOf(cur);
     setMode(cycle[(idx + 1) % cycle.length]);
   }, [setMode, book, safeMode, t]);
+
+  /* ---------- PDF 适配模式（整页 / 整宽，按书记忆） ---------- */
+  const applyPdfFit = useCallback(
+    (fit: PdfFitMode) => {
+      if (trackRef.current.pdfFit === fit) return;
+      setPdfFit(fit);
+      savePdfFit(bookId, fit);
+      recordBreadcrumb("pdf-fit-change");
+      // 目标框变了 → 触发一次静默重渲染（老图保留到新图到达）。
+      setSizeTick((v) => v + 1);
+      setPan({ x: 0, y: 0 });
+      poke();
+    },
+    [bookId, poke],
+  );
 
   /* ---------- 条漫进度提交（WebtoonView 内已节流） ---------- */
   const commitWt = useCallback(
@@ -1037,7 +1356,7 @@ export default function Reader() {
           break;
         case "End":
           e.preventDefault();
-          if (t.book) jumpTo(t.book.pageCount - 1);
+          if (t.book) jumpTo(t.pageCount - 1);
           break;
       }
     },
@@ -1179,7 +1498,11 @@ export default function Reader() {
         });
       }
       pinch.current = { dist, mid };
-    } else if (trackRef.current.zoom > 1) {
+    } else if (
+      trackRef.current.zoom > 1 ||
+      // PDF 整宽模式：页宽铺满视口、高度溢出，靠拖拽看上下部分。
+      (trackRef.current.isPdf && trackRef.current.pdfFit === "width")
+    ) {
       setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
     }
     poke();
@@ -1221,6 +1544,11 @@ export default function Reader() {
     if (entriesLoading) return;
     setEntriesLoading(true);
     setEntriesError(false);
+    // PDF：后端不提供 list_entries（PDF 没有文件名清单），目录在前端本地生成。
+    if (trackRef.current.isPdf) {
+      void loadPdfEntries();
+      return;
+    }
     api.listEntries(bookId).then(
       (list) => {
         setEntries(list);
@@ -1232,6 +1560,40 @@ export default function Reader() {
         showFailure("reader.toc.loadFailed", e);
       },
     );
+  };
+
+  /**
+   * PDF 目录：优先用文档自带书签（outline），没有书签时退化成逐页条目。
+   *
+   * 书签标题是文档内容（不翻译）；逐页条目走 i18n。
+   */
+  const loadPdfEntries = async () => {
+    const doc = pdfDocRef.current;
+    const count = trackRef.current.pageCount;
+    if (!doc) {
+      setEntriesLoading(false);
+      setEntriesError(true);
+      return;
+    }
+    try {
+      const outline = await doc.getOutline();
+      const list = flattenPdfOutline(outline, (page) =>
+        t("reader.pdf.toc.page", { page }),
+      );
+      if (list.length > 0) {
+        setEntries(list);
+      } else {
+        const pages: PageEntry[] = [];
+        for (let i = 0; i < count; i += 1) {
+          pages.push({ index: i, name: t("reader.pdf.toc.page", { page: i + 1 }) });
+        }
+        setEntries(pages);
+      }
+    } catch {
+      setEntriesError(true);
+    } finally {
+      setEntriesLoading(false);
+    }
   };
 
   /* ---------- 在线提纯：过滤抽屉 / 标记 / 恢复 ---------- */
@@ -1373,7 +1735,7 @@ export default function Reader() {
 
   const retryIdx = (idx: number) => {
     const b = trackRef.current.book;
-    if (!b || idx < 0 || idx >= b.pageCount) return;
+    if (!b || idx < 0 || idx >= trackRef.current.pageCount) return;
     const { w, h } = targetSize();
     requestedRef.current.delete(`${idx}@${w}x${h}`);
     setFailed((f) => {
@@ -1389,7 +1751,7 @@ export default function Reader() {
   const healIdx = useCallback(
     (idx: number) => {
       const b = trackRef.current.book;
-      if (!b || idx < 0 || idx >= b.pageCount) return;
+      if (!b || idx < 0 || idx >= trackRef.current.pageCount) return;
       for (const key of [...requestedRef.current]) {
         if (key.startsWith(`${idx}@`)) requestedRef.current.delete(key);
       }
@@ -1463,7 +1825,11 @@ export default function Reader() {
   }, []);
 
   const dirRtl = prefs.dir === "rtl";
-  const webtoonReason = t("reader.webtoon.unsupported");
+  /** 版式不可用的原因：PDF 用 PDF 专属原因，其余用条漫不支持的原因。 */
+  const webtoonReason = isPdfBook
+    ? t("reader.pdf.mode.reason")
+    : t("reader.webtoon.unsupported");
+  const doubleReason = t("reader.pdf.mode.reason");
   const activePages =
     mode === "webtoon" ? new Set([wtProgress.page]) : new Set(spread);
   // spreadFor 已是视觉左→右顺序，DOM 顺序即视觉顺序，不再翻转。
@@ -1521,14 +1887,39 @@ export default function Reader() {
               </Button>
             </div>
           </div>
+        ) : pdfError ? (
+          <div className="reader-center">
+            <div
+              className="reader-err max-w-md rounded-2xl border border-border bg-card p-5 text-card-foreground shadow-hard"
+              data-error-code={pdfError}
+              data-testid="reader-pdf-error"
+            >
+              <span className="mx-auto grid size-10 place-items-center rounded-full border border-border bg-warning text-background">
+                <FileWarning className="size-5" aria-hidden />
+              </span>
+              <p className="mt-3 text-sm font-extrabold">
+                {t("reader.pdf.errorTitle")}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {localizeStableErrorCode(pdfError)}
+              </p>
+              <Button variant="pill" size="pill-sm" onClick={() => nav("/")}>
+                <ArrowLeft className="size-3.5" /> {t("reader.backToLibrary")}
+              </Button>
+            </div>
+          </div>
+        ) : isPdfBook && pdfState === "loading" ? (
+          <div className="reader-center">
+            <PixelPet mode="loading" message={t("reader.pdf.opening")} />
+          </div>
         ) : n === 0 ? (
           <div className="reader-center">
             <div className="reader-err">
               <PixelPet
                 mode="empty"
                 message={
-                  // PDF-1：PDF 已可识别与入库，但尚无渲染器（PDF-2）。
-                  // 这里必须给真实原因，不能谎称「没有可读页面」。
+                  // PDF：解析成功但页数为 0（异常文档），给出真实原因，
+                  // 不能谎称「没有可读页面」。
                   book?.format === "pdf"
                     ? t("error.pdfRenderUnsupported")
                     : t("reader.emptyBook")
@@ -1563,7 +1954,9 @@ export default function Reader() {
             {ordered.map((idx) => (
               <div
                 key={idx}
-                className={`reader-cell${spread.length === 1 ? " solo-one" : ""}`}
+                className={`reader-cell${spread.length === 1 ? " solo-one" : ""}${
+                  isPdfBook && pdfFit === "width" ? " reader-cell-pdf-width" : ""
+                }`}
               >
                 {imgs[idx] ? (
                   <img
@@ -1571,7 +1964,10 @@ export default function Reader() {
                     src={imgs[idx]}
                     alt={t("reader.page.alt", { page: idx + 1 })}
                     draggable={false}
-                    className="reader-img fade-in"
+                    className={cn(
+                      "reader-img fade-in",
+                      isPdfBook && pdfFit === "width" && "reader-img-pdf-width",
+                    )}
                     data-idx={idx}
                     onDragStart={(e) => e.preventDefault()}
                   />
@@ -1686,6 +2082,8 @@ export default function Reader() {
         mode={mode}
         webtoonAllowed={webtoonAllowed}
         webtoonReason={webtoonReason}
+        doubleAllowed={doubleAllowed}
+        doubleReason={doubleReason}
         modeLocked={safeMode}
         onMode={setMode}
         coverOffset={coverOffset}
@@ -1913,6 +2311,7 @@ export default function Reader() {
                 ).map(({ key, label }) => {
                   const disabled =
                     (safeMode && key !== "single") ||
+                    (key === "double" && !doubleAllowed) ||
                     (key === "webtoon" && !webtoonAllowed);
                   return (
                     <Button
@@ -1926,7 +2325,9 @@ export default function Reader() {
                         disabled
                           ? safeMode
                             ? t("safeMode.readerLocked")
-                            : webtoonReason
+                            : key === "double" && !doubleAllowed
+                              ? doubleReason
+                              : webtoonReason
                           : t("reader.mode.switch", { mode: label })
                       }
                       onClick={() => setMode(key)}
@@ -1944,6 +2345,53 @@ export default function Reader() {
                 </p>
               ) : null}
             </div>
+
+            {/* PDF 适配：整页 / 整宽（按书记忆） */}
+            {isPdfBook ? (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {t("reader.pdf.fit.label")}
+                  </span>
+                  <div
+                    className="flex items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5"
+                    role="group"
+                    aria-label={t("reader.pdf.fit.label")}
+                  >
+                    <Button
+                      type="button"
+                      variant={pdfFit === "page" ? "pill-primary" : "pill-ghost"}
+                      size="pill-sm"
+                      data-testid="reader-pdf-fit-page"
+                      aria-pressed={pdfFit === "page"}
+                      onClick={() => applyPdfFit("page")}
+                      className="h-8 whitespace-nowrap px-2.5 text-[11px]"
+                    >
+                      {t("reader.pdf.fit.page")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={pdfFit === "width" ? "pill-primary" : "pill-ghost"}
+                      size="pill-sm"
+                      data-testid="reader-pdf-fit-width"
+                      aria-pressed={pdfFit === "width"}
+                      onClick={() => applyPdfFit("width")}
+                      className="h-8 whitespace-nowrap px-2.5 text-[11px]"
+                    >
+                      {t("reader.pdf.fit.width")}
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+                  {t("reader.pdf.fit.hint")}
+                </p>
+                {pdfPageCount > 0 ? (
+                  <p className="text-[10.5px] leading-relaxed text-muted-foreground">
+                    {t("reader.pdf.pageCount", { count: pdfPageCount })}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs font-medium text-muted-foreground">
@@ -2081,7 +2529,9 @@ export default function Reader() {
             {!webtoonAllowed && (
               <p className="flex items-start gap-2 rounded-xl border border-border/60 bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
                 <Info className="mt-0.5 size-3.5 shrink-0 text-primary" />
-                {t("reader.webtoon.unsupportedNote")}
+                {isPdfBook
+                  ? t("reader.pdf.mode.note")
+                  : t("reader.webtoon.unsupportedNote")}
               </p>
             )}
 

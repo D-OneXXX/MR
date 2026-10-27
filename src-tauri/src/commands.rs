@@ -12,13 +12,15 @@ use std::sync::Arc;
 use std::time::{Instant, UNIX_EPOCH};
 
 use crate::db::{self};
+use crate::pdf;
 use crate::pipeline;
 use crate::pipeline::RenderedPage;
 use crate::source::{self, BackendError, ImageSource};
 use crate::state::AppState;
 use crate::{
     BookDayPoint, BookInfo, Dashboard, HeatDay, ImportItemResult, ImportResult, MemoryStats,
-    OnlineProbe, PageDim, PageEntry, PageImage, RemoveResult, ScanResult, SeriesProgress, Settings,
+    OnlineProbe, PageDim, PageEntry, PageImage, PdfChunk, RemoveResult, ScanResult, SeriesProgress,
+    Settings,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use image::GenericImageView as _;
@@ -407,7 +409,21 @@ fn scan_single_book(conn: &rusqlite::Connection, path: &Path) -> Result<BookInfo
     if source::is_pdf_path(path) {
         source::validate_pdf_document(path)?;
         let title = title_for(path);
-        db::upsert_book_with_format(conn, &id, &path_str, &title, 0, db::BOOK_FORMAT_PDF)?;
+        // 已知页数必须保留：PDF 的真实页数由前端 PDF.js 解析后经
+        // `set_book_page_count` 回写；重新导入 / 重扫同一路径时若把它写回 0，
+        // `clamp_reading_page` 就会退化成「完全不钳制」，PDF 的阅读位置也失去上界。
+        // 新书没有旧行 → 0；旧书 → 沿用库里已知的页数。
+        let known_pages = db::get_book(conn, &id)?
+            .map(|row| row.page_count)
+            .unwrap_or(0);
+        db::upsert_book_with_format(
+            conn,
+            &id,
+            &path_str,
+            &title,
+            known_pages,
+            db::BOOK_FORMAT_PDF,
+        )?;
         let _ = db::clear_source_stamp(conn, &id);
         return db::get_book(conn, &id)?
             .ok_or_else(|| BackendError::Msg("入库后回读失败".into()))
@@ -952,11 +968,64 @@ fn to_page_image(index: u32, rendered: pipeline::RenderedPage) -> PageImage {
 }
 
 /// 从成品 JPEG 字节读尺寸（只解析头部，不解码）。
+///
+/// L2 成品缓存的热路径专用：走 `image` crate 的头部解析，行为保持不变。
+/// PDF 封面走 [`pdf::jpeg_dims`]（严格 SOF 段解析 + 尺寸边界）。
 fn jpeg_dims(bytes: &[u8]) -> Result<(u32, u32), BackendError> {
     let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()?
         .into_dimensions()?;
     Ok((w, h))
+}
+
+/// 从 PNG 字节读尺寸（严格校验签名 + IHDR，不解码、不依赖图片库）。
+///
+/// 旧实现只读 `bytes[16..24]`，任何「首字节像 PNG」的垃圾字节都能伪造出一个
+/// 30000×30000 的尺寸。现在统一委托 [`pdf::png_dims`]：IHDR 长度字段必须是 13、
+/// 块类型必须是 `"IHDR"`，否则一律拒绝。
+fn png_dims(bytes: &[u8]) -> Result<(u32, u32), BackendError> {
+    pdf::png_dims(bytes)
+}
+
+/// 封面解码失败 → 统一收敛到稳定错误码 `pdf-cover-invalid`。
+///
+/// 非中文界面靠文案**末尾**的稳定码做六语本地化（`src/features/errors/localize.ts`），
+/// 所以码必须留在最后；内层文案若已带同名码则先去重，避免出现两次。
+fn pdf_cover_invalid(error: BackendError) -> BackendError {
+    let detail = error.to_string().replace("（pdf-cover-invalid）", "");
+    BackendError::Msg(format!("PDF 封面缓存已损坏：{detail}（pdf-cover-invalid）"))
+}
+
+/// PDF 封面字节（前端 PDF.js 渲染后回传）→ `RenderedPage`。
+///
+/// 只接受 JPEG / PNG；其它字节一律视为坏缓存（调用方负责删除）。
+/// 尺寸必须过 [`pdf::validate_cover_dimensions`] 的边界（单边 ≤4096px、面积 ≤16Mpx），
+/// 否则一张压缩比极高的超大图会被**每次**读取缩略图时完整 base64 送进前端。
+fn pdf_cover_page(bytes: Vec<u8>) -> Result<RenderedPage, BackendError> {
+    let (mime, dims) = if pdf::is_jpeg(&bytes) {
+        (
+            "image/jpeg",
+            pdf::jpeg_dims(&bytes).map_err(pdf_cover_invalid)?,
+        )
+    } else if pdf::is_png(&bytes) {
+        ("image/png", png_dims(&bytes).map_err(pdf_cover_invalid)?)
+    } else {
+        return Err(BackendError::Msg(
+            "PDF 封面缓存已损坏（pdf-cover-invalid）".into(),
+        ));
+    };
+    let (width, height) = dims;
+    // 尺寸边界（AGENTS.md §4.5）：单边 ≤4096px、面积 ≤16Mpx。
+    pdf::validate_cover_dimensions(width, height)?;
+    Ok(RenderedPage {
+        width,
+        height,
+        orig_width: width,
+        orig_height: height,
+        mime: mime.to_string(),
+        data_url: format!("data:{mime};base64,{}", B64.encode(&bytes)),
+        bytes,
+    })
 }
 
 /// L2 成品 JPEG 还原为 `RenderedPage`。
@@ -1000,12 +1069,17 @@ pub async fn get_page(
     if let Some(hit) = state.cache.get_page(&book_id, index, w, h) {
         return Ok(to_page_image(index, hit));
     }
-    let is_online = state.db.with(|conn| {
+    let (is_online, format) = state.db.with(|conn| {
         db::get_book(conn, &book_id)
             .map_err(err)?
-            .map(|b| b.source_type != "local")
+            .map(|b| (b.source_type != "local", b.format))
             .ok_or_else(|| "书籍不存在".to_string())
     })?;
+    // PDF-2：PDF 绝不能进入图片取页管线（页面由前端 PDF.js 渲染）。
+    // 这里显式拦下，避免 L2 里恰好存在同尺寸封面时被当成「第 1 页」返回。
+    if format == db::BOOK_FORMAT_PDF {
+        return Err("PDF 源不支持按图片取页（pdf-source-unsupported）".to_string());
+    }
     let st = state.inner().clone();
     let book = book_id.clone();
     let rendered = match blocking(move || {
@@ -1125,12 +1199,17 @@ pub async fn get_thumbnail(
         return Ok(to_page_image(0, hit));
     }
     let edge = max_size.unwrap_or(240).clamp(64, 1024);
-    state.db.with(|conn| {
+    // 先查来源格式：PDF 没有「首页图片」，封面来自前端渲染后写回的 L2 缓存。
+    // PDF 绝不能走 source_handle_for_book（那条路径有意拒绝 PDF）。
+    let format = state.db.with(|conn| {
         db::get_book(conn, &book_id)
             .map_err(err)?
-            .map(|_| ())
+            .map(|row| row.format)
             .ok_or_else(|| "书籍不存在".to_string())
     })?;
+    if format == db::BOOK_FORMAT_PDF {
+        return pdf_thumbnail(state.inner(), &book_id).await;
+    }
     let st = state.inner().clone();
     let book = book_id.clone();
     let rendered = match blocking(move || {
@@ -1172,6 +1251,200 @@ pub async fn get_thumbnail(
     };
     state.cache.put_thumb(&book_id, rendered.clone());
     Ok(to_page_image(0, rendered))
+}
+
+/// PDF 封面读取：固定边长（[`pdf::PDF_COVER_EDGE`]）的 L2 缓存成品。
+///
+/// 与图片书不同：PDF 没有首页图，封面由前端 PDF.js 渲染后经
+/// `put_pdf_thumbnail` 写回缓存。缓存缺失时返回稳定错误码
+/// `pdf-cover-missing`，前端据此生成封面（而不是显示空白）。
+async fn pdf_thumbnail(state: &Arc<AppState>, book_id: &str) -> Result<PageImage, String> {
+    let st = state.clone();
+    let book = book_id.to_string();
+    let rendered = blocking(move || -> Result<RenderedPage, BackendError> {
+        let Some(bytes) = st
+            .render
+            .get_raw(&book, 0, pdf::PDF_COVER_EDGE, pdf::PDF_COVER_EDGE)
+        else {
+            return Err(BackendError::Msg(
+                "PDF 封面尚未生成（pdf-cover-missing）".into(),
+            ));
+        };
+        match pdf_cover_page(bytes) {
+            Ok(page) => Ok(page),
+            Err(error) => {
+                // 坏缓存自愈：删掉后让前端重新生成封面。
+                st.render
+                    .remove_page(&book, 0, pdf::PDF_COVER_EDGE, pdf::PDF_COVER_EDGE);
+                Err(error)
+            }
+        }
+    })
+    .await?;
+    Ok(to_page_image(0, rendered))
+}
+
+/// PDF 字节分块（PDF-2）：把本地 PDF 按字节区间喂给前端 PDF.js。
+///
+/// - 只允许**本地 PDF 书源**（`format='pdf'` 且 `source_type='local'`）；
+/// - 路径必须通过本地书源安全策略（书库之外 / 系统目录里的 PDF 一律拒绝）；
+/// - `length` 钳制到 4 MiB（`pdf::MAX_PDF_CHUNK_BYTES`）；
+/// - `offset` 越界 → 返回空数据（前端视为 EOF），不是错误；
+/// - `total` 始终是文件真实大小。
+#[tauri::command]
+pub async fn get_pdf_chunk(
+    state: State<'_, Arc<AppState>>,
+    book_id: String,
+    offset: u64,
+    length: u32,
+) -> Result<PdfChunk, String> {
+    let st = state.inner().clone();
+    let bid = book_id.clone();
+    let result = blocking(move || -> Result<PdfChunk, BackendError> {
+        let row = st
+            .db
+            .with(|conn| {
+                db::get_book(conn, &bid)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| "书籍不存在".to_string())
+            })
+            .map_err(BackendError::Msg)?;
+        if row.format != db::BOOK_FORMAT_PDF {
+            return Err(BackendError::Msg("该书不是 PDF 文档（pdf-not-pdf）".into()));
+        }
+        if row.source_type != "local" {
+            return Err(BackendError::Msg(
+                "PDF 源必须是本地文件（pdf-source-not-local）".into(),
+            ));
+        }
+        let path = PathBuf::from(&row.path);
+        // 先判「文件还在不在」：缺失文件如果直接走路径策略，错误码会退化成
+        // 「不在允许范围内」，用户看不到真正的原因（文件被移动/删除）。
+        if !path.exists() {
+            return Err(BackendError::Msg("PDF 文件不存在（pdf-not-found）".into()));
+        }
+        // 本地书源路径策略：绝对路径、真实存在、.pdf、不在系统/应用目录内。
+        if !is_safe_library_source_path(&path) {
+            return Err(BackendError::Msg(
+                "PDF 源路径不在允许的本地书源范围内（pdf-source-not-allowed）".into(),
+            ));
+        }
+        let (total, bytes) = pdf::read_pdf_chunk(&path, offset, length)?;
+        Ok(PdfChunk {
+            total,
+            data: B64.encode(&bytes),
+        })
+    })
+    .await;
+    match result {
+        Ok(chunk) => Ok(chunk),
+        Err(error) => {
+            // 失败链路只记稳定书 ID 前缀、偏移与长度，绝不写书名/路径。
+            crate::logging::log_error(
+                "get_pdf_chunk",
+                &format!(
+                    "book={} offset={} length={}：{}",
+                    short_book_ref(&book_id),
+                    offset,
+                    length,
+                    safe_error_text(&error)
+                ),
+            );
+            Err(error)
+        }
+    }
+}
+
+/// 写回 PDF 页数（PDF-2）：前端 PDF.js 解析出真实页数后调用。
+///
+/// 只更新 `books.page_count`：不动 id / path / format / 进度 / updated_at。
+/// 仅 PDF 书可写；页数必须落在 `1..=1_000_000`。
+#[tauri::command]
+pub async fn set_book_page_count(
+    state: State<'_, Arc<AppState>>,
+    book_id: String,
+    page_count: u32,
+) -> Result<(), String> {
+    state.db.with(|conn| {
+        let row = db::get_book(conn, &book_id)
+            .map_err(err)?
+            .ok_or_else(|| "书籍不存在".to_string())?;
+        let count = pdf::validate_pdf_page_count(&row.format, page_count).map_err(err)?;
+        db::set_book_page_count(conn, &book_id, count).map_err(err)
+    })
+}
+
+/// 写入 PDF 封面（PDF-2）：前端 PDF.js 渲染首页后回传缓存。
+///
+/// - 只允许 PDF 书；
+/// - base64 解码后必须 ≤ 2 MiB，且必须是 JPEG / PNG（任意字节不得进缓存）；
+/// - 以**固定边长**（[`pdf::PDF_COVER_EDGE`]）落 L2 渲染缓存的第 0 页，
+///   与 `get_thumbnail` 的读取键严格一致（不受 `max_size` 影响）。
+#[tauri::command]
+pub async fn put_pdf_thumbnail(
+    state: State<'_, Arc<AppState>>,
+    book_id: String,
+    data_base64: String,
+) -> Result<(), String> {
+    let st = state.inner().clone();
+    let bid = book_id.clone();
+    let result = blocking(move || -> Result<(), BackendError> {
+        let row = st
+            .db
+            .with(|conn| {
+                db::get_book(conn, &bid)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| "书籍不存在".to_string())
+            })
+            .map_err(BackendError::Msg)?;
+        if row.format != db::BOOK_FORMAT_PDF {
+            return Err(BackendError::Msg(
+                "只有 PDF 书可以保存封面（pdf-not-pdf）".into(),
+            ));
+        }
+        let bytes = decode_base64_lenient(&data_base64).ok_or_else(|| {
+            BackendError::Msg("PDF 封面数据不是合法 base64（pdf-cover-invalid）".into())
+        })?;
+        store_pdf_cover(&st, &bid, &bytes)?;
+        Ok(())
+    })
+    .await;
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            crate::logging::log_error(
+                "put_pdf_thumbnail",
+                &format!(
+                    "book={}：{}",
+                    short_book_ref(&book_id),
+                    safe_error_text(&error)
+                ),
+            );
+            Err(error)
+        }
+    }
+}
+
+/// base64 解码（宽容）：先按标准填充解码，再退回无填充变体。
+fn decode_base64_lenient(raw: &str) -> Option<Vec<u8>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    B64.decode(trimmed).ok().or_else(|| {
+        base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(trimmed)
+            .ok()
+    })
+}
+
+/// 把校验过的 PDF 封面字节写入 L2 渲染缓存（第 0 页，固定边长）。
+fn store_pdf_cover(st: &Arc<AppState>, book_id: &str, bytes: &[u8]) -> Result<(), BackendError> {
+    pdf::validate_pdf_cover(bytes)?;
+    st.render
+        .put(book_id, 0, pdf::PDF_COVER_EDGE, pdf::PDF_COVER_EDGE, bytes);
+    st.note_cache_write(bytes.len());
+    Ok(())
 }
 
 /// 清空缩略图缓存（内存 LRU + 磁盘首页成品），重新进入书库自动重建。
@@ -1353,6 +1626,25 @@ pub async fn get_reading_by_book(
     })
 }
 
+/// 阅读位置钳制（PDF-2 有例外）。
+///
+/// - 普通图片书：钳到 `page_count - 1`（页数未知时钳到 0）。
+/// - PDF 且**页数尚未回写**（`page_count == 0`）：不按页数钳制，但**仍按
+///   `MAX_PDF_PAGE_COUNT` 设上界**。总页数由前端 PDF.js 解析后经
+///   `set_book_page_count` 写回；此时若照常钳制，恢复位置会被压成第 1 页，
+///   造成「PDF 阅读位置丢失」。页数补齐后即恢复常规钳制。
+///
+///   上界不是可有可无的：钳制被豁免期间 `reading_log` 的当日页数增量等于
+///   `page - prev` 且无上限，一个越界页码会直接污染阅读统计。PDF 页数上界
+///   是 `MAX_PDF_PAGE_COUNT`，因此存储值必须同样有界——既保住「进度不丢」，
+///   又不让无效页位无限期存在。
+fn clamp_reading_page(row: &db::BookRow, page: u32) -> u32 {
+    if row.format == db::BOOK_FORMAT_PDF && row.page_count == 0 {
+        return page.min(pdf::MAX_PDF_PAGE_COUNT);
+    }
+    page.min(row.page_count.saturating_sub(1))
+}
+
 #[tauri::command]
 pub async fn set_progress(
     state: State<'_, Arc<AppState>>,
@@ -1367,7 +1659,7 @@ pub async fn set_progress(
         let row = db::get_book(conn, &book_id)
             .map_err(err)?
             .ok_or_else(|| "书籍不存在".to_string())?;
-        let clamped = page.min(row.page_count.saturating_sub(1));
+        let clamped = clamp_reading_page(&row, page);
         db::set_progress(conn, &book_id, clamped, pct).map_err(err)
     })
 }
@@ -3154,6 +3446,49 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 重新导入 / 重扫同一 PDF **不得**把已回写的页数清零。
+    ///
+    /// PDF 的真实页数由前端 PDF.js 解析后经 `set_book_page_count` 写回；
+    /// 若导入分支把它写回 0，`clamp_reading_page` 就会退化成「完全不钳制」，
+    /// 阅读位置失去上界。
+    #[test]
+    fn reimporting_a_pdf_keeps_the_known_page_count() {
+        let dir = test_temp_dir("import-pdf-reimport");
+        let db = dir.join("lib.db");
+        let pdf = dir.join("漫画第一话.pdf");
+        std::fs::write(&pdf, b"%PDF-1.7 header bytes").unwrap();
+
+        // 首次导入：页数未知（0）。
+        let items = import_blocking(db.clone(), vec![pdf.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, "added", "message={}", items[0].message);
+        let id = items[0]
+            .book
+            .as_ref()
+            .expect("PDF 应返回书籍信息")
+            .id
+            .clone();
+
+        // 前端 PDF.js 解析后回写真实页数。
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            db::set_book_page_count(&conn, &id, 7).unwrap();
+            let row = db::get_book(&conn, &id).unwrap().expect("PDF 应入库");
+            assert_eq!(row.page_count, 7, "页数回写必须生效");
+        }
+
+        // 重新导入同一路径 → 页数必须仍是 7，格式仍是 pdf。
+        let items = import_blocking(db.clone(), vec![pdf.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, "restored", "message={}", items[0].message);
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let row = db::get_book(&conn, &id).unwrap().expect("PDF 应仍在库");
+        assert_eq!(row.page_count, 7, "重新导入不得清零已知页数");
+        assert_eq!(row.format, db::BOOK_FORMAT_PDF);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// PDF-1：魔数不符的 .pdf 必须安全失败，且不得入库、不得被当成压缩包。
     #[test]
     fn import_malformed_pdf_fails_safely_without_creating_a_book() {
@@ -4142,5 +4477,229 @@ mod tests {
         assert!(err.contains("目标路径不存在"), "{err}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /* ---------------- PDF-2：封面缓存与页数回写 ---------------- */
+
+    /// 极小 JPEG（2×2）：走真实的 jpeg 编码器，保证魔数与尺寸都真实。
+    fn tiny_jpeg() -> Vec<u8> {
+        use image::ImageEncoder as _;
+        let mut buf = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut buf)
+            .write_image(
+                &[255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0],
+                2,
+                2,
+                image::ExtendedColorType::Rgb8,
+            )
+            .unwrap();
+        buf
+    }
+
+    /// 带内存库与独立渲染缓存根的 AppState（绝不碰真实用户缓存目录）。
+    fn pdf_test_state(tag: &str) -> (Arc<AppState>, PathBuf) {
+        let dir = test_temp_dir(tag);
+        let mut state = AppState::new();
+        state.render = crate::render_cache::RenderCache::new(dir.join("render_cache"));
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_schema(&conn).unwrap();
+        state.db.set(conn);
+        (Arc::new(state), dir)
+    }
+
+    /// 非 JPEG 字节与超限载荷一律拒绝；合法 JPEG 能落缓存并原样读回。
+    ///
+    /// 写回**只收 JPEG**：L2 缓存文件名固定 `.jpg`，PNG 会被 `RenderCache::get`
+    /// 当成坏缓存删掉，等于静默丢封面（详见 `pdf::validate_pdf_cover` 的注释）。
+    #[test]
+    fn pdf_cover_rejects_non_image_bytes_and_oversized_payloads() {
+        let (state, dir) = pdf_test_state("pdf-cover");
+        let book = "p1";
+
+        // 任意字节不得进入缓存。
+        let err = store_pdf_cover(&state, book, b"not-an-image-at-all")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("pdf-cover-invalid"), "got: {err}");
+
+        // PNG 也不得写回（读取路径才容忍历史 PNG）。
+        let png = crate::pdf::fixtures::png_header(256, 256);
+        let err = store_pdf_cover(&state, book, &png).unwrap_err().to_string();
+        assert!(err.contains("pdf-cover-invalid"), "got: {err}");
+
+        // 超限（> 2 MiB）。
+        let oversized = vec![0xFFu8; pdf::MAX_PDF_COVER_BYTES + 1];
+        let err = store_pdf_cover(&state, book, &oversized)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("pdf-cover-too-large"), "got: {err}");
+
+        // 空字节。
+        let err = store_pdf_cover(&state, book, &[]).unwrap_err().to_string();
+        assert!(err.contains("pdf-cover-invalid"), "got: {err}");
+
+        // 合法 JPEG → 写入固定边长的第 0 页，并能原样读回。
+        let jpeg = tiny_jpeg();
+        store_pdf_cover(&state, book, &jpeg).unwrap();
+        let stored = state
+            .render
+            .get_raw(book, 0, pdf::PDF_COVER_EDGE, pdf::PDF_COVER_EDGE)
+            .expect("封面必须落在固定边长的第 0 页");
+        assert_eq!(stored, jpeg, "封面字节必须原样落盘");
+        // 其它边长读不到（固定边长是唯一键）。
+        assert!(state.render.get_raw(book, 0, 240, 240).is_none());
+
+        // 读回后能解析尺寸并组装成 PageImage。
+        let page = pdf_cover_page(stored).unwrap();
+        assert_eq!(page.mime, "image/jpeg");
+        assert_eq!(page.width, 2);
+        assert_eq!(page.height, 2);
+        assert!(page.data_url.starts_with("data:image/jpeg;base64,"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 封面必须**受尺寸边界约束**（AGENTS.md §4.5：单边 ≤4096px、面积 ≤16Mpx）。
+    ///
+    /// 一张 30000×30000 的压缩图只有几十 KB，字节数闸门拦不住；
+    /// 写入与读取两侧都要被尺寸边界拦下，否则会被反复 base64 送进前端。
+    #[test]
+    fn pdf_cover_dimensions_are_bounded_on_write_and_read() {
+        let (state, dir) = pdf_test_state("pdf-cover-dims");
+
+        // 写入：一张「声称 30000×30000」的 JPEG 必须被尺寸边界拦下。
+        let huge_jpeg = crate::pdf::fixtures::jpeg_header(30_000, 30_000);
+        let err = store_pdf_cover(&state, "p1", &huge_jpeg)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("pdf-cover-dimensions"), "got: {err}");
+
+        // 读取：历史 PNG 缓存同样要过尺寸边界（否则每次读缩略图都被整张送出去）。
+        let huge_png = crate::pdf::fixtures::png_header(30_000, 30_000);
+        let err = pdf_cover_page(huge_png).unwrap_err().to_string();
+        assert!(err.contains("pdf-cover-dimensions"), "got: {err}");
+
+        // 读取：合法 PNG 仍然可读（老版本可能写进来过）。
+        let ok_png = crate::pdf::fixtures::png_header(256, 256);
+        let page = pdf_cover_page(ok_png).expect("合法 PNG 封面应可读");
+        assert_eq!(page.mime, "image/png");
+        assert_eq!(page.width, 256);
+        assert_eq!(page.height, 256);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 封面解码失败必须带稳定码 `pdf-cover-invalid`（非中文界面靠它本地化）。
+    #[test]
+    fn pdf_cover_decode_failure_carries_stable_code() {
+        // 魔数是 JPEG，但段链不合法 → 解码失败。
+        let broken = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x02];
+        let err = pdf_cover_page(broken).unwrap_err().to_string();
+        assert!(err.contains("pdf-cover-invalid"), "got: {err}");
+        assert!(
+            err.trim_end().ends_with("（pdf-cover-invalid）"),
+            "稳定码必须在文案末尾：{err}"
+        );
+
+        // PNG 头部损坏同样收敛到稳定码。
+        let mut broken_png = crate::pdf::fixtures::png_header(256, 256);
+        broken_png[12..16].copy_from_slice(b"IDAT");
+        let err = pdf_cover_page(broken_png).unwrap_err().to_string();
+        assert!(err.contains("pdf-cover-invalid"), "got: {err}");
+        assert!(
+            err.trim_end().ends_with("（pdf-cover-invalid）"),
+            "稳定码必须在文案末尾：{err}"
+        );
+    }
+
+    /// PDF 封面缺失时必须返回稳定错误码 `pdf-cover-missing`（前端据此生成封面）。
+    #[tokio::test]
+    async fn pdf_thumbnail_reports_missing_cover_with_stable_code() {
+        let (state, dir) = pdf_test_state("pdf-thumb-missing");
+        state
+            .db
+            .with(|conn| {
+                db::upsert_book_with_format(
+                    conn,
+                    "p1",
+                    "C:/Books/Comic.pdf",
+                    "Comic",
+                    0,
+                    db::BOOK_FORMAT_PDF,
+                )
+                .map_err(err)
+            })
+            .unwrap();
+
+        let error = pdf_thumbnail(&state, "p1").await.unwrap_err();
+        assert!(
+            error.contains("pdf-cover-missing"),
+            "PDF 缺封面必须给出稳定码：{error}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 写入封面后 `pdf_thumbnail` 能读回同一张图（固定边长，max_size 无关）。
+    #[tokio::test]
+    async fn pdf_thumbnail_reads_back_the_stored_cover() {
+        let (state, dir) = pdf_test_state("pdf-thumb-hit");
+        let jpeg = tiny_jpeg();
+        store_pdf_cover(&state, "p1", &jpeg).unwrap();
+
+        let page = pdf_thumbnail(&state, "p1").await.expect("封面应可读回");
+        assert_eq!(page.index, 0);
+        assert_eq!(page.width, 2);
+        assert_eq!(page.height, 2);
+        assert_eq!(page.mime, "image/jpeg");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// base64 解码宽容：标准填充与无填充都能解，非法输入返回 None。
+    #[test]
+    fn base64_decoding_is_lenient_but_rejects_garbage() {
+        let payload = b"%PDF-1.7";
+        let encoded = B64.encode(payload);
+        assert_eq!(decode_base64_lenient(&encoded).unwrap(), payload.to_vec());
+        assert_eq!(
+            decode_base64_lenient(encoded.trim_end_matches('=')).unwrap(),
+            payload.to_vec(),
+            "无填充变体也必须能解"
+        );
+        assert!(decode_base64_lenient("   ").is_none());
+        assert!(decode_base64_lenient("not base64!!").is_none());
+    }
+
+    /// 阅读位置钳制：图片书照常钳制；PDF 在页数尚未回写时不得压成第 1 页。
+    #[test]
+    fn reading_page_clamp_keeps_pdf_position_until_page_count_is_known() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_schema(&conn).unwrap();
+        db::upsert_book(&conn, "b1", "p/b1", "图片书", 10).unwrap();
+        db::upsert_book_with_format(&conn, "p1", "p/p1.pdf", "PDF 书", 0, db::BOOK_FORMAT_PDF)
+            .unwrap();
+
+        let image = db::get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(clamp_reading_page(&image, 3), 3);
+        assert_eq!(clamp_reading_page(&image, 99), 9, "图片书必须钳到最后一页");
+
+        // PDF：页数未知 → 原样保留（否则恢复位置会被压成 0）。
+        let pdf = db::get_book(&conn, "p1").unwrap().unwrap();
+        assert_eq!(clamp_reading_page(&pdf, 3), 3);
+
+        // PDF：页数未知时仍须有上界——无效页位不得无限期存在，
+        // 否则 `reading_log` 的当日增量会被放大。
+        assert_eq!(
+            clamp_reading_page(&pdf, u32::MAX),
+            crate::pdf::MAX_PDF_PAGE_COUNT,
+            "页数未知时也必须钳到 PDF 页数上界"
+        );
+
+        // PDF：页数补齐后 → 照常钳制。
+        db::set_book_page_count(&conn, "p1", 4).unwrap();
+        let pdf = db::get_book(&conn, "p1").unwrap().unwrap();
+        assert_eq!(clamp_reading_page(&pdf, 3), 3);
+        assert_eq!(clamp_reading_page(&pdf, 99), 3, "页数已知后必须钳制");
     }
 }

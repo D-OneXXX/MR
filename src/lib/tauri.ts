@@ -103,6 +103,14 @@ export interface PageEntry {
   name: string;
 }
 
+/** PDF 字节分块：把本地 PDF 按区间喂给前端 pdf.js。 */
+export interface PdfChunk {
+  /** 整个 PDF 文件的字节数（始终是真实大小，与请求区间无关）。 */
+  total: number;
+  /** 本次区间的原始字节（base64，无 data: 前缀）。 */
+  data: string;
+}
+
 export interface PageImage {
   index: number;
   width: number;
@@ -343,6 +351,16 @@ export const api = {
     }),
   getThumbnail: (bookId: string, maxSize?: number) =>
     invoke<PageImage>("get_thumbnail", { bookId, maxSize: maxSize ?? null }),
+  // PDF（PDF-2）：按字节区间读取本地 PDF，喂给前端 pdf.js 解析。
+  // length 会被后端钳制到 4 MiB；offset 越界返回空数据（视为 EOF）。
+  getPdfChunk: (bookId: string, offset: number, length: number) =>
+    invoke<PdfChunk>("get_pdf_chunk", { bookId, offset, length }),
+  // 回写真实页数（PDF 导入时页数留 0）；只更新 books.page_count。
+  setBookPageCount: (bookId: string, pageCount: number) =>
+    invoke<void>("set_book_page_count", { bookId, pageCount }),
+  // 写回前端渲染的 PDF 封面（裸 base64，JPEG/PNG）。
+  putPdfThumbnail: (bookId: string, dataBase64: string) =>
+    invoke<void>("put_pdf_thumbnail", { bookId, dataBase64 }),
   // 清空临时磁盘缓存（render + online 原图），返回释放体积与文件数。
   clearTempCache: () => invoke<ClearCacheResult>("clear_temp_cache"),
   getMemoryStats: () => invoke<MemoryStats>("get_memory_stats"),

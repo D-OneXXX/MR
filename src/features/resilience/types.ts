@@ -53,6 +53,11 @@ export type BreadcrumbKind =
   | "update"
   | "privacy"
   | "readerPage"
+  // PDF（PDF-2）：打开 / 渲染失败 / 适配模式切换。
+  | "pdf-open"
+  | "pdf-open-failed"
+  | "pdf-render-failed"
+  | "pdf-fit-change"
   | "other";
 
 export interface Breadcrumb {

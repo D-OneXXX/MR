@@ -40,10 +40,14 @@
 
 ## What it does
 
-- **Library on your disk.** Import folders, ZIP archives, or CBZ files; scan recursively, group
-  chapters into series, and search or filter without sending your library anywhere.
+- **Library on your disk.** Import folders, ZIP archives, CBZ files, or local PDF documents;
+  scan recursively, group chapters into series, and search or filter without sending your
+  library anywhere.
 - **Read the way you want.** Single-page, double-page, and continuous webtoon modes; RTL/LTR
   direction; zoom and pan; multiple tabs; seamless next-chapter reading.
+- **PDF documents, read in place.** Local PDFs open in the same reader with page navigation,
+  zoom, fit-to-page / fit-to-width, and remembered reading position. Rendering happens entirely
+  on your machine through a bundled PDF engine — no upload, no online service.
 - **Pick up where you left off.** Reading progress and webtoon scroll position are remembered.
   When a source file moves, relocate it and keep the progress you already made.
 - **Natural ordering.** Pages and chapter titles are sorted by number, not by raw filename
@@ -116,9 +120,10 @@ associations, and existing user data remain intact.
 
 ## Quick start
 
-1. Choose **Add folder** or **Add books** and select a folder, ZIP, or CBZ.
+1. Choose **Add folder** or **Add books** and select a folder, ZIP, CBZ, or PDF file.
 2. Open a cover to view details, then double-click or press **Shift+Enter** to start reading.
 3. Switch between single-page, double-page, and webtoon layouts from the reader.
+   PDF documents always use the single-page PDF layout with fit-to-page / fit-to-width.
 4. Use **Settings → General & appearance** to change the theme, interface language, and
    reading preferences.
 5. For online reading, use the browser/online entry with a URL you are authorized to access.
@@ -144,7 +149,22 @@ There is no account or cloud sync.
 
 **Which formats are supported?**
 
-Image folders, ZIP, and CBZ. Other archive formats are not part of the current scope.
+Image folders, ZIP, CBZ, and local PDF documents. Other archive formats are not part of the
+current scope.
+
+**Are encrypted PDFs supported?**
+
+No. Password-protected PDFs are detected and reported with a clear message; Moyu never asks for
+a password and never stores one. Remove the password from the file first, then import it again.
+
+**Does opening a PDF send anything over the network?**
+
+No. The file is read from your disk and rendered by the bundled PDF engine inside the
+application window. Closing the reader only releases the current reference to the document:
+the document itself may stay in a bounded cache (at most 4 documents at a time, each with its
+own render worker). When the limit is reached, the least recently used document is evicted
+and its document and render worker are actually released. Embedded document scripts are not
+executed and a PDF cannot make the application fetch external resources.
 
 **Can I move my books after importing them?**
 

@@ -126,7 +126,17 @@ const zhCN = {
   "error.updateUnsupportedFormat": "更新包格式不受支持，请从发行页手动下载",
   "error.nonUtf8Path": "路径包含非 UTF-8 字符，当前版本暂不支持",
   "error.pdfNotValid": "该文件不是有效的 PDF 文档",
-  "error.pdfRenderUnsupported": "PDF 阅读功能尚未实现，当前版本仅支持识别与导入",
+  "error.pdfNotFound": "找不到该 PDF 文件（可能已被移动或删除）",
+  "error.pdfSourceNotAllowed": "该 PDF 源不在允许的本地书源范围内",
+  "error.pdfRenderUnsupported": "PDF 渲染失败，请确认文件未损坏",
+  "error.pdfEncrypted": "该 PDF 已加密（受密码保护），当前版本不支持加密文档",
+  "error.pdfTooLarge": "该 PDF 体积超过支持上限（512 MiB）",
+  "error.pdfSourceUnsupported": "PDF 文档不能走图片页渲染管线",
+  "error.pdfCoverMissing": "该 PDF 的封面尚未生成",
+  "error.pdfPageCountInvalid": "该 PDF 的页数无效或无法读取，无法打开",
+  "error.pdfCoverInvalid": "该 PDF 的封面数据已损坏，需要重新生成",
+  "error.pdfCoverTooLarge": "该 PDF 的封面数据超过体积上限",
+  "error.pdfCoverDimensions": "该 PDF 的封面尺寸超过上限",
   "error.onlinePageCountDrop": "在线清单页数少于现有记录，已保留当前进度；如网页确实变短，请先删除该书再重新导入",
 } as const;
 
@@ -260,7 +270,17 @@ const zhTW: CommonMessages = {
   "error.updateUnsupportedFormat": "更新包格式不受支援，請從發行頁手動下載",
   "error.nonUtf8Path": "路徑包含非 UTF-8 字元，目前版本暫不支援",
   "error.pdfNotValid": "該檔案不是有效的 PDF 文件",
-  "error.pdfRenderUnsupported": "PDF 閱讀功能尚未實作，目前版本僅支援辨識與匯入",
+  "error.pdfNotFound": "找不到該 PDF 檔案（可能已被移動或刪除）",
+  "error.pdfSourceNotAllowed": "該 PDF 來源不在允許的本機書源範圍內",
+  "error.pdfRenderUnsupported": "PDF 算繪失敗，請確認檔案未損毀",
+  "error.pdfEncrypted": "該 PDF 已加密（受密碼保護），目前版本不支援加密文件",
+  "error.pdfTooLarge": "該 PDF 體積超過支援上限（512 MiB）",
+  "error.pdfSourceUnsupported": "PDF 文件不能走圖片頁算繪管線",
+  "error.pdfCoverMissing": "該 PDF 的封面尚未產生",
+  "error.pdfPageCountInvalid": "該 PDF 的頁數無效或無法讀取，無法開啟",
+  "error.pdfCoverInvalid": "該 PDF 的封面資料已損毀，需要重新產生",
+  "error.pdfCoverTooLarge": "該 PDF 的封面資料超過體積上限",
+  "error.pdfCoverDimensions": "該 PDF 的封面尺寸超過上限",
   "error.onlinePageCountDrop": "線上清單頁數少於現有紀錄，已保留目前進度；若網頁確實變短，請先刪除該書再重新匯入",
 };
 
@@ -395,8 +415,21 @@ const en: CommonMessages = {
   "error.updateUnsupportedFormat": "This update package format is not supported. Download it manually from the release page.",
   "error.nonUtf8Path": "The path contains non-UTF-8 characters and is not supported by this version.",
   "error.pdfNotValid": "This file is not a valid PDF document.",
-  "error.pdfRenderUnsupported":
-    "PDF reading is not implemented yet. This version only recognizes and imports PDF files.",
+  "error.pdfNotFound": "The PDF file could not be found (it may have been moved or deleted).",
+  "error.pdfSourceNotAllowed":
+    "This PDF source is outside the allowed local library sources.",
+  "error.pdfRenderUnsupported": "Rendering this PDF failed. Check that the file is not damaged.",
+  "error.pdfEncrypted": "This PDF is encrypted (password protected). Encrypted documents are not supported yet.",
+  "error.pdfTooLarge": "This PDF is larger than the supported limit (512 MiB).",
+  "error.pdfSourceUnsupported": "A PDF document cannot go through the image page pipeline.",
+  "error.pdfCoverMissing": "The cover of this PDF has not been generated yet.",
+  "error.pdfPageCountInvalid":
+    "The page count of this PDF is invalid or unreadable, so it cannot be opened.",
+  "error.pdfCoverInvalid":
+    "The cover data of this PDF is corrupt and must be regenerated.",
+  "error.pdfCoverTooLarge": "The cover data of this PDF exceeds the size limit.",
+  "error.pdfCoverDimensions":
+    "The cover dimensions of this PDF exceed the limit.",
   "error.onlinePageCountDrop": "The online manifest has fewer pages than the existing record, so your progress was kept. If the page really got shorter, delete the book and import it again.",
 };
 
@@ -533,8 +566,28 @@ const es: CommonMessages = {
   "error.updateUnsupportedFormat": "Este formato de actualización no es compatible. Descárgalo manualmente desde la página de versiones.",
   "error.nonUtf8Path": "La ruta contiene caracteres que no son UTF-8 y esta versión no la admite.",
   "error.pdfNotValid": "Este archivo no es un documento PDF válido.",
+  "error.pdfNotFound":
+    "No se encontró el archivo PDF (puede que se haya movido o eliminado).",
+  "error.pdfSourceNotAllowed":
+    "Esta fuente PDF está fuera de las fuentes locales permitidas.",
   "error.pdfRenderUnsupported":
-    "La lectura de PDF aún no está implementada. Esta versión solo reconoce e importa archivos PDF.",
+    "No se pudo renderizar este PDF. Comprueba que el archivo no esté dañado.",
+  "error.pdfEncrypted":
+    "Este PDF está cifrado (con contraseña). Los documentos cifrados aún no son compatibles.",
+  "error.pdfTooLarge":
+    "Este PDF supera el límite admitido (512 MiB).",
+  "error.pdfSourceUnsupported":
+    "Un documento PDF no puede pasar por la canalización de páginas de imagen.",
+  "error.pdfCoverMissing":
+    "La portada de este PDF todavía no se ha generado.",
+  "error.pdfPageCountInvalid":
+    "El número de páginas de este PDF no es válido o no se puede leer, así que no se puede abrir.",
+  "error.pdfCoverInvalid":
+    "Los datos de la portada de este PDF están corruptos y deben regenerarse.",
+  "error.pdfCoverTooLarge":
+    "Los datos de la portada de este PDF superan el límite de tamaño.",
+  "error.pdfCoverDimensions":
+    "Las dimensiones de la portada de este PDF superan el límite.",
   "error.onlinePageCountDrop": "El manifiesto en línea tiene menos páginas que el registro actual, así que se conservó tu progreso. Si la página realmente se acortó, elimina el libro y vuelve a importarlo.",
 };
 
@@ -671,8 +724,25 @@ const ja: CommonMessages = {
   "error.updateUnsupportedFormat": "この更新パッケージ形式は未対応です。リリースページから手動でダウンロードしてください。",
   "error.nonUtf8Path": "パスに UTF-8 以外の文字が含まれているため、このバージョンでは対応していません。",
   "error.pdfNotValid": "このファイルは有効な PDF 文書ではありません。",
+  "error.pdfNotFound": "PDF ファイルが見つかりません（移動または削除された可能性があります）。",
+  "error.pdfSourceNotAllowed":
+    "この PDF ソースは許可されたローカル書源の範囲外です。",
   "error.pdfRenderUnsupported":
-    "PDF の閲覧機能はまだ実装されていません。このバージョンでは PDF の認識と取り込みのみに対応しています。",
+    "PDF の描画に失敗しました。ファイルが破損していないか確認してください。",
+  "error.pdfEncrypted":
+    "この PDF は暗号化されています（パスワード保護）。暗号化文書はまだ対応していません。",
+  "error.pdfTooLarge": "この PDF は対応上限（512 MiB）を超えています。",
+  "error.pdfSourceUnsupported":
+    "PDF 文書は画像ページのパイプラインで処理できません。",
+  "error.pdfPageCountInvalid":
+    "この PDF のページ数が無効または読み取れないため、開くことができません。",
+  "error.pdfCoverInvalid":
+    "この PDF の表紙データは破損しています。再生成が必要です。",
+  "error.pdfCoverTooLarge":
+    "この PDF の表紙データがサイズ上限を超えています。",
+  "error.pdfCoverDimensions":
+    "この PDF の表紙のサイズ（寸法）が上限を超えています。",
+  "error.pdfCoverMissing": "この PDF の表紙はまだ生成されていません。",
   "error.onlinePageCountDrop": "オンラインリストのページ数が既存の記録より少ないため、現在の進捗を保持しました。実際にページが減った場合は、この本を削除して再読み込みしてください。",
 };
 
@@ -809,8 +879,23 @@ const ko: CommonMessages = {
   "error.updateUnsupportedFormat": "지원하지 않는 업데이트 패키지 형식입니다. 릴리스 페이지에서 직접 내려받으세요.",
   "error.nonUtf8Path": "경로에 UTF-8이 아닌 문자가 있어 이 버전에서는 지원하지 않습니다.",
   "error.pdfNotValid": "이 파일은 유효한 PDF 문서가 아닙니다.",
+  "error.pdfNotFound": "PDF 파일을 찾을 수 없습니다(이동되었거나 삭제되었을 수 있습니다).",
+  "error.pdfSourceNotAllowed":
+    "이 PDF 소스는 허용된 로컬 서재 범위 밖에 있습니다.",
   "error.pdfRenderUnsupported":
-    "PDF 읽기 기능은 아직 구현되지 않았습니다. 이 버전은 PDF 인식 및 가져오기만 지원합니다.",
+    "PDF 렌더링에 실패했습니다. 파일이 손상되지 않았는지 확인하세요.",
+  "error.pdfEncrypted":
+    "이 PDF는 암호화되어 있습니다(암호 보호). 암호화된 문서는 아직 지원하지 않습니다.",
+  "error.pdfTooLarge": "이 PDF는 지원 상한(512 MiB)을 초과합니다.",
+  "error.pdfSourceUnsupported":
+    "PDF 문서는 이미지 페이지 파이프라인으로 처리할 수 없습니다.",
+  "error.pdfCoverMissing": "이 PDF의 표지가 아직 생성되지 않았습니다.",
+  "error.pdfPageCountInvalid":
+    "이 PDF의 페이지 수가 올바르지 않거나 읽을 수 없어 열 수 없습니다.",
+  "error.pdfCoverInvalid":
+    "이 PDF의 표지 데이터가 손상되어 다시 생성해야 합니다.",
+  "error.pdfCoverTooLarge": "이 PDF의 표지 데이터가 크기 한도를 초과합니다.",
+  "error.pdfCoverDimensions": "이 PDF의 표지 크기가 한도를 초과합니다.",
   "error.onlinePageCountDrop": "온라인 목록의 페이지 수가 기존 기록보다 적어 현재 진행 상황을 유지했습니다. 페이지가 실제로 줄었다면 이 책을 삭제한 뒤 다시 가져오세요.",
 };
 

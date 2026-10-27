@@ -62,6 +62,21 @@ impl RenderCache {
         let _ = std::fs::remove_file(self.file_path(book_id, index, req_w, req_h));
     }
 
+    /// 读取缓存字节但**不做格式判定**。
+    ///
+    /// 与 [`RenderCache::get`] 的唯一区别：这里不会因为「不是 JPEG」就删文件。
+    /// 用途：PDF 封面既可能是 JPEG 也可能是 PNG（前端渲染后回传），
+    /// 格式判定交给调用方按魔数校验，判定失败时由调用方显式删除坏缓存。
+    pub fn get_raw(&self, book_id: &str, index: u32, req_w: u32, req_h: u32) -> Option<Vec<u8>> {
+        let path = self.file_path(book_id, index, req_w, req_h);
+        let mut f = std::fs::File::open(&path).ok()?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf).ok()?;
+        // 访问即刷新 mtime，统一 trim 才是真正 LRU。
+        crate::disk_cache::touch_file(&path);
+        Some(buf)
+    }
+
     /// 落盘（原子写：tmp + rename），失败静默（缓存永远不该拖垮主流程）。
     pub fn put(&self, book_id: &str, index: u32, req_w: u32, req_h: u32, bytes: &[u8]) {
         let dir = self.book_dir(book_id);

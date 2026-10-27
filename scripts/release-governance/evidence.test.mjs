@@ -67,6 +67,10 @@ function makeInstallEvidence(overrides = {}) {
       upgrade: "pass",
       dataIntegrity: "pass",
       recovery: "pass",
+      pdfReading: "pass",
+      progressRestart: "pass",
+      backupRestore: "pass",
+      databaseRollback: "pass",
     },
     library: {
       quickCheck: "ok",
@@ -189,7 +193,16 @@ test("安装证据：合法新证据 → 通过", () => {
 });
 
 test("安装证据：缺少任一检查项 → 拒绝", () => {
-  for (const key of ["freshInstall", "upgrade", "dataIntegrity", "recovery"]) {
+  for (const key of [
+    "freshInstall",
+    "upgrade",
+    "dataIntegrity",
+    "recovery",
+    "pdfReading",
+    "progressRestart",
+    "backupRestore",
+    "databaseRollback",
+  ]) {
     const checks = { ...installEvidence.checks };
     delete checks[key];
     const problems = validateInstallEvidence({ ...installEvidence, checks }, expected);
@@ -198,6 +211,23 @@ test("安装证据：缺少任一检查项 → 拒绝", () => {
       `${key} 缺失必须被拒绝`,
     );
   }
+});
+
+test("安装证据：PDF / 进度重启 / 备份恢复 / 数据库回滚是新门禁项", () => {
+  // 四项新检查只允许 pass/fail；任何非 pass（含缺失、fail、其它值）都必须拒绝。
+  for (const key of ["pdfReading", "progressRestart", "backupRestore", "databaseRollback"]) {
+    for (const value of [undefined, "fail", "skipped", true]) {
+      const checks = { ...installEvidence.checks, [key]: value };
+      if (value === undefined) delete checks[key];
+      const problems = validateInstallEvidence({ ...installEvidence, checks }, expected);
+      assert.ok(
+        problems.some((p) => p.includes(key)),
+        `${key}=${String(value)} 必须被拒绝`,
+      );
+    }
+  }
+  // 八项全 pass 仍必须放行（不误伤完整证据）。
+  assert.deepEqual(validateInstallEvidence(installEvidence, expected), []);
 });
 
 test("安装证据：旧共享宿主回执（clean=false、无 provenance/library）→ 拒绝", () => {

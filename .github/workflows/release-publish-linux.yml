@@ -202,7 +202,10 @@ jobs:
             exit 0
           fi
           mkdir -p handoff
-          for PREV in $(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[].tag_name'); do
+          # 只从**已公开且非预发布**的 Release 接力另一通道清单：Draft（包括
+          # Windows 尚未审批的候选）不可作为来源，否则会把未审批的清单带上
+          # 公开 Release，绕过该通道的人工审批。
+          for PREV in $(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name'); do
             if [ "$PREV" = "$TAG" ]; then continue; fi
             if gh release download "$PREV" -p latest.json -D handoff --clobber 2>/dev/null; then
               gh release upload "$TAG" handoff/latest.json --clobber

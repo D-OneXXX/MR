@@ -23,6 +23,11 @@ on:
         description: "干净 Windows VM 的安装/升级/回滚验证回执（base64 编码的 JSON）。正式发布必须提供"
         required: false
         type: string
+      release_notes:
+        description: "正式 Release Notes（可选，支持多行 Markdown）；留空时使用 Draft 占位文案"
+        required: false
+        default: ""
+        type: string
       rehearsal:
         description: "隔离演练模式：只允许 v0.0.0-rehearsal 标签，产物一律带 rehearsal- 前缀且永不发布"
         required: false
@@ -142,6 +147,16 @@ jobs:
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
           npm audit --omit=dev --audit-level=high
 
+      # ---------- 发布说明 ----------
+      # 多行 workflow_dispatch 输入经 step output 传给 tauri-action：不把它拼进
+      # YAML 块标量或表达式字面量，空值/纯空白时回落到既有占位文案。
+      - name: Resolve release notes
+        id: notes
+        shell: bash
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: node scripts/release-governance/release-notes.mjs
+
       # ---------- 构建 + 签名（签名私钥来自 Environment 级 Secret） ----------
       # tauri-action 负责：签名、生成 updater 包（.nsis.zip）与 latest.json、
       # 上传资产，并且**只创建 Draft**（releaseDraft: true）。
@@ -157,10 +172,8 @@ jobs:
         with:
           tagName: ${{ steps.identity.outputs.tag }}
           releaseName: Moyu ${{ steps.identity.outputs.tag }}
-          releaseBody: |
-            Release Candidate（**Draft，未公开**）。
-            审批通过后由 release-publish 工作流校验绑定并发布。
-            RC 记录（版本 / Commit / 制品 SHA-256 / 平台）见资产 rc-record.json。
+          # 由 Resolve release notes 生成的多行 step output；空输入时是占位文案。
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
@@ -204,14 +217,11 @@ jobs:
           gh release download "$TAG" --dir downloaded --clobber
           node -e '
             const fs = require("fs");
-            const path = require("path");
-            const { buildRcRecord, sha256File, renderRcSummary } = require("./scripts/release-governance/rc-record.mjs");
-            const dir = "downloaded";
-            const names = fs.readdirSync(dir).filter((n) => n !== "rc-record.json").sort();
-            const artifacts = names.map((name) => {
-              const full = path.join(dir, name);
-              return { name, sha256: sha256File(full), size: fs.statSync(full).size };
-            });
+            const { buildRcRecord, collectCandidateArtifacts, renderRcSummary } = require("./scripts/release-governance/rc-record.mjs");
+            // 治理文件（rc-record / rc-summary / signature-verification /
+            // install-verification）不进入制品清单：重跑候选时不会被自己的
+            // 回执污染摘要，从而不会因「记录之外的制品」被发布门禁拒绝。
+            const artifacts = collectCandidateArtifacts("downloaded");
             const record = buildRcRecord({
               tag: process.env.TAG,
               commit: process.env.COMMIT,
@@ -222,6 +232,39 @@ jobs:
             fs.writeFileSync("rc-summary.md", renderRcSummary(record) + "\n");
           '
           gh release upload "$TAG" rc-record.json rc-summary.md --clobber
+
+      # ---------- 强制签名证据：候选阶段就出具并回填 Draft ----------
+      # 发布工作流要求 Draft 中存在 signature-verification.json；在这里先验签，
+      # 验签失败则 job 直接失败（不产出证据）。工具来自官方 minisign Release，
+      # fetch-minisign.mjs 按仓库固定 SHA-256 校验；公钥来自当前 tauri.conf.json。
+      - name: Verify candidate signature → signature-verification.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+          COMMIT: ${{ steps.identity.outputs.commit }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release-governance/fetch-minisign.mjs
+          EVIDENCE_DIR="$RUNNER_TEMP/mr-signature-evidence"
+          rm -rf "$EVIDENCE_DIR" && mkdir -p "$EVIDENCE_DIR"
+          node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json","utf8"));fs.writeFileSync(process.argv[1],Buffer.from(c.plugins.updater.pubkey,"base64"));' "$EVIDENCE_DIR/configured.pub"
+          INSTALLER="$(ls candidate/*.exe 2>/dev/null | head -1 || true)"
+          SIGNATURE="${INSTALLER}.sig"
+          if [ -z "$INSTALLER" ] || [ ! -f "$SIGNATURE" ]; then
+            echo "Draft 缺少安装包或 .exe.sig 签名文件，无法验签：拒绝候选" >&2
+            exit 1
+          fi
+          node scripts/release-governance/verify-signature.mjs \
+            --artifact "$INSTALLER" \
+            --signature "$SIGNATURE" \
+            --public-key "$EVIDENCE_DIR/configured.pub" \
+            --version "$VERSION" \
+            --commit "$COMMIT" \
+            --platform windows-x86_64 \
+            --out "$EVIDENCE_DIR/signature-verification.json"
+          gh release upload "$TAG" "$EVIDENCE_DIR/signature-verification.json" --clobber
 
       - name: Upload install verification attestation (optional at candidate stage)
         if: ${{ inputs.install_attestation_b64 != '' }}

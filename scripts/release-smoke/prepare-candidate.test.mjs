@@ -146,3 +146,18 @@ test("prepare-candidate：标签与版本不一致 → 拒绝", () => {
   assert.equal(result.ok, false);
   assert.ok(result.problems.some((problem) => problem.includes("tag 与请求不一致")));
 });
+
+test("prepare-candidate：资产目录中的治理文件不参与候选绑定", () => {
+  const dir = makeAssetDir();
+  const { record, recordPath } = makeRecord(dir);
+  for (const name of [
+    "rc-summary.md",
+    "signature-verification.json",
+    "install-verification.json",
+  ]) {
+    fs.writeFileSync(path.join(dir, name), `${name}-bytes`);
+  }
+  const result = validate(dir, record, recordPath);
+  assert.equal(result.ok, true, result.problems.join(" | "));
+  assert.equal(result.candidate.artifactName, "MangaReader_0.17.2_x64-setup.exe");
+});

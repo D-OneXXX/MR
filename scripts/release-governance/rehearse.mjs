@@ -21,6 +21,7 @@ import path from "node:path";
 import {
   CHANNELS,
   buildRcRecord,
+  collectCandidateArtifacts,
   parseTag,
   renderRcSummary,
   sha256Bytes,
@@ -556,6 +557,71 @@ check(
   },
 );
 
+// J. 候选重跑安全：Draft 里已回填的治理文件不得污染下一次 RC 记录
+const rerunDir = fs.mkdtempSync(path.join(os.tmpdir(), "mr-rehearsal-rerun-"));
+const rerunPayloads = {
+  "MangaReader_0.17.2_x64-setup.exe": Buffer.from("rerun-installer"),
+  "latest.json": Buffer.from('{"version":"0.17.2"}'),
+};
+for (const [name, bytes] of Object.entries(rerunPayloads)) {
+  fs.writeFileSync(path.join(rerunDir, name), bytes);
+}
+const cleanArtifacts = collectCandidateArtifacts(rerunDir);
+for (const name of [
+  "rc-record.json",
+  "rc-summary.md",
+  "signature-verification.json",
+  "install-verification.json",
+]) {
+  fs.writeFileSync(path.join(rerunDir, name), Buffer.from(`${name}-bytes`));
+}
+const rerunArtifacts = collectCandidateArtifacts(rerunDir);
+check(
+  "J1 候选重跑（Draft 已有治理文件）→ 制品集合不变",
+  JSON.stringify(rerunArtifacts) === JSON.stringify(cleanArtifacts) &&
+    rerunArtifacts.every((item) => !/^(rc-|signature-|install-)/.test(item.name)),
+  rerunArtifacts.map((item) => item.name).join(","),
+);
+const rerunRecord = buildRcRecord({
+  tag,
+  commit,
+  qa: { runId: "1234567890", buildCommit: commit },
+  artifacts: rerunArtifacts,
+});
+const rerunDigests = new Map(
+  Object.entries(rerunPayloads).map(([name, bytes]) => [name, sha256Bytes(bytes)]),
+);
+for (const name of [
+  "rc-record.json",
+  "rc-summary.md",
+  "signature-verification.json",
+  "install-verification.json",
+]) {
+  rerunDigests.set(name, sha256Bytes(Buffer.from(`${name}-bytes`)));
+}
+const rerunVerdict = verifyPublishPreconditions({
+  record: rerunRecord,
+  actualDigests: rerunDigests,
+  attestation: makeAttestation(rerunRecord, sha256Bytes(rerunPayloads["MangaReader_0.17.2_x64-setup.exe"])),
+  channel: "windows",
+  commit,
+});
+check("J2 重跑后的 RC 记录仍能通过发布前摘要校验", rerunVerdict.ok, rerunVerdict.problems.join(" | "));
+rerunDigests.set("unexpected.exe", sha256Bytes(Buffer.from("unexpected")));
+const rerunRejected = verifyPublishPreconditions({
+  record: rerunRecord,
+  actualDigests: rerunDigests,
+  attestation: makeAttestation(rerunRecord, sha256Bytes(rerunPayloads["MangaReader_0.17.2_x64-setup.exe"])),
+  channel: "windows",
+  commit,
+});
+check(
+  "J3 治理文件之外的额外制品仍被拒绝",
+  !rerunRejected.ok && rerunRejected.problems.some((problem) => problem.includes("记录之外的制品")),
+  rerunRejected.problems.join(" | "),
+);
+fs.rmSync(rerunDir, { recursive: true, force: true });
+
 // G. 标签命名约束
 check("G1 常规通道拒绝 linux 后缀标签", parseTag("v0.17.2-linux-sec1")?.channel === "linux-critical");
 check("G2 常规通道标签解析正确", parseTag("v0.17.2")?.channel === "windows");
@@ -569,7 +635,7 @@ const summary = {
   total: results.length,
   passed: results.length - failures,
   failed: failures,
-  scenarios: ["A 候选→Draft", "B 审批绑定", "C 失败恢复", "D 并发控制", "E 清单安全", "F 跨通道", "G 标签约束", "H 演练不可发布", "I 证据门禁"],
+  scenarios: ["A 候选→Draft", "B 审批绑定", "C 失败恢复", "D 并发控制", "E 清单安全", "F 跨通道", "G 标签约束", "H 演练不可发布", "I 证据门禁", "J 候选重跑安全"],
 };
 console.log("");
 console.log("=== 发布链路隔离演练 ===");

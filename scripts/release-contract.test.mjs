@@ -175,6 +175,48 @@ test("清单契约：产物多于一个 AppImage 时必须失败", () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("Linux 0.18.0：latest-linux-critical.json 按候选版本生成（同端点/同签名）", () => {
+  const { dir, bundle, tag } = makeBuildRoot({
+    version: "0.18.0",
+    tag: "v0.18.0-linux-sec1",
+  });
+  const image = "manga-reader-tauri_0.18.0_amd64.AppImage";
+  fs.writeFileSync(path.join(bundle, image), "fake-appimage-0.18.0");
+  fs.writeFileSync(
+    path.join(bundle, `${image}.sig`),
+    "untrusted comment: signature\nRULEDATA\n",
+  );
+
+  runManifest(dir, { RELEASE_TAG: tag, GITHUB_REPOSITORY: "D-OneXXX/MR" });
+
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(bundle, "latest-linux-critical.json"), "utf8"),
+  );
+  assert.equal(manifest.version, "0.18.0");
+  assert.match(manifest.notes, /v0\.18\.0-linux-sec1/);
+  // 只产出 Linux 平台项：不得混入 Windows 通道。
+  assert.deepEqual(Object.keys(manifest.platforms), ["linux-x86_64"]);
+  assert.equal(
+    manifest.platforms["linux-x86_64"].url,
+    `https://github.com/D-OneXXX/MR/releases/download/v0.18.0-linux-sec1/${image}`,
+  );
+  assert.deepEqual(
+    verifyUpdaterManifest(manifest, {
+      expectVersion: "0.18.0",
+      requirePlatform: "linux-x86_64",
+    }),
+    [],
+  );
+  // 端点与签名公钥没有为新版本重新设计：Linux overlay 仍指向同一高危通道，
+  // 且不覆盖 pubkey（继承 tauri.conf.json 的同一把 minisign 公钥）。
+  assert.match(
+    linuxOverlay.plugins.updater.endpoints[0],
+    /releases\/latest\/download\/latest-linux-critical\.json$/,
+  );
+  assert.equal(linuxOverlay.plugins.updater.pubkey, undefined);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 /* ------------------------------------------------------------------ */
 /* 3. 公开更新清单校验器                                               */
 /* ------------------------------------------------------------------ */

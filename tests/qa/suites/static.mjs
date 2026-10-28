@@ -858,6 +858,7 @@ export function checkReleaseGovernance(root, report) {
       "library-ui-check.mjs",
       "install-verification.json",
       "verify-evidence.mjs",
+      "Attach verified install evidence to Draft",
     ]) {
       if (!source.includes(marker)) {
         errors.push(`release-install-verify.yml 缺少 ${marker}`);
@@ -873,10 +874,24 @@ export function checkReleaseGovernance(root, report) {
     if (disallowed.length > 0) {
       errors.push(`release-install-verify.yml 不得引用非默认 Secret：${disallowed.join(", ")}`);
     }
-    if (/gh release\s+(upload|edit|delete)|--draft=false/i.test(source)) {
-      errors.push("release-install-verify.yml 不得写 Release（只允许只读下载与验证）");
+    // 安装验证只允许把**已核验的安装回执**附到 Draft；不得修改/删除/发布 Release。
+    const uploadLines = [...source.matchAll(/gh release\s+upload\s+([^\n`]+)/g)].map(
+      (match) => match[1].trim(),
+    );
+    if (uploadLines.length > 1) {
+      errors.push("release-install-verify.yml 只允许一次 Release 上传（install-verification.json）");
     }
-    evidence.push("release-install-verify.yml: workflow_dispatch + windows-2022 + 只读证据");
+    for (const line of uploadLines) {
+      if (!/install-verification\.json/.test(line)) {
+        errors.push(`release-install-verify.yml 不得上传其他资产：${line}`);
+      }
+    }
+    if (/gh release\s+(edit|delete)|--draft=false/i.test(source)) {
+      errors.push("release-install-verify.yml 不得修改/删除/发布 Release");
+    }
+    evidence.push(
+      "release-install-verify.yml: workflow_dispatch + windows-2022 + 只读下载 + 单次上传安装回执",
+    );
   }
   const windowsPublishPath = path.join(dir, "release-publish.yml");
   if (fs.existsSync(windowsPublishPath)) {
@@ -1104,12 +1119,31 @@ export function checkCsp(root, report) {
       "default-src": /(?:^|;)\s*default-src\s+[^;]*'self'/,
       "script-src": /(?:^|;)\s*script-src\s+[^;]*'self'/,
       "img-src": /(?:^|;)\s*img-src\s+[^;]*'self'[^;]*\bdata:/,
+      "connect-src-self": /(?:^|;)\s*connect-src\s+[^;]*'self'/,
       "connect-src-ipc": /(?:^|;)\s*connect-src\s+[^;]*\bipc:/,
       "connect-src-host": /(?:^|;)\s*connect-src\s+[^;]*(?:tauri\.localhost|ipc\.localhost)/,
       "style-src": /(?:^|;)\s*style-src\s+[^;]*'self'[^;]*'unsafe-inline'/,
     };
     for (const [name, regex] of Object.entries(directives)) {
       if (!regex.test(value)) problems.push(`CSP 缺少 ${name} 关键指令`);
+    }
+    // Linux（tauri://localhost）下 PDF.js 的 CMap / 标准字体走同源 fetch，
+    // 必须由 'self' 放行；除此之外 connect-src 只允许 IPC 与本地 tauri 源，
+    // 任何通配符、外部 origin 或 scheme 级放行都必须被拒绝（防止静默放宽）。
+    const connect = (value.match(/(?:^|;)\s*connect-src\s+([^;]*)/)?.[1] || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    const allowedConnect = new Set([
+      "'self'",
+      "ipc:",
+      "http://ipc.localhost",
+      "http://tauri.localhost",
+      "https://tauri.localhost",
+    ]);
+    const extraConnect = connect.filter((token) => !allowedConnect.has(token));
+    if (extraConnect.length) {
+      problems.push(`connect-src 出现未批准来源：${extraConnect.join(" ")}`);
     }
   }
 
@@ -1123,7 +1157,7 @@ export function checkCsp(root, report) {
       details: problems.join(" | "),
       location: "src-tauri/tauri.conf.json",
       expected:
-        "app.security.csp 至少包含 default-src 'self'、script-src 'self'、img-src 'self' data:、connect-src ipc: + tauri/ipc.localhost、style-src 'self' 'unsafe-inline'",
+        "app.security.csp 至少包含 default-src 'self'、script-src 'self'、img-src 'self' data:、connect-src 'self' + ipc: + tauri/ipc.localhost、style-src 'self' 'unsafe-inline'；connect-src 不得出现通配符或外部来源",
       actual: value || "null/missing",
       rootCause: "CSP 被置空，或收紧时漏掉 IPC/data URL/内联样式关键来源",
       fix: "按内部技术文档的 CSP 基线恢复（维护者本地维护）；devCsp 单独放行 Vite，不要放宽生产 csp",
@@ -1311,6 +1345,13 @@ export function checkReleaseSurface(root, report) {
     // QA 证据按 run id 绑定到候选 Commit。
     "qa_run_id",
     "verify-updater-manifest.mjs",
+    // 候选必须自动产出签名验证回执（install-verify 从 Draft 读取）。
+    "Verify candidate signature",
+    "fetch-minisign.mjs",
+    "verify-signature.mjs",
+    "signature-verification.json",
+    // 发布正文可由维护者随候选写入，避免公开占位文本。
+    "release_notes",
   ]) {
     if (!windowsCandidateText.includes(marker)) {
       errors.push(`release-candidate.yml 的 steps 缺少 ${marker}`);

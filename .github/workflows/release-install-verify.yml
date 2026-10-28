@@ -5,37 +5,35 @@ name: Release install verification (clean Windows VM)
 # 只做一件事：在**一次性 GitHub-hosted windows-2022 runner**上，
 # 用 Draft 里已存在的候选制品，验证：
 # - 全新安装；
-# - 0.17.1 → 0.17.2 覆盖升级；
+# - previous_tag → tag 覆盖升级（基线由 workflow_dispatch 输入，不使用版本默认值）；
 # - 回滚；
 # - 合成用户书库、阅读进度、数据库自检与真实 list_books IPC 回读；
 # - PDF 导入/渲染/翻页/缩放/封面、跨进程重启的进度恢复、备份导出/恢复
 #   （含旧版 .mrbackup 迁移）与 v2 数据库快照回滚（发布门禁四项新检查）。
 #
 # 证据绑定：tag + Commit + 安装包 SHA-256 + ImageOS/ImageVersion + run URL。
-# 本工作流**不**写 Draft、不发布 Release、不引用任何非默认 Secret；只用
-# GITHUB_TOKEN 只读下载 Draft 资产。Draft 资产对 token 的可见性要求推送级读取，
-# 因此这里使用 contents: write，但没有任何写 Release 的调用；static 守卫会检查这一点。
+# 本工作流**不**发布 Release、不写 Release 正文、不引用任何非默认 Secret。
+# 它只会在证据总闸通过后回填**唯一一份**已校验的 install-verification.json
+# （上传前后 SHA-256 必须一致），使 Draft 自身携带发布所需的安装证据；static
+# 守卫需要允许这一处受控的资产回填（不改 Release 正文与可见性）。
 on:
   workflow_dispatch:
     inputs:
       tag:
         description: "候选标签（vX.Y.Z，必须已存在且指向 main 上的候选 Commit）"
         required: true
-        default: v0.17.2
         type: string
       previous_tag:
-        description: "覆盖升级的旧版本标签"
+        description: "覆盖升级的旧版本标签（Windows 常规通道 vX.Y.Z，必须与 previous_version 完全一致）"
         required: true
-        default: v0.17.1
         type: string
       previous_version:
-        description: "旧版本号（与 previous_tag 的安装包名一致）"
+        description: "旧版本号（必须形如 0.Y.Z，并与 previous_tag 的 minor/patch 一致）"
         required: true
-        default: 0.17.1
         type: string
 
 permissions:
-  contents: write # 仅用于读取 Draft 资产；无任何写 Release 调用
+  contents: write # 读取 Draft 资产 + 回填唯一一份已校验的安装证据（不发布 Release）
   actions: read
 
 concurrency:
@@ -78,6 +76,45 @@ jobs:
           fi
           echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      # 覆盖升级的基线不允许沿用任何版本特定的默认值：错误的 previous_tag 会
+      # 让门禁在“下载旧安装包”处 404，或者更糟——升级验证变成同版本重装。
+      - name: Validate previous release inputs
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PREVIOUS_TAG" ] || [ -z "$PREVIOUS_VERSION" ]; then
+            echo "previous_tag / previous_version 必填" >&2
+            exit 1
+          fi
+          if [ "$PREVIOUS_TAG" = "$TAG" ]; then
+            echo "previous_tag 不能等于候选标签：$TAG" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$PREVIOUS_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "previous_tag 必须是 Windows 常规标签 vX.Y.Z：$PREVIOUS_TAG" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$PREVIOUS_VERSION" | grep -Eq '^0\.[0-9]+\.[0-9]+$'; then
+            echo "previous_version 必须形如 0.Y.Z：$PREVIOUS_VERSION" >&2
+            exit 1
+          fi
+          # 安装包名完全由 previous_version 派生；它必须与 previous_tag 的
+          # minor/patch 一致，否则就会下载到错误版本或直接 404。
+          if [ "v${PREVIOUS_VERSION}" != "$PREVIOUS_TAG" ]; then
+            echo "previous_version=${PREVIOUS_VERSION} 与 previous_tag=${PREVIOUS_TAG} 的 minor/patch 不一致" >&2
+            exit 1
+          fi
+          EXPECTED_INSTALLER="MangaReader_${PREVIOUS_VERSION}_x64-setup.exe"
+          if ! printf '%s' "$EXPECTED_INSTALLER" | grep -Eq '^MangaReader_0\.[0-9]+\.[0-9]+_x64-setup\.exe$'; then
+            echo "派生安装包名非法：$EXPECTED_INSTALLER" >&2
+            exit 1
+          fi
+          echo "升级基线：${PREVIOUS_TAG}（${PREVIOUS_VERSION}）→ ${EXPECTED_INSTALLER}"
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -227,6 +264,36 @@ jobs:
             --public-key evidence/configured.pub \
             --channel windows \
             --commit "$TAG_COMMIT"
+
+      # ---------- 回填 Draft：只上传刚通过证据总闸的那一份回执 ----------
+      # 上传前后 SHA-256 必须一致；不写 Release 正文、不改 Draft 可见性、
+      # 不上传任何其它文件。
+      - name: Attach verified install evidence to Draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          SRC="$RUNNER_TEMP/mr-upgrade/install-verification.json"
+          if [ ! -f "$SRC" ]; then
+            echo "找不到已通过校验的安装证据：$SRC" >&2
+            exit 1
+          fi
+          STAGE="$RUNNER_TEMP/verified-install-evidence"
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+          sha256() {
+            node -e 'const c=require("node:crypto");const f=require("node:fs");process.stdout.write(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex"))' "$1"
+          }
+          BEFORE="$(sha256 "$SRC")"
+          cp "$SRC" "$STAGE/install-verification.json"
+          AFTER="$(sha256 "$STAGE/install-verification.json")"
+          if [ "$BEFORE" != "$AFTER" ]; then
+            echo "回执在暂存时发生变化：校验前=${BEFORE} 暂存后=${AFTER}" >&2
+            exit 1
+          fi
+          gh release upload "$TAG" "$STAGE/install-verification.json" --clobber
+          echo "已回填 install-verification.json（sha256=${BEFORE}）"
 
       - name: Write run manifest
         shell: bash

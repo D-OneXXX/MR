@@ -14,9 +14,14 @@ name: Release install verification (clean Linux)
 # - AppImage 官方签名与 deb/rpm/AppImage 摘要、更新清单一致。
 #
 # 证据绑定：tag + Commit + 被安装 deb 的 SHA-256 + previous 版本/摘要 +
-# ImageOS/ImageVersion + run URL。本工作流**只读** GitHub（不写 Release、
+# ImageOS/ImageVersion + run URL。本工作流**不写 GitHub**（不写 Release、
 # 不上传 Draft、不引用任何 Secret）；证据作为 Actions artifact 产出，
 # 由维护者核验后按发布流程回填。
+#
+# 权限说明：GitHub 只向具备写权限的令牌返回 **Draft** Release，因此工作流级
+# 必须是 `contents: write`，否则 `gh release download` 会报 "release not found"。
+# 这里的写权限仅用于可见性；`static:release-surface` 守卫禁止本文件出现任何
+# Release 创建/上传/修改/发布命令、解除 Draft 状态与 API 写方法。
 on:
   workflow_dispatch:
     inputs:
@@ -34,7 +39,8 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write # 仅用于让令牌可见 **Draft** Release；本工作流不执行任何写入
+  actions: read
 
 concurrency:
   group: release-install-verify-linux-${{ inputs.tag }}

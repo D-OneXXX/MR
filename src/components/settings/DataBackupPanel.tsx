@@ -80,6 +80,7 @@ export default function DataBackupPanel({ onRestored }: DataBackupPanelProps) {
   const { tabs, closeTab } = useWorkspace();
   const [busy, setBusy] = useState<BusyState>(null);
   const [confirmPath, setConfirmPath] = useState<string | null>(null);
+  const [pendingSkip, setPendingSkip] = useState<{ path: string; count: number } | null>(null);
   const [lastSkipped, setLastSkipped] = useState<SkippedBackupBook[]>([]);
   const mountedRef = useRef(true);
 
@@ -149,12 +150,12 @@ export default function DataBackupPanel({ onRestored }: DataBackupPanelProps) {
     setConfirmPath(picked);
   };
 
-  const runRestore = async (path: string) => {
+  const runRestore = async (path: string, allowSkipped = false) => {
     if (busy) return;
     setBusy("restore");
     setLastSkipped([]);
     try {
-      const result = await backupApi.importBackup(path);
+      const result = await backupApi.importBackup(path, allowSkipped);
       const skipped = result.skippedBooks ?? [];
       setLastSkipped(skipped);
 
@@ -204,6 +205,13 @@ export default function DataBackupPanel({ onRestored }: DataBackupPanelProps) {
         );
       }
     } catch (e) {
+      // 后端在"备份里有书路径不可达"时不会直接恢复，而是要求前端先确认：
+      // 恢复会整库替换，这些书在当前库中的进度与历史会被移除。
+      const needsConfirm = String(e).match(/restore-skipped-books:(\d+)/);
+      if (needsConfirm && !allowSkipped) {
+        setPendingSkip({ path, count: Number(needsConfirm[1]) });
+        return;
+      }
       toastErr("import_backup", e);
     } finally {
       if (mountedRef.current) setBusy(null);
@@ -290,6 +298,22 @@ export default function DataBackupPanel({ onRestored }: DataBackupPanelProps) {
             ))}
           </ul>
         </div>
+      ) : null}
+
+      {pendingSkip ? (
+        <ConfirmDialog
+          title={t("settings.backup.skipWarningTitle")}
+          message={t("settings.backup.skipWarningMessage", {
+            count: formatNumber(pendingSkip.count),
+          })}
+          confirmText={t("settings.backup.confirmRestore")}
+          onConfirm={() => {
+            const path = pendingSkip.path;
+            setPendingSkip(null);
+            void runRestore(path, true);
+          }}
+          onCancel={() => setPendingSkip(null)}
+        />
       ) : null}
 
       {confirmPath ? (

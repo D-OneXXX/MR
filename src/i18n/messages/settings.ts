@@ -252,6 +252,9 @@ const zhCN = {
   "settings.backup.skippedReasonNotBook": "不是可读的漫画目录/压缩包",
   "settings.backup.skippedReasonUnsafe": "命中系统或用户敏感目录",
   "settings.backup.skippedCount": "有 {count} 本本地书未恢复",
+  "settings.backup.skipWarningTitle": "恢复会移除部分进度",
+  "settings.backup.skipWarningMessage":
+    "备份中有 {count} 本本地书当前无法访问（外置盘或网络位置未挂载）。继续恢复会删除它们在当前书库中的阅读进度与历史。恢复前会自动保存当前书库的快照。",
   "settings.backup.forwardSchema": "备份来自更高版本（{version}）：已按兼容模式恢复核心书库与进度，高版本新增配置项被忽略",
 } as const;
 
@@ -510,6 +513,9 @@ const zhTW: SettingsMessages = {
   "settings.backup.skippedReasonNotBook": "不是可讀的漫畫資料夾/壓縮檔",
   "settings.backup.skippedReasonUnsafe": "命中系統或使用者敏感目錄",
   "settings.backup.skippedCount": "有 {count} 本本機書籍未還原",
+  "settings.backup.skipWarningTitle": "還原會移除部分進度",
+  "settings.backup.skipWarningMessage":
+    "備份中有 {count} 本本機書籍目前無法存取（外接磁碟或網路位置未掛載）。繼續還原會刪除它們在目前書庫中的閱讀進度與歷史。還原前會自動儲存目前書庫的快照。",
   "settings.backup.forwardSchema": "備份來自更高版本（{version}）：已按相容模式還原核心書庫與進度，高版本新增設定項已忽略",
 };
 
@@ -772,6 +778,9 @@ const en: SettingsMessages = {
   "settings.backup.skippedReasonUnsafe":
     "Points at a sensitive system/user folder",
   "settings.backup.skippedCount": "{count} local books were not restored",
+  "settings.backup.skipWarningTitle": "Restore removes some progress",
+  "settings.backup.skipWarningMessage":
+    "{count} local books in this backup cannot be reached right now (an external drive or network location is not mounted). Continuing deletes their reading progress and history from the current library. A snapshot of the current library is saved first.",
   "settings.backup.forwardSchema": "Backup was exported by a newer version ({version}). Core library and progress were restored in compatibility mode; settings added in newer versions were ignored.",
 };
 
@@ -1044,6 +1053,9 @@ const es: SettingsMessages = {
     "Apunta a una carpeta sensible del sistema/usuario",
   "settings.backup.skippedCount":
     "No se restauraron {count} libros locales",
+  "settings.backup.skipWarningTitle": "La restauración elimina parte del progreso",
+  "settings.backup.skipWarningMessage":
+    "{count} libros locales de esta copia no están accesibles ahora mismo (una unidad externa o una ubicación de red no está montada). Si continúas, se borrarán su progreso e historial de lectura de la biblioteca actual. Antes se guarda una instantánea de la biblioteca actual.",
   "settings.backup.forwardSchema": "La copia procede de una versión más reciente ({version}). La biblioteca y el progreso esenciales se restauraron en modo de compatibilidad; se ignoraron las opciones añadidas en versiones más recientes.",
 };
 
@@ -1317,6 +1329,9 @@ const ja: SettingsMessages = {
     "システム/ユーザーの重要なフォルダーを指しています",
   "settings.backup.skippedCount":
     "{count} 冊のローカル書籍を復元できませんでした",
+  "settings.backup.skipWarningTitle": "復元すると一部の進捗が失われます",
+  "settings.backup.skipWarningMessage":
+    "このバックアップには現在アクセスできないローカル書籍が {count} 冊あります（外付けドライブやネットワークの場所が未接続）。続行すると、現在のライブラリからこれらの読書進捗と履歴が削除されます。復元前に現在のライブラリのスナップショットを保存します。",
   "settings.backup.forwardSchema": "新しいバージョン（{version}）で書き出されたバックアップです。互換モードで中核のライブラリと進捗を復元し、新バージョンで追加された設定は無視しました。",
 };
 
@@ -1585,6 +1600,9 @@ const ko: SettingsMessages = {
     "시스템/사용자 중요 폴더를 가리킴",
   "settings.backup.skippedCount":
     "로컬 책 {count}권을 복원하지 못했습니다",
+  "settings.backup.skipWarningTitle": "복원하면 일부 진행률이 사라집니다",
+  "settings.backup.skipWarningMessage":
+    "이 백업의 로컬 책 {count}권에 지금 접근할 수 없습니다(외장 드라이브나 네트워크 위치가 연결되지 않음). 계속하면 현재 라이브러리에서 해당 책의 읽기 진행률과 기록이 삭제됩니다. 복원 전에 현재 라이브러리의 스냅샷을 저장합니다.",
   "settings.backup.forwardSchema": "더 최신 버전({version})에서 내보낸 백업입니다. 호환 모드로 핵심 라이브러리와 진행 상황을 복원했으며, 최신 버전에서 추가된 설정은 무시했습니다.",
 };
 

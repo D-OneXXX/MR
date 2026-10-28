@@ -170,6 +170,11 @@ pub struct BackupRestoreResult {
     /// 因路径不存在/不是书源/命中敏感目录而跳过的本地书（不阻断整包恢复）。
     #[serde(default)]
     pub skipped_books: Vec<SkippedBook>,
+    /// 恢复前自动生成的活库快照（绝对路径）。恢复会整库替换：
+    /// 备份里被跳过的书（外置盘/NAS 暂时不可达）在活库中的进度与历史会被移除，
+    /// 这份快照是唯一的回滚依据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_restore_snapshot: Option<String>,
     /// 前向兼容标记：备份 manifest 的 schema 高于当前程序时记录其值，
     /// 前端据此提示「已按兼容模式提取核心数据」。同版本恢复时为 None。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -231,20 +236,24 @@ pub async fn export_backup(
 pub async fn import_backup(
     state: State<'_, Arc<AppState>>,
     source_path: String,
+    allow_skipped: Option<bool>,
 ) -> Result<BackupRestoreResult, String> {
     let db_path = state.db_path();
     let source = PathBuf::from(source_path);
-    let result = tokio::task::spawn_blocking(move || restore_backup_blocking(&db_path, &source))
-        .await
-        .map_err(|e| format!("后台任务失败：{e}"))?
-        .map_err(|e| {
-            // 未归类错误统一补恢复失败码；已带具体备份码的原样保留。
-            if e.contains("（backup-") {
-                e
-            } else {
-                format!("{e}（backup-restore-failed）")
-            }
-        })?;
+    let allow_skipped = allow_skipped.unwrap_or(false);
+    let result = tokio::task::spawn_blocking(move || {
+        restore_backup_blocking(&db_path, &source, allow_skipped)
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
+    .map_err(|e| {
+        // 未归类错误统一补恢复失败码；已带具体备份码的原样保留。
+        if e.contains("（backup-") {
+            e
+        } else {
+            format!("{e}（backup-restore-failed）")
+        }
+    })?;
     // 事务提交且阻塞连接已释放后再回读设置，避免在持锁状态下刷新缓存。
     refresh_after_restore(state.inner())?;
     Ok(result)
@@ -336,7 +345,8 @@ fn recover_from_backup_blocking(
         db::init_schema(&conn).map_err(|error| format!("初始化恢复临时库失败：{error}"))?;
         db::quick_check(&conn).map_err(|error| format!("恢复临时库自检失败：{error}"))?;
     }
-    let result = restore_backup_blocking(staging.path(), source)?;
+    // 启动恢复是自动路径：用户无法在此刻确认，跳过不可达的书属于既有语义。
+    let result = restore_backup_blocking(staging.path(), source, true)?;
     {
         let conn =
             db::open(staging.path()).map_err(|error| format!("打开恢复临时库失败：{error}"))?;
@@ -615,7 +625,11 @@ fn write_backup_zip(
 
 // ---------- 恢复（阻塞、可单测） ----------
 
-fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestoreResult, String> {
+fn restore_backup_blocking(
+    db_path: &Path,
+    source: &Path,
+    allow_skipped: bool,
+) -> Result<BackupRestoreResult, String> {
     if !source.is_file() {
         return Err("备份文件不存在或不是文件（backup-file-missing）".into());
     }
@@ -711,7 +725,17 @@ fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestor
 
     // 校验全部通过之前绝不触碰活库。
     let validated = validate_restored_db(extracted.path(), &manifest)?;
-    apply_restore(
+    // 恢复是整库替换：备份里被跳过的书（外置盘/NAS 暂时不可达）在活库中的
+    // 进度与阅读历史会被移除。这必须先让用户确认，而不是恢复完再提示。
+    // 前缀 `restore-skipped-books:<n>` 供前端识别并弹出确认；确认后以
+    // allow_skipped=true 重试。此时尚未发生任何写入。
+    if !allow_skipped && !validated.skipped_books.is_empty() {
+        let count = validated.skipped_books.len();
+        return Err(format!(
+            "restore-skipped-books:{count} 备份中有 {count} 本本地书路径当前不可达，恢复会删除它们在当前书库中的进度与阅读历史（恢复前会自动保存快照）。确认继续后重试（backup-requires-confirmation）"
+        ));
+    }
+    let pre_restore_snapshot = apply_restore(
         db_path,
         extracted.path(),
         &validated.allowed_books,
@@ -742,6 +766,7 @@ fn restore_backup_blocking(db_path: &Path, source: &Path) -> Result<BackupRestor
         created_at,
         app_version,
         skipped_books: validated.skipped_books,
+        pre_restore_snapshot: pre_restore_snapshot.map(|path| path.to_string_lossy().to_string()),
         forward_schema,
     })
 }
@@ -903,7 +928,7 @@ fn apply_restore(
     backup_db: &Path,
     allowed_books: &[String],
     backup_has_format: bool,
-) -> Result<(), String> {
+) -> Result<Option<PathBuf>, String> {
     let backup = backup_db
         .to_str()
         .ok_or_else(|| "备份临时路径不是 UTF-8".to_string())?;
@@ -912,6 +937,9 @@ fn apply_restore(
     // 与启动路径一致地补齐活库结构：旧库可能还没有 `format` 列，
     // 带该列的 INSERT 会直接失败；缺表时复制也会失败。
     db::init_schema(&conn).map_err(|e| format!("准备书库结构失败：{e}"))?;
+    // 恢复是整库替换：先落一份一致性快照。快照失败即中止恢复，
+    // 绝不在"没有回滚依据"的情况下删除活库数据。
+    let snapshot = snapshot_before_restore(&conn, db_path)?;
     conn.execute("ATTACH DATABASE ?1 AS backup_db", params![backup])
         .map_err(|e| format!("挂载备份数据库失败：{e}"))?;
     let applied = copy_from_backup(&conn, allowed_books, backup_has_format);
@@ -919,9 +947,55 @@ fn apply_restore(
         .execute("DETACH DATABASE backup_db", [])
         .map_err(|e| format!("卸载备份数据库失败：{e}"));
     match (applied, detached) {
-        (Ok(()), Ok(_)) => Ok(()),
+        (Ok(()), Ok(_)) => Ok(Some(snapshot)),
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
+    }
+}
+
+/// 恢复前快照：`VACUUM INTO` 生成一致性副本（同目录，避免跨盘 rename 失败）。
+/// 只保留最近 3 份，防止长期积累。
+fn snapshot_before_restore(conn: &Connection, db_path: &Path) -> Result<PathBuf, String> {
+    let file_name = db_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "书库文件名不是 UTF-8，无法创建恢复前快照".to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or(0);
+    let target = db_path.with_file_name(format!("{file_name}.pre-restore-{stamp}.db"));
+    let target_str = target
+        .to_str()
+        .ok_or_else(|| "快照路径不是 UTF-8".to_string())?;
+    conn.execute("VACUUM INTO ?1", params![target_str])
+        .map_err(|e| format!("无法创建恢复前快照，已中止恢复：{e}"))?;
+    prune_restore_snapshots(db_path, 3);
+    Ok(target)
+}
+
+fn prune_restore_snapshots(db_path: &Path, keep: usize) {
+    let Some(dir) = db_path.parent() else {
+        return;
+    };
+    let Some(prefix) = db_path
+        .file_name()
+        .map(|name| format!("{}.pre-restore-", name.to_string_lossy()))
+    else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut snapshots: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .map(|entry| entry.path())
+        .collect();
+    snapshots.sort();
+    while snapshots.len() > keep {
+        let oldest = snapshots.remove(0);
+        let _ = std::fs::remove_file(oldest);
     }
 }
 
@@ -1444,7 +1518,7 @@ mod tests {
             db::set_meta(&conn, "last_run_version", "9.9.9").unwrap();
         }
 
-        let result = restore_backup_blocking(&db_path, &backup).unwrap();
+        let result = restore_backup_blocking(&db_path, &backup, true).unwrap();
         assert_eq!(result.books, 2);
         assert_eq!(result.reading_days, 1);
         assert_eq!(result.rules, 1);
@@ -1459,6 +1533,30 @@ mod tests {
             Some(export.created_at.as_str())
         );
         assert_eq!(result.app_version.as_deref(), Some("9.9.9"));
+
+        // 恢复是整库替换：必须先留下恢复前快照，且快照里保存的是被替换掉的活库状态。
+        let snapshot = result
+            .pre_restore_snapshot
+            .as_deref()
+            .expect("恢复必须留下 pre-restore 快照");
+        let snapshot_path = Path::new(snapshot);
+        assert!(snapshot_path.is_file(), "快照文件必须存在：{snapshot}");
+        assert!(
+            snapshot.contains(".pre-restore-"),
+            "快照文件名必须可识别：{snapshot}"
+        );
+        {
+            let snap = Connection::open(snapshot_path).unwrap();
+            assert!(
+                db::get_book(&snap, "ghost").unwrap().is_some(),
+                "快照必须保留恢复前存在、恢复后被移除的书"
+            );
+            assert_eq!(
+                db::get_setting(&snap, "theme").unwrap().as_deref(),
+                Some("light"),
+                "快照必须保留恢复前的设置"
+            );
+        }
 
         let conn = db::open(&db_path).unwrap();
         let books = db::list_books(&conn, None).unwrap();
@@ -1546,7 +1644,7 @@ mod tests {
             ],
         );
 
-        let result = restore_backup_blocking(&db_path, &forward_backup).unwrap();
+        let result = restore_backup_blocking(&db_path, &forward_backup, true).unwrap();
         assert_eq!(result.forward_schema, Some(BACKUP_SCHEMA + 1));
         assert_eq!(result.books, 2);
         assert_eq!(result.app_version.as_deref(), Some("99.0.0"));
@@ -1562,7 +1660,7 @@ mod tests {
                 ("library.db", &db_bytes),
             ],
         );
-        let err = restore_backup_blocking(&db_path, &zero_backup).unwrap_err();
+        let err = restore_backup_blocking(&db_path, &zero_backup, true).unwrap_err();
         assert!(err.contains("不支持的备份格式版本"), "got: {err}");
         assert!(
             err.contains("（backup-unsupported-schema）"),
@@ -1570,7 +1668,7 @@ mod tests {
         );
 
         // 同版本恢复不带前向标记。
-        let result = restore_backup_blocking(&db_path, &source_backup).unwrap();
+        let result = restore_backup_blocking(&db_path, &source_backup, true).unwrap();
         assert_eq!(result.forward_schema, None);
 
         fs::remove_dir_all(&dir).ok();
@@ -1653,7 +1751,7 @@ mod tests {
             let conn = db::open(&live).unwrap();
             db::init_schema(&conn).unwrap();
         }
-        let restored = restore_backup_blocking(&live, &backup).expect("旧版备份应可恢复");
+        let restored = restore_backup_blocking(&live, &backup, true).expect("旧版备份应可恢复");
         assert_eq!(restored.books, 1);
         let conn = db::open(&live).unwrap();
         let book = db::get_book(&conn, "b1").unwrap().unwrap();
@@ -1739,7 +1837,7 @@ mod tests {
         let raw_json: serde_json::Value = serde_json::from_str(raw).unwrap();
         assert_eq!(stored_json, raw_json, "偏好内容原样透传（仅 pretty 重排）");
 
-        let result = restore_backup_blocking(&db_path, &backup).unwrap();
+        let result = restore_backup_blocking(&db_path, &backup, true).unwrap();
         let returned: serde_json::Value =
             serde_json::from_str(result.preferences_json.as_deref().unwrap()).unwrap();
         assert_eq!(returned, raw_json);
@@ -1814,6 +1912,74 @@ mod tests {
     }
 
     #[test]
+    fn restore_requires_confirmation_before_dropping_unreachable_books() {
+        let dir = temp_dir("restore-confirm");
+        let db_path = seeded_db(&dir);
+
+        // 备份里有一本路径已不存在的书（模拟外置盘/NAS 未挂载）。
+        let backup_db = dir.join("missing-book.db");
+        {
+            let conn = db::open(&backup_db).unwrap();
+            db::init_schema(&conn).unwrap();
+            db::upsert_book(
+                &conn,
+                "gone",
+                &dir.join("offline/never-mounted").to_string_lossy(),
+                "Offline",
+                1,
+            )
+            .unwrap();
+        }
+        let archive = dir.join("missing-book.mrbackup");
+        let manifest = manifest_json(&BackupCounts {
+            books: 1,
+            reading_days: 0,
+            rules: 0,
+            profiles: 0,
+        });
+        write_test_zip(&archive, Some(manifest.as_bytes()), Some(&backup_db), None);
+
+        // 未经确认：必须在写入前失败，且活库一行都不能少、不能留下快照。
+        let err = restore_backup_blocking(&db_path, &archive, false).unwrap_err();
+        assert!(
+            err.starts_with("restore-skipped-books:1"),
+            "错误必须带可识别前缀：{err}"
+        );
+        assert!(
+            err.contains("backup-requires-confirmation"),
+            "错误必须带稳定码：{err}"
+        );
+        {
+            let conn = db::open(&db_path).unwrap();
+            assert_eq!(
+                count(&conn, "SELECT COUNT(*) FROM books"),
+                2,
+                "拒绝时活库不得变化"
+            );
+        }
+        let snapshots: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".pre-restore-")
+            })
+            .collect();
+        assert!(snapshots.is_empty(), "拒绝时不得创建快照");
+
+        // 用户确认后再执行：跳过该书，并留下恢复前快照。
+        let result = restore_backup_blocking(&db_path, &archive, true).unwrap();
+        assert_eq!(result.skipped_books.len(), 1);
+        assert_eq!(result.skipped_books[0].reason, "path-missing");
+        let snapshot = result.pre_restore_snapshot.expect("确认后必须留快照");
+        assert!(Path::new(&snapshot).is_file(), "{snapshot}");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn malicious_book_path_is_skipped_and_never_deletable() {
         let dir = temp_dir("evil-path");
         let live_dir = dir.join("live");
@@ -1845,7 +2011,7 @@ mod tests {
         });
         write_test_zip(&archive, Some(manifest.as_bytes()), Some(&backup_db), None);
 
-        let result = restore_backup_blocking(&db_path, &archive).unwrap();
+        let result = restore_backup_blocking(&db_path, &archive, true).unwrap();
         assert_eq!(result.books, 1, "只应恢复安全路径");
         assert_eq!(result.skipped_books.len(), 1);
         assert_eq!(result.skipped_books[0].id, "evil");
@@ -1902,19 +2068,19 @@ mod tests {
         // 1) 不是 zip。
         let junk = dir.join("junk.mrbackup");
         fs::write(&junk, b"this is not a zip file").unwrap();
-        let err = restore_backup_blocking(&db_path, &junk).unwrap_err();
+        let err = restore_backup_blocking(&db_path, &junk, true).unwrap_err();
         assert!(err.contains("压缩包"), "{err}");
 
         // 2) 缺 manifest。
         let no_manifest = dir.join("no-manifest.mrbackup");
         write_test_zip(&no_manifest, None, Some(&db_path), None);
-        let err = restore_backup_blocking(&db_path, &no_manifest).unwrap_err();
+        let err = restore_backup_blocking(&db_path, &no_manifest, true).unwrap_err();
         assert!(err.contains("manifest"), "{err}");
 
         // 3) 路径穿越条目名直接拒绝。
         let nested = dir.join("nested.mrbackup");
         write_raw_zip(&nested, &[("../library.db", &b"x"[..])]);
-        let err = restore_backup_blocking(&db_path, &nested).unwrap_err();
+        let err = restore_backup_blocking(&db_path, &nested, true).unwrap_err();
         assert!(err.contains("非法条目名"), "{err}");
 
         // 4) 必需表缺失。
@@ -1931,7 +2097,7 @@ mod tests {
             Some(&broken_db),
             None,
         );
-        let err = restore_backup_blocking(&db_path, &missing_table).unwrap_err();
+        let err = restore_backup_blocking(&db_path, &missing_table, true).unwrap_err();
         assert!(err.contains("缺少表"), "{err}");
 
         // 5) 清单计数不一致（用净化快照构造，避免依赖 WAL 状态）。
@@ -1946,7 +2112,7 @@ mod tests {
             profiles: 0,
         });
         write_test_zip(&mismatch, Some(manifest.as_bytes()), Some(&snapshot), None);
-        let err = restore_backup_blocking(&db_path, &mismatch).unwrap_err();
+        let err = restore_backup_blocking(&db_path, &mismatch, true).unwrap_err();
         assert!(err.contains("计数"), "{err}");
 
         // 全部失败路径都不得修改活库。
@@ -2024,7 +2190,7 @@ mod tests {
         let backup = dir.join("format.mrbackup");
         export_backup_blocking(&db_path, &backup, None, "0.17.3").unwrap();
 
-        let result = restore_backup_blocking(&db_path, &backup).unwrap();
+        let result = restore_backup_blocking(&db_path, &backup, true).unwrap();
         assert_eq!(result.books, 3);
         assert!(
             result.skipped_books.is_empty(),
@@ -2079,7 +2245,7 @@ mod tests {
             let conn = db::open(&live).unwrap();
             db::init_schema(&conn).unwrap();
         }
-        let restored = restore_backup_blocking(&live, &archive).expect("老备份必须仍可恢复");
+        let restored = restore_backup_blocking(&live, &archive, true).expect("老备份必须仍可恢复");
         assert_eq!(restored.books, 1);
         assert!(restored.skipped_books.is_empty());
 
@@ -2131,7 +2297,7 @@ mod tests {
             let conn = db::open(&live).unwrap();
             db::init_schema(&conn).unwrap();
         }
-        let result = restore_backup_blocking(&live, &archive).unwrap();
+        let result = restore_backup_blocking(&live, &archive, true).unwrap();
         assert_eq!(result.books, 1);
         assert!(
             result.skipped_books.is_empty(),
@@ -2174,7 +2340,7 @@ mod tests {
             let conn = db::open(&live).unwrap();
             db::init_schema(&conn).unwrap();
         }
-        let result = restore_backup_blocking(&live, &archive).unwrap();
+        let result = restore_backup_blocking(&live, &archive, true).unwrap();
         assert_eq!(result.books, 0);
         assert_eq!(result.skipped_books.len(), 1);
         assert_eq!(result.skipped_books[0].reason, "path-not-book");

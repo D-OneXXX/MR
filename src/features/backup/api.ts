@@ -43,6 +43,6 @@ export const backupApi = {
   exportBackup: (destPath: string, preferencesJson: string) =>
     invoke<BackupExportResult>("export_backup", { destPath, preferencesJson }),
 
-  importBackup: (sourcePath: string) =>
-    invoke<BackupImportResult>("import_backup", { sourcePath }),
+  importBackup: (sourcePath: string, allowSkipped = false) =>
+    invoke<BackupImportResult>("import_backup", { sourcePath, allowSkipped }),
 };

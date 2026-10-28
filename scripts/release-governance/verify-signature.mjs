@@ -35,14 +35,56 @@ function parseArgs(argv) {
 }
 
 /**
- * 定位 minisign：环境变量 → 仓库内 tools/（递归，兼容官方包的嵌套解压布局，
- * 且**必须匹配宿主架构**）→ PATH。找不到就返回 null（调用方必须 fail closed）。
+ * 官方包同时提供多种架构。选错架构会静默拿到"跑不起来"的可执行文件
+ * （spawnSync 失败且无输出），因此选择必须满足：
+ *   1) 只看 `tools/minisign` **之内**的路径段，绝不匹配绝对路径（临时目录名里
+ *      出现 `x64` 曾导致 aarch64 被判成宿主架构）；
+ *   2) 以 `process.arch` 为主判据，而不是猜测目录名；
+ *   3) 找不到宿主架构对应二进制时**返回 null**（调用方 fail closed），
+ *      不回退到异架构可执行文件。
  */
-export function findMinisign(root = process.cwd()) {
+const HOST_ARCH_TAGS = { x64: "x86_64", arm64: "aarch64" };
+const ARCH_ALIASES = {
+  x86_64: ["x86_64", "x64", "amd64"],
+  aarch64: ["aarch64", "arm64"],
+};
+
+export function hostArchTag(arch = process.arch) {
+  return HOST_ARCH_TAGS[arch] ?? null;
+}
+
+/** 从相对 `tools/minisign` 的路径段里识别架构；无架构标记返回 null。 */
+export function archTagOf(relativePath) {
+  const segments = String(relativePath)
+    .toLowerCase()
+    .split(/[\\/]+/)
+    .filter(Boolean);
+  for (const segment of segments) {
+    for (const [tag, aliases] of Object.entries(ARCH_ALIASES)) {
+      if (aliases.includes(segment)) return tag;
+    }
+  }
+  return null;
+}
+
+/** 同架构多个候选时，优先与本机平台匹配的目录（win64 / linux）。 */
+function platformRank(relativePath, platform = process.platform) {
+  const rel = relativePath.toLowerCase();
+  if (platform === "win32") return rel.includes("win") ? 0 : 1;
+  if (platform === "linux") return rel.includes("linux") ? 0 : 1;
+  return 0;
+}
+
+/**
+ * 定位 minisign：环境变量 → 仓库内 tools/（递归，兼容官方包的嵌套解压布局，
+ * 且**必须匹配宿主架构**）→ PATH。找不到或无法唯一确定就返回 null。
+ */
+export function findMinisign(root = process.cwd(), { arch = process.arch, platform = process.platform } = {}) {
   const explicit = process.env.MR_MINISIGN_BIN;
   if (explicit && fs.existsSync(explicit)) return explicit;
 
-  const matches = [];
+  const base = path.join(root, "tools", "minisign");
+  const found = new Set();
   const walk = (dir, depth) => {
     if (depth > 4 || !fs.existsSync(dir)) return;
     let entries = [];
@@ -54,29 +96,59 @@ export function findMinisign(root = process.cwd()) {
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full, depth + 1);
-      else if (/^minisign(\.exe)?$/i.test(entry.name)) matches.push(full);
+      else if (/^minisign(\.exe)?$/i.test(entry.name)) found.add(full);
     }
   };
-  walk(path.join(root, "tools", "minisign"), 0);
-  matches.push(
-    path.join(root, "tools", "minisign", "minisign.exe"),
-    path.join(root, "tools", "minisign", "minisign"),
-  );
+  walk(base, 0);
+  // 扁平布局（解压到 tools/minisign 根）也要覆盖。
+  for (const flat of ["minisign.exe", "minisign"]) found.add(path.join(base, flat));
 
-  // 官方包同时提供 aarch64 与 x86_64；选错架构会静默拿到「跑不起来」的可执行文件
-  // （spawnSync 失败且无输出），因此必须优先宿主架构。
-  const hostPattern = /x86[_-]?64|amd64|x64/i;
-  const foreignPattern = /aarch64|arm64/i;
-  const hostMatches = matches.filter((item) => hostPattern.test(item));
-  const foreignMatches = matches.filter((item) => foreignPattern.test(item));
-  const otherMatches = matches.filter(
-    (item) => !hostPattern.test(item) && !foreignPattern.test(item),
-  );
-  for (const candidate of [...hostMatches, ...otherMatches, ...foreignMatches]) {
-    if (fs.existsSync(candidate)) return candidate;
+  const hostTag = hostArchTag(arch);
+  const host = [];
+  const neutral = [];
+  const foreign = [];
+  for (const candidate of found) {
+    if (!fs.existsSync(candidate)) continue;
+    const rel = path.relative(base, candidate);
+    const tag = archTagOf(rel);
+    if (!tag) neutral.push(candidate);
+    else if (tag === hostTag) host.push(candidate);
+    else foreign.push(candidate);
   }
-  const probe = spawnSync("minisign", ["-v"], { encoding: "utf8" });
-  if (probe.status === 0) return "minisign";
+
+  const uniqueBest = (list) => {
+    if (list.length === 0) return null;
+    const sorted = [...list].sort(
+      (a, b) =>
+        platformRank(path.relative(base, a), platform) -
+          platformRank(path.relative(base, b), platform) || a.localeCompare(b),
+    );
+    const best = sorted[0];
+    const bestRank = platformRank(path.relative(base, best), platform);
+    const sameRank = list.filter(
+      (item) => platformRank(path.relative(base, item), platform) === bestRank,
+    );
+    return sameRank.length === 1 ? best : null;
+  };
+
+  if (hostTag) {
+    if (host.length > 0) return uniqueBest(host);
+    // 没有宿主架构的二进制：只有"完全没有异架构候选"时才接受无架构标记的扁平路径。
+    if (foreign.length === 0) return uniqueBest(neutral);
+    return null;
+  }
+
+  // 未知宿主架构：只在候选唯一且没有架构冲突时接受。
+  if (foreign.length === 0) {
+    const picked = uniqueBest(neutral);
+    if (picked) return picked;
+  }
+
+  // tools/ 里完全没有候选时，最后才尝试 PATH（仍要求可执行）。
+  if (found.size === 0) {
+    const probe = spawnSync("minisign", ["-v"], { encoding: "utf8" });
+    if (probe.status === 0) return "minisign";
+  }
   return null;
 }
 

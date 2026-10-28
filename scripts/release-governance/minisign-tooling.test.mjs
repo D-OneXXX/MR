@@ -93,3 +93,72 @@ test("minisign 定位：必须优先宿主架构（选到 aarch64 会静默拿�
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("minisign 定位：架构判定不看绝对路径（临时目录名含 x64/amd64 也不得误判）", () => {
+  // 回归：旧实现用整条绝对路径做正则，temp 目录名里的 "x64" 会把 aarch64 也判成宿主架构。
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mr-minisign-x64-amd64-arm64-"));
+  try {
+    const armDir = path.join(root, "tools", "minisign", "minisign-win64", "aarch64");
+    const x64Dir = path.join(root, "tools", "minisign", "minisign-win64", "x86_64");
+    fs.mkdirSync(armDir, { recursive: true });
+    fs.mkdirSync(x64Dir, { recursive: true });
+    fs.writeFileSync(path.join(armDir, "minisign.exe"), "fake-minisign-arm");
+    const x64 = path.join(x64Dir, "minisign.exe");
+    fs.writeFileSync(x64, "fake-minisign-x64");
+    assert.equal(findMinisign(root, { arch: "x64", platform: "win32" }), x64);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("minisign 定位：arm64 宿主选择 aarch64", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mr-minisign-hostarm-"));
+  try {
+    const armDir = path.join(root, "tools", "minisign", "minisign-win64", "aarch64");
+    const x64Dir = path.join(root, "tools", "minisign", "minisign-win64", "x86_64");
+    fs.mkdirSync(armDir, { recursive: true });
+    fs.mkdirSync(x64Dir, { recursive: true });
+    const arm = path.join(armDir, "minisign.exe");
+    fs.writeFileSync(arm, "fake-minisign-arm");
+    fs.writeFileSync(path.join(x64Dir, "minisign.exe"), "fake-minisign-x64");
+    assert.equal(findMinisign(root, { arch: "arm64", platform: "win32" }), arm);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("minisign 定位：宿主架构缺失时失败关闭，不得回退到异架构二进制", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mr-minisign-missing-"));
+  try {
+    const armDir = path.join(root, "tools", "minisign", "minisign-win64", "aarch64");
+    fs.mkdirSync(armDir, { recursive: true });
+    fs.writeFileSync(path.join(armDir, "minisign.exe"), "fake-minisign-arm");
+    assert.equal(findMinisign(root, { arch: "x64", platform: "win32" }), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("minisign 定位：同架构多候选按平台消歧，无法唯一确定则失败", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mr-minisign-ambig-"));
+  try {
+    const base = path.join(root, "tools", "minisign");
+    const winDir = path.join(base, "minisign-win64", "x86_64");
+    const linuxDir = path.join(base, "minisign-linux", "x86_64");
+    fs.mkdirSync(winDir, { recursive: true });
+    fs.mkdirSync(linuxDir, { recursive: true });
+    const win = path.join(winDir, "minisign.exe");
+    fs.writeFileSync(win, "fake-minisign-win");
+    fs.writeFileSync(path.join(linuxDir, "minisign"), "fake-minisign-linux");
+    // Windows 宿主应优先 win 目录。
+    assert.equal(findMinisign(root, { arch: "x64", platform: "win32" }), win);
+
+    // 两个同等优先级的 win 目录 → 无法唯一确定 → 失败关闭。
+    const winDirB = path.join(base, "win-copy", "x86_64");
+    fs.mkdirSync(winDirB, { recursive: true });
+    fs.writeFileSync(path.join(winDirB, "minisign.exe"), "fake-minisign-win-b");
+    assert.equal(findMinisign(root, { arch: "x64", platform: "win32" }), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

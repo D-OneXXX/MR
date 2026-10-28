@@ -1742,9 +1742,76 @@ export async function runPdfSuite(ctx, report) {
       actual: String(exported.error),
     });
   } else {
-    const restored = await invokeSafe(page, "import_backup", {
+    // 恢复契约：备份里存在当前不可达的书路径时，后端要求显式确认
+    // （错误前缀 restore-skipped-books:<n>），确认之前不发生任何写入。
+    // 夹具必须走完「被拒 → 数据未被改动 → 显式确认 → 恢复成功 → 快照可用」，
+    // 否则测的就不是产品真实契约。
+    const libraryProjection = (value) =>
+      (Array.isArray(value) ? value : [])
+        .map((book) => ({
+          id: book.id,
+          format: book.format,
+          path: book.path,
+          currentPage: Number(book.currentPage),
+        }))
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+
+    const beforeRestore = await invokeSafe(page, "list_books", { query: null });
+    const refused = await invokeSafe(page, "import_backup", {
       sourcePath: backupFile,
     });
+    const refusalReason = String(refused.error || "");
+    const needsConfirmation = refusalReason.includes("restore-skipped-books:");
+
+    if (!refused.ok && !needsConfirmation) {
+      fail(report, {
+        id: "pdf:backup-restore",
+        suite: "pdf",
+        layer: "integration",
+        title: "备份恢复失败且原因不是「需要确认」",
+        severity: "P1",
+        details: refusalReason.slice(0, 300),
+        location: "src-tauri/src/backup.rs",
+        expected: "要么成功，要么要求显式确认",
+        actual: refusalReason.slice(0, 200),
+      });
+    }
+
+    if (needsConfirmation) {
+      // 1) 被拒时原有书库数据不得被改动。
+      const afterRefusal = await invokeSafe(page, "list_books", { query: null });
+      const before = JSON.stringify(libraryProjection(beforeRestore.value));
+      const after = JSON.stringify(libraryProjection(afterRefusal.value));
+      if (before !== after) {
+        fail(report, {
+          id: "pdf:backup-no-write-on-refusal",
+          suite: "pdf",
+          layer: "integration",
+          title: "恢复被拒绝后原有书库数据仍被改动",
+          severity: "P1",
+          details: JSON.stringify({ before, after }).slice(0, 400),
+          location: "src-tauri/src/backup.rs",
+          expected: "拒绝时不写入任何数据",
+          actual: "拒绝后书库投影发生变化",
+        });
+      } else {
+        ok(report, {
+          id: "pdf:backup-no-write-on-refusal",
+          suite: "pdf",
+          layer: "integration",
+          title: "恢复被拒后未写入任何数据",
+          details: refusalReason.slice(0, 160),
+        });
+      }
+    }
+
+    // 2) 显式确认后重试（本环境没有不可达书籍时，第一次已直接成功）。
+    const restored = needsConfirmation
+      ? await invokeSafe(page, "import_backup", {
+          sourcePath: backupFile,
+          allowSkipped: true,
+        })
+      : refused;
     const booksAfter = await invokeSafe(page, "list_books", { query: null });
     const list = Array.isArray(booksAfter.value) ? booksAfter.value : [];
     const same = list.find((book) => book.id === valid.id);
@@ -1777,6 +1844,60 @@ export async function runPdfSuite(ctx, report) {
         title: "备份恢复保留 PDF 格式与阅读进度",
         details: `format=${same.format}, current_page=${same.currentPage}`,
       });
+    }
+
+    // 3) 恢复前快照必须真实存在且可用于恢复（它是唯一的回滚依据）。
+    const restoreValue = restored?.value ?? null;
+    const snapshotPath =
+      (restoreValue && (restoreValue.pre_restore_snapshot || restoreValue.preRestoreSnapshot)) ||
+      null;
+    if (!snapshotPath) {
+      fail(report, {
+        id: "pdf:backup-snapshot-missing",
+        suite: "pdf",
+        layer: "integration",
+        title: "恢复后没有返回恢复前快照",
+        severity: "P1",
+        details: JSON.stringify(restoreValue ?? null).slice(0, 300),
+        location: "src-tauri/src/backup.rs",
+        expected: "返回 pre_restore_snapshot 路径",
+        actual: "未返回",
+      });
+    } else {
+      const exists = fs.existsSync(snapshotPath);
+      let isSqlite = false;
+      let hasLibrarySchema = false;
+      if (exists) {
+        const raw = fs.readFileSync(snapshotPath);
+        isSqlite = raw.subarray(0, 16).toString("latin1").startsWith("SQLite format 3");
+        hasLibrarySchema = raw.toString("latin1").includes("books");
+      }
+      if (!exists || !isSqlite || !hasLibrarySchema) {
+        fail(report, {
+          id: "pdf:backup-snapshot-invalid",
+          suite: "pdf",
+          layer: "integration",
+          title: "恢复前快照不是可用的书库快照",
+          severity: "P1",
+          details: JSON.stringify({
+            snapshotPath,
+            exists,
+            isSqlite,
+            hasLibrarySchema,
+          }).slice(0, 300),
+          location: "src-tauri/src/backup.rs",
+          expected: "快照存在且是含 books 表的 SQLite 库",
+          actual: `exists=${exists} sqlite=${isSqlite} books=${hasLibrarySchema}`,
+        });
+      } else {
+        ok(report, {
+          id: "pdf:backup-snapshot-usable",
+          suite: "pdf",
+          layer: "integration",
+          title: "恢复前快照存在且可作为回滚依据",
+          details: `snapshot=${snapshotPath}`,
+        });
+      }
     }
   }
 }

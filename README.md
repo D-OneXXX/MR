@@ -28,14 +28,10 @@
 ## Product preview
 
 <p align="center">
-  <img src="docs/assets/screenshots/library.png" width="49%" alt="Moyu library with three synthetic demo books">
-  <img src="docs/assets/screenshots/settings.png" width="49%" alt="Moyu appearance and language settings">
-</p>
-<p align="center">
   <img src="docs/assets/screenshots/reader.png" width="82%" alt="Moyu reader showing an original synthetic comic page">
 </p>
 <p align="center">
-  <sub>Screenshots are from the real application, captured with an isolated demo library and original synthetic sample pages. No personal library data is shown.</sub>
+  <sub>The screenshot is from the real application, captured with an isolated demo library and original synthetic sample pages. No personal library data is shown.</sub>
 </p>
 
 ## What it does

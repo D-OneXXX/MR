@@ -28,10 +28,6 @@
 ## 产品预览
 
 <p align="center">
-  <img src="docs/assets/screenshots/library.png" width="49%" alt="Moyu 书库，展示三本合成示例书">
-  <img src="docs/assets/screenshots/settings.png" width="49%" alt="Moyu 外观与语言设置">
-</p>
-<p align="center">
   <img src="docs/assets/screenshots/reader.png" width="82%" alt="Moyu 阅读器，展示原创合成漫画页面">
 </p>
 <p align="center">

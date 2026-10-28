@@ -407,7 +407,7 @@ export function renderStatusSnapshot(snapshot) {
       ? "无治理告警。"
       : governanceWarnings.map((warning) => `- ${warning}`).join("\n");
 
-  return `# MangaReader 项目状态
+  return `# Moyu 项目状态
 
 > 生成时间：${snapshot.generatedAt || "UNKNOWN"}
 > 本文件由 \`npm run status\` 生成，请勿手工编辑。

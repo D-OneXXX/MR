@@ -110,7 +110,31 @@ pub struct ResilienceState {
     last_reader_page: Mutex<Option<u32>>,
     recovery_context: Mutex<Option<RecoveryContext>>,
     freeze_notified: AtomicBool,
+    /// 最近一次自动唤起恢复窗的时间：关闭后可重开，但有冷却，避免关掉就立刻弹回。
+    last_notified: Mutex<Option<Instant>>,
     rage_last: Mutex<Option<Instant>>,
+}
+
+/// 用户关闭恢复窗后，若主窗仍然冻结，至少间隔这么久才再次自动唤起。
+const RECOVERY_REOPEN_COOLDOWN: Duration = Duration::from_secs(30);
+
+/// 是否允许再次唤起恢复窗（纯函数，便于单测）。
+pub(crate) fn reopen_allowed(
+    last_notified: Option<Instant>,
+    now: Instant,
+    cooldown: Duration,
+) -> bool {
+    match last_notified {
+        None => true,
+        Some(at) => now.duration_since(at) >= cooldown,
+    }
+}
+
+/// 主窗恢复（心跳/最小化/唤醒）时清空通知状态：下次冻结可以立刻唤起，
+/// 且不残留冷却期。
+fn clear_freeze_notice(state: &ResilienceState) {
+    state.freeze_notified.store(false, Ordering::SeqCst);
+    *state.last_notified.lock() = None;
 }
 
 pub fn new_state() -> Arc<ResilienceState> {
@@ -122,6 +146,7 @@ pub fn new_state() -> Arc<ResilienceState> {
         last_reader_page: Mutex::new(None),
         recovery_context: Mutex::new(None),
         freeze_notified: AtomicBool::new(false),
+        last_notified: Mutex::new(None),
         rage_last: Mutex::new(None),
     })
 }
@@ -548,7 +573,7 @@ fn spawn_watchdog(app: AppHandle, state: Arc<ResilienceState>) {
                 last_boot = boot_now;
                 if resume_detected(gap, boot_gap) {
                     *state.last_heartbeat.lock() = Some(now);
-                    state.freeze_notified.store(false, Ordering::SeqCst);
+                    clear_freeze_notice(state.as_ref());
                     continue;
                 }
                 let Some(main) = app.get_webview_window("main") else {
@@ -560,18 +585,27 @@ fn spawn_watchdog(app: AppHandle, state: Arc<ResilienceState>) {
                     // Being minimized is not a freeze. Restore grants a fresh grace
                     // window instead of immediately declaring the old timestamp stale.
                     *state.last_heartbeat.lock() = Some(Instant::now());
-                    state.freeze_notified.store(false, Ordering::SeqCst);
+                    clear_freeze_notice(state.as_ref());
                     continue;
                 }
 
                 let last = *state.last_heartbeat.lock();
                 let since_start = state.started.elapsed();
                 let since_heartbeat = last.map(|instant| instant.elapsed()).unwrap_or(since_start);
-                if !declare_freeze(true, last.is_some(), since_start, since_heartbeat)
-                    || state.freeze_notified.swap(true, Ordering::SeqCst)
-                {
+                if !declare_freeze(true, last.is_some(), since_start, since_heartbeat) {
                     continue;
                 }
+                // 用户关掉恢复窗后不要立刻弹回：冷却期内不再唤起；
+                // 冷却结束且主窗仍未恢复时再唤起一次（不修改 last_notified，
+                // 因此关闭后不会因为"已通知过"而永久失去恢复入口）。
+                let allowed = {
+                    let last_notified = *state.last_notified.lock();
+                    reopen_allowed(last_notified, Instant::now(), RECOVERY_REOPEN_COOLDOWN)
+                };
+                if !allowed || state.freeze_notified.swap(true, Ordering::SeqCst) {
+                    continue;
+                }
+                *state.last_notified.lock() = Some(Instant::now());
 
                 if let Err(err) = open_recovery(
                     &app,
@@ -635,7 +669,7 @@ pub fn heartbeat_ping(
     reader_page: Option<u32>,
 ) -> Result<(), String> {
     *state.last_heartbeat.lock() = Some(Instant::now());
-    state.freeze_notified.store(false, Ordering::SeqCst);
+    clear_freeze_notice(state.as_ref());
     if let Some(route) = route {
         *state.last_route.lock() = display_route(&route);
     }
@@ -839,10 +873,17 @@ fn rebuild_main_window(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn resilience_close_recovery(app: AppHandle) -> Result<(), String> {
+pub fn resilience_close_recovery(
+    app: AppHandle,
+    state: State<'_, Arc<ResilienceState>>,
+) -> Result<(), String> {
     let window = app
         .get_webview_window(RECOVERY_LABEL)
         .ok_or_else(|| "恢复窗口已关闭".to_string())?;
+    // 用户主动关闭：允许主窗仍冻结时再次唤起，但先进入冷却，
+    // 避免"关掉就立刻弹回"的死循环。
+    state.freeze_notified.store(false, Ordering::SeqCst);
+    *state.last_notified.lock() = Some(Instant::now());
     window.close().map_err(|err| err.to_string())
 }
 
@@ -953,6 +994,26 @@ mod tests {
             "mr-resilience-{}-{tag}-{nanos}.json",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn recovery_can_be_reopened_after_close_but_not_in_a_loop() {
+        // 从未通知过：允许立即唤起。
+        let now = Instant::now();
+        assert!(reopen_allowed(None, now, RECOVERY_REOPEN_COOLDOWN));
+        // 刚唤起过（或刚被用户关闭）：冷却期内不再弹回。
+        assert!(!reopen_allowed(Some(now), now, RECOVERY_REOPEN_COOLDOWN));
+        // 冷却结束后仍允许再次唤起——否则用户关掉就永远没有恢复入口。
+        let after = now + RECOVERY_REOPEN_COOLDOWN;
+        assert!(reopen_allowed(Some(now), after, RECOVERY_REOPEN_COOLDOWN));
+    }
+
+    #[test]
+    fn heartbeat_clears_notice_state_so_next_freeze_is_immediate() {
+        let state = new_state();
+        clear_freeze_notice(state.as_ref());
+        assert!(!state.freeze_notified.load(Ordering::SeqCst));
+        assert!(state.last_notified.lock().is_none());
     }
 
     #[test]

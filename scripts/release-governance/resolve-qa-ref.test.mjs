@@ -46,6 +46,11 @@ function makeRemote() {
   const featureSha = git(work, "rev-parse", "HEAD").trim();
   git(work, "push", "origin", "feature/x", "v1.2.3");
 
+  // 注解标签：refs/tags/<name> 是**标签对象**，它指向的提交在 peeled 项里。
+  git(work, "tag", "-a", "v2.0.0", "-m", "annotated release", featureSha);
+  const annotatedTagObject = git(work, "rev-parse", "v2.0.0").trim();
+  git(work, "push", "origin", "v2.0.0");
+
   git(work, "checkout", "main");
   fs.writeFileSync(path.join(work, "c.txt"), "c\n");
   git(work, "add", ".");
@@ -59,7 +64,7 @@ function makeRemote() {
   git(work, "commit", "-m", "unpushed");
   const unpushedSha = git(work, "rev-parse", "HEAD").trim();
 
-  return { dir, repo, mainSha, mainTip, featureSha, unpushedSha };
+  return { dir, repo, mainSha, mainTip, featureSha, unpushedSha, annotatedTagObject };
 }
 
 function runResolver(remote, requested) {
@@ -144,6 +149,19 @@ test("短 SHA：唯一匹配时解析为提交；不是端点或过短时明确�
   assert.equal(tooShort.code, 2);
   assert.match(tooShort.stderr, /无法解析引用/);
   assert.equal(tooShort.json, null);
+});
+
+test("注解标签：解析出的是标签指向的提交，而不是标签对象本身", () => {
+  const result = runResolver(remote.repo, "v2.0.0");
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.json.kind, "tag");
+  assert.equal(result.json.ref, "refs/tags/v2.0.0");
+  assert.equal(result.json.sha, remote.featureSha, "必须是标签指向的提交");
+  assert.notEqual(
+    result.json.sha,
+    remote.annotatedTagObject,
+    "不得返回标签对象本身",
+  );
 });
 
 test("任何失败都不得静默回退到默认分支的提交", () => {

@@ -53,9 +53,10 @@ function parseLsRemote(stdout) {
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const [sha, ref] = line.split(/\s+/);
-    // 剥离 `^{}` 形式的 peeled tag，只保留真正的引用。
-    if (ref.endsWith("^{}")) continue;
-    out.push({ sha, ref });
+    // 注解标签会多出一行 `refs/tags/<name>^{}`：那是**标签指向的提交**。
+    // 普通行的 sha 是标签对象本身，不能当成提交用。
+    const peeled = ref.endsWith("^{}");
+    out.push({ sha, ref: peeled ? ref.slice(0, -3) : ref, peeled });
   }
   return out;
 }
@@ -104,7 +105,17 @@ export function resolveRef(requested, git) {
 
   if (classified.kind === "short-commit") {
     // 短 SHA：只接受能唯一匹配某个分支/标签端点的情况，否则要求给完整 SHA。
-    const tips = [...git.heads(""), ...git.tags("")];
+    // 标签取**它指向的提交**（注解标签的 peeled 项），不是标签对象本身。
+    const tagLines = git.tags("");
+    const tagCommits = new Map();
+    for (const line of tagLines) {
+      if (line.peeled) tagCommits.set(line.ref, line.sha);
+      else if (!tagCommits.has(line.ref)) tagCommits.set(line.ref, line.sha);
+    }
+    const tips = [
+      ...git.heads(""),
+      ...[...tagCommits].map(([ref, sha]) => ({ sha, ref })),
+    ];
     const matches = tips.filter((tip) => tip.sha.startsWith(classified.value));
     const unique = [...new Map(matches.map((m) => [m.sha, m])).values()];
     if (unique.length === 0) {
@@ -137,9 +148,15 @@ export function resolveRef(requested, git) {
     return { requested: input, kind: "branch", ref: headRef, sha: heads[0].sha };
   }
   const tagRef = `refs/tags/${name}`;
-  const tags = git.tags(name).filter((hit) => hit.ref === tagRef);
-  if (tags.length > 0) {
-    return { requested: input, kind: "tag", ref: tagRef, sha: tags[0].sha };
+  // 必须列**全部**标签再按完整 ref 名过滤：注解标签的 peeled 项
+  // （refs/tags/<name>^{}）不会被以名字为 pattern 的 ls-remote 匹配到。
+  const tagLines = git.tags("").filter((hit) => hit.ref === tagRef);
+  if (tagLines.length > 0) {
+    // 注解标签：refs/tags/<name> 本身是**标签对象**，它指向的提交在 peeled 项里。
+    // 证据必须绑定提交，否则比对会失败或错绑。
+    const peeled = tagLines.find((hit) => hit.peeled);
+    const chosen = peeled || tagLines[0];
+    return { requested: input, kind: "tag", ref: tagRef, sha: chosen.sha };
   }
   throw new RefResolutionError(
     `无法解析引用 "${input}"：远端既没有分支 ${headRef}，也没有标签 ${tagRef}。请确认名称，或改用完整 40 位 Commit SHA`,

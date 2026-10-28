@@ -1,0 +1,482 @@
+name: Release install verification (clean Linux)
+
+# 干净 Linux 安装验证（对应 Windows 的 release-install-verify.yml）。
+#
+# 只做一件事：在**一次性 GitHub-hosted ubuntu-22.04 runner**上，用 Draft 里
+# 已存在的官方候选制品，验证：
+# - deb 真实系统安装（全新安装 + 从上一个已发布 Linux 版本覆盖升级）；
+# - 旧书库 / 设置 / 阅读进度在升级后仍可被真实 IPC 回读；
+# - PDF 导入、格式识别、进度写入与跨进程恢复；
+# - 文件夹 / ZIP / CBZ 既有格式不受影响；
+# - 旧版与新版 `.mrbackup` 在全新 profile 中可恢复；
+# - 生产 CSP 下 CMap / 标准字体加载、外网拦截、内嵌脚本不执行（复用
+#   tests/qa/linux-pdf-runtime.mjs）；
+# - AppImage 官方签名与 deb/rpm/AppImage 摘要、更新清单一致。
+#
+# 证据绑定：tag + Commit + 被安装 deb 的 SHA-256 + previous 版本/摘要 +
+# ImageOS/ImageVersion + run URL。本工作流**只读** GitHub（不写 Release、
+# 不上传 Draft、不引用任何 Secret）；证据作为 Actions artifact 产出，
+# 由维护者核验后按发布流程回填。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Linux 候选标签（vX.Y.Z-linux-secN，必须已存在且指向 main 上的候选 Commit）"
+        required: true
+        type: string
+      previous_tag:
+        description: "覆盖升级的旧 Linux 版本标签（vX.Y.Z-linux-secN）"
+        required: true
+        type: string
+      previous_version:
+        description: "旧版本号（必须形如 0.Y.Z，并与 previous_tag 的基础版本一致）"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-install-verify-linux-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  install-verify:
+    name: Clean Linux install verification (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - name: Checkout main (gate scripts)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve candidate tag commit
+        id: tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-linux-sec[0-9]+$'; then
+            echo "Linux 候选标签必须形如 vX.Y.Z-linux-secN：$TAG" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          COMMIT="$(git rev-list -n 1 "refs/tags/${TAG}")"
+          if ! printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "无法解析标签 Commit：$TAG" >&2
+            exit 1
+          fi
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate previous release inputs
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PREVIOUS_TAG" ] || [ -z "$PREVIOUS_VERSION" ]; then
+            echo "previous_tag / previous_version 必填" >&2
+            exit 1
+          fi
+          if [ "$PREVIOUS_TAG" = "$TAG" ]; then
+            echo "previous_tag 不能等于候选标签：$TAG" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$PREVIOUS_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-linux-sec[0-9]+$'; then
+            echo "previous_tag 必须是 Linux 标签 vX.Y.Z-linux-secN：$PREVIOUS_TAG" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$PREVIOUS_VERSION" | grep -Eq '^0\.[0-9]+\.[0-9]+$'; then
+            echo "previous_version 必须形如 0.Y.Z：$PREVIOUS_VERSION" >&2
+            exit 1
+          fi
+          if [ "v${PREVIOUS_VERSION}" != "$(printf '%s' "$PREVIOUS_TAG" | sed -E 's/-linux-sec.*//')" ]; then
+            echo "previous_version=${PREVIOUS_VERSION} 与 previous_tag=${PREVIOUS_TAG} 的基础版本不一致" >&2
+            exit 1
+          fi
+          PREVIOUS_DEB="MangaReader_${PREVIOUS_VERSION}_amd64.deb"
+          if ! printf '%s' "$PREVIOUS_DEB" | grep -Eq '^MangaReader_0\.[0-9]+\.[0-9]+_amd64\.deb$'; then
+            echo "派生旧安装包名非法：$PREVIOUS_DEB" >&2
+            exit 1
+          fi
+          echo "升级基线：${PREVIOUS_TAG}（${PREVIOUS_VERSION}）→ ${PREVIOUS_DEB}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install WebKitGTK runtime and verification tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
+        run: |
+          if grep -q 'azure.archive.ubuntu.com' /etc/apt/sources.list 2>/dev/null; then
+            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list
+          fi
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y \
+            -o Dpkg::Options::="--force-confdef" \
+            -o Dpkg::Options::="--force-confold" \
+            libwebkit2gtk-4.1-0 \
+            webkit2gtk-driver \
+            xvfb \
+            libfuse2 \
+            rpm \
+            file
+
+      - name: Download Draft assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          rm -rf candidate && mkdir -p candidate
+          gh release download "$TAG" --dir candidate --clobber
+          ls -l candidate
+
+      - name: Download previous Linux package
+        id: previous
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+        run: |
+          set -euo pipefail
+          rm -rf previous && mkdir -p previous
+          PREVIOUS_DEB="MangaReader_${PREVIOUS_VERSION}_amd64.deb"
+          gh release download "$PREVIOUS_TAG" --dir previous --pattern "$PREVIOUS_DEB" --clobber
+          PREVIOUS_SHA="$(node -e 'const crypto=require("node:crypto");const fs=require("node:fs");console.log(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "previous/${PREVIOUS_DEB}")"
+          echo "installer=${PREVIOUS_DEB}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${PREVIOUS_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate candidate input binding
+        id: candidate
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          rm -rf candidate-meta && mkdir -p candidate-meta
+          node scripts/release-smoke/prepare-candidate-linux.mjs \
+            --record candidate/rc-record.json \
+            --assets-dir candidate \
+            --tag "$TAG" \
+            --expected-commit "$TAG_COMMIT" \
+            --out candidate-meta/candidate.json
+          VERSION="$(node -p "require('./candidate-meta/candidate.json').version")"
+          DEB="$(node -p "require('./candidate-meta/candidate.json').artifactName")"
+          DEB_SHA="$(node -p "require('./candidate-meta/candidate.json').artifactSha256")"
+          APPIMAGE="$(node -p "require('./candidate-meta/candidate.json').appImageName")"
+          SIGNATURE="$(node -p "require('./candidate-meta/candidate.json').signatureName")"
+          RPM="$(node -p "require('./candidate-meta/candidate.json').rpmName")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "deb=${DEB}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${DEB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "appimage=${APPIMAGE}" >> "$GITHUB_OUTPUT"
+          echo "signature=${SIGNATURE}" >> "$GITHUB_OUTPUT"
+          echo "rpm=${RPM}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify package metadata, artifact integrity and updater manifest
+        shell: bash
+        env:
+          VERSION: ${{ steps.candidate.outputs.version }}
+          DEB: ${{ steps.candidate.outputs.deb }}
+          DEB_SHA: ${{ steps.candidate.outputs.sha256 }}
+          APPIMAGE: ${{ steps.candidate.outputs.appimage }}
+          RPM: ${{ steps.candidate.outputs.rpm }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(node -e 'const crypto=require("node:crypto");const fs=require("node:fs");console.log(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "candidate/${DEB}")"
+          if [ "$ACTUAL" != "$DEB_SHA" ]; then
+            echo "deb 摘要与候选记录不一致：记录=${DEB_SHA} 实际=${ACTUAL}" >&2
+            exit 1
+          fi
+          PKG="$(dpkg-deb --field "candidate/${DEB}" Package)"
+          PKG_VERSION="$(dpkg-deb --field "candidate/${DEB}" Version)"
+          ARCH="$(dpkg-deb --field "candidate/${DEB}" Architecture)"
+          if [ "$PKG" != "manga-reader" ] || [ "$PKG_VERSION" != "$VERSION" ] || [ "$ARCH" != "amd64" ]; then
+            echo "deb 元数据不符：package=${PKG} version=${PKG_VERSION} arch=${ARCH}" >&2
+            exit 1
+          fi
+          RPM_INFO="$(rpm -qp --qf '%{NAME} %{VERSION} %{ARCH}\n' "candidate/${RPM}")"
+          if ! printf '%s' "$RPM_INFO" | grep -q "manga-reader ${VERSION} x86_64"; then
+            echo "rpm 元数据不符：${RPM_INFO}" >&2
+            exit 1
+          fi
+          if ! file "candidate/${APPIMAGE}" | grep -q "ELF"; then
+            echo "AppImage 不是 ELF 可执行文件" >&2
+            exit 1
+          fi
+          node scripts/verify-updater-manifest.mjs candidate/latest-linux-critical.json \
+            --expect-version "$VERSION" \
+            --require-platform linux-x86_64
+          echo "制品元数据 / 摘要 / 更新清单一致"
+
+      - name: Fetch pinned minisign and verify AppImage signature
+        shell: bash
+        env:
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+          APPIMAGE: ${{ steps.candidate.outputs.appimage }}
+          SIGNATURE: ${{ steps.candidate.outputs.signature }}
+        run: |
+          set -euo pipefail
+          node scripts/release-governance/fetch-minisign.mjs
+          rm -rf evidence && mkdir -p evidence
+          node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json","utf8"));fs.writeFileSync("evidence/configured.pub",Buffer.from(c.plugins.updater.pubkey,"base64"));'
+          node scripts/release-governance/verify-signature.mjs \
+            --artifact "candidate/${APPIMAGE}" \
+            --signature "candidate/${SIGNATURE}" \
+            --public-key evidence/configured.pub \
+            --version "$VERSION" \
+            --commit "$TAG_COMMIT" \
+            --platform linux-x86_64 \
+            --out evidence/signature-verification.json
+
+      - name: Install previous Linux package (clean baseline)
+        shell: bash
+        env:
+          PREVIOUS_INSTALLER: ${{ steps.previous.outputs.installer }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y "./previous/${PREVIOUS_INSTALLER}"
+          INSTALLED="$(dpkg-query -W -f='${Version}' manga-reader)"
+          if [ "$INSTALLED" != "$PREVIOUS_VERSION" ]; then
+            echo "旧版安装版本不符：期望 ${PREVIOUS_VERSION} 实际 ${INSTALLED}" >&2
+            exit 1
+          fi
+          test -x /usr/bin/manga-reader-tauri
+
+      - name: Seed previous library and export legacy backup
+        id: baseline
+        shell: bash
+        env:
+          BIN: /usr/bin/manga-reader-tauri
+          WORK: ${{ runner.temp }}/mr-linux
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK/results" "$WORK/work"
+          xvfb-run -a node --experimental-sqlite scripts/release-smoke/linux-install-check.mjs \
+            --binary "$BIN" --data-dir "$WORK/data" --work-dir "$WORK/work" \
+            --mode seed --port 9515 --out "$WORK/results/seed.json"
+          FIXTURE_BOOK_ID="$(node -p "require(process.env.WORK + '/results/seed.json').fixture.bookId")"
+          echo "fixtureBookId=${FIXTURE_BOOK_ID}" >> "$GITHUB_OUTPUT"
+          xvfb-run -a node --experimental-sqlite scripts/release-smoke/linux-install-check.mjs \
+            --binary "$BIN" --data-dir "$WORK/data" --work-dir "$WORK/work" \
+            --mode pre-upgrade --port 9516 --fixture-book-id "$FIXTURE_BOOK_ID" \
+            --backup "$WORK/legacy.mrbackup" --out "$WORK/results/pre-upgrade.json"
+
+      - name: Upgrade to candidate deb
+        shell: bash
+        env:
+          DEB: ${{ steps.candidate.outputs.deb }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y "./candidate/${DEB}"
+          INSTALLED="$(dpkg-query -W -f='${Version}' manga-reader)"
+          if [ "$INSTALLED" != "$VERSION" ]; then
+            echo "升级后版本不符：期望 ${VERSION} 实际 ${INSTALLED}" >&2
+            exit 1
+          fi
+
+      - name: Candidate readback, formats, PDF import and progress
+        id: candidate-run
+        shell: bash
+        env:
+          BIN: /usr/bin/manga-reader-tauri
+          WORK: ${{ runner.temp }}/mr-linux
+          FIXTURE_BOOK_ID: ${{ steps.baseline.outputs.fixtureBookId }}
+        run: |
+          set -euo pipefail
+          SCHEMA_BEFORE="$(node -p "require(process.env.WORK + '/results/pre-upgrade.json').previousSchemaVersion")"
+          xvfb-run -a node --experimental-sqlite scripts/release-smoke/linux-install-check.mjs \
+            --binary "$BIN" --data-dir "$WORK/data" --work-dir "$WORK/work" \
+            --mode candidate --port 9517 --fixture-book-id "$FIXTURE_BOOK_ID" \
+            --schema-before "$SCHEMA_BEFORE" --out "$WORK/results/candidate.json"
+          PDF_BOOK_ID="$(node -p "require(process.env.WORK + '/results/candidate.json').pdfBookId")"
+          echo "pdfBookId=${PDF_BOOK_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Restart and verify PDF progress / export new backup
+        shell: bash
+        env:
+          BIN: /usr/bin/manga-reader-tauri
+          WORK: ${{ runner.temp }}/mr-linux
+          FIXTURE_BOOK_ID: ${{ steps.baseline.outputs.fixtureBookId }}
+          PDF_BOOK_ID: ${{ steps.candidate-run.outputs.pdfBookId }}
+        run: |
+          set -euo pipefail
+          xvfb-run -a node --experimental-sqlite scripts/release-smoke/linux-install-check.mjs \
+            --binary "$BIN" --data-dir "$WORK/data" --work-dir "$WORK/work" \
+            --mode restart --port 9518 --fixture-book-id "$FIXTURE_BOOK_ID" \
+            --pdf-book-id "$PDF_BOOK_ID" --out "$WORK/results/restart.json"
+          xvfb-run -a node --experimental-sqlite scripts/release-smoke/linux-install-check.mjs \
+            --binary "$BIN" --data-dir "$WORK/data" --work-dir "$WORK/work" \
+            --mode export --port 9519 --backup "$WORK/new.mrbackup" \
+            --out "$WORK/results/new-export.json"
+
+      - name: Restore legacy and new backups in fresh profiles
+        shell: bash
+        env:
+          BIN: /usr/bin/manga-reader-tauri
+          WORK: ${{ runner.temp }}/mr-linux
+        run: |
+          set -euo pipefail
+          xvfb-run -a node --experimental-sqlite scripts/release-smoke/linux-install-check.mjs \
+            --binary "$BIN" --data-dir "$WORK/data-legacy" --work-dir "$WORK/work-legacy" \
+            --mode restore --port 9520 --backup "$WORK/legacy.mrbackup" \
+            --expect-books 1 --out "$WORK/results/legacy-restore.json"
+          xvfb-run -a node --experimental-sqlite scripts/release-smoke/linux-install-check.mjs \
+            --binary "$BIN" --data-dir "$WORK/data-new" --work-dir "$WORK/work-new" \
+            --mode restore --port 9521 --backup "$WORK/new.mrbackup" \
+            --expect-books 4 --expect-pdf --out "$WORK/results/new-restore.json"
+
+      - name: Linux PDF runtime under production CSP
+        shell: bash
+        env:
+          BIN: /usr/bin/manga-reader-tauri
+          WORK: ${{ runner.temp }}/mr-linux
+        run: |
+          set -euo pipefail
+          xvfb-run -a node tests/qa/linux-pdf-runtime.mjs \
+            --binary "$BIN" --port 9522 --driver /usr/bin/WebKitWebDriver \
+            --out "$WORK/results/pdf-runtime.json"
+
+      - name: Assemble install verification evidence
+        shell: bash
+        env:
+          WORK: ${{ runner.temp }}/mr-linux
+          VERSION: ${{ steps.candidate.outputs.version }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+          PREVIOUS_INSTALLER: ${{ steps.previous.outputs.installer }}
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          node scripts/release-smoke/linux-install-evidence.mjs \
+            --candidate candidate-meta/candidate.json \
+            --previous-version "$PREVIOUS_VERSION" \
+            --previous-artifact-name "$PREVIOUS_INSTALLER" \
+            --previous-artifact-sha256 "$PREVIOUS_SHA" \
+            --pre-upgrade "$WORK/results/pre-upgrade.json" \
+            --candidate-run "$WORK/results/candidate.json" \
+            --restart "$WORK/results/restart.json" \
+            --legacy-restore "$WORK/results/legacy-restore.json" \
+            --new-restore "$WORK/results/new-restore.json" \
+            --new-export "$WORK/results/new-export.json" \
+            --pdf-runtime "$WORK/results/pdf-runtime.json" \
+            --out "$WORK/install-verification.json"
+
+      - name: Verify evidence bundle against Draft record
+        shell: bash
+        env:
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+          WORK: ${{ runner.temp }}/mr-linux
+        run: |
+          set -euo pipefail
+          node scripts/release-governance/verify-evidence.mjs \
+            --record candidate/rc-record.json \
+            --assets-dir candidate \
+            --signature-evidence evidence/signature-verification.json \
+            --install-evidence "$WORK/install-verification.json" \
+            --public-key evidence/configured.pub \
+            --channel linux-critical \
+            --commit "$TAG_COMMIT"
+
+      - name: Write run manifest
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+          ARTIFACT_NAME: ${{ steps.candidate.outputs.deb }}
+          ARTIFACT_SHA: ${{ steps.candidate.outputs.sha256 }}
+          APPIMAGE: ${{ steps.candidate.outputs.appimage }}
+          PREVIOUS_INSTALLER: ${{ steps.previous.outputs.installer }}
+          PREVIOUS_VERSION: ${{ inputs.previous_version }}
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha256 }}
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+          WORK: ${{ runner.temp }}/mr-linux
+        run: |
+          set -euo pipefail
+          export TAG PREVIOUS_TAG VERSION ARTIFACT_NAME ARTIFACT_SHA APPIMAGE
+          export PREVIOUS_INSTALLER PREVIOUS_VERSION PREVIOUS_SHA TAG_COMMIT WORK
+          node - <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const sha = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+          const runId = process.env.GITHUB_RUN_ID;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const server = process.env.GITHUB_SERVER_URL || "https://github.com";
+          const files = {};
+          for (const [key, file] of Object.entries({
+            installVerification: `${process.env.WORK}/install-verification.json`,
+            seed: `${process.env.WORK}/results/seed.json`,
+            preUpgrade: `${process.env.WORK}/results/pre-upgrade.json`,
+            candidate: `${process.env.WORK}/results/candidate.json`,
+            restart: `${process.env.WORK}/results/restart.json`,
+            legacyRestore: `${process.env.WORK}/results/legacy-restore.json`,
+            newRestore: `${process.env.WORK}/results/new-restore.json`,
+            pdfRuntime: `${process.env.WORK}/results/pdf-runtime.json`,
+            rcRecord: "candidate/rc-record.json",
+            candidateMeta: "candidate-meta/candidate.json",
+          })) {
+            if (fs.existsSync(file)) files[key] = { path: path.basename(file), sha256: sha(file) };
+          }
+          const manifest = {
+            tag: process.env.TAG,
+            commit: process.env.TAG_COMMIT,
+            version: process.env.VERSION,
+            artifactName: process.env.ARTIFACT_NAME,
+            artifactSha256: process.env.ARTIFACT_SHA,
+            appImageName: process.env.APPIMAGE,
+            previousTag: process.env.PREVIOUS_TAG,
+            previousVersion: process.env.PREVIOUS_VERSION,
+            previousArtifactName: process.env.PREVIOUS_INSTALLER,
+            previousArtifactSha256: process.env.PREVIOUS_SHA,
+            runner: {
+              imageOs: process.env.ImageOS,
+              imageVersion: process.env.ImageVersion,
+              runnerName: process.env.RUNNER_NAME,
+              runId,
+              runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+              runUrl: `${server}/${repository}/actions/runs/${runId}`,
+              workflow: process.env.GITHUB_WORKFLOW_REF,
+              actor: process.env.GITHUB_ACTOR,
+              event: process.env.GITHUB_EVENT_NAME,
+            },
+            generatedAt: new Date().toISOString(),
+            files,
+          };
+          fs.writeFileSync(`${process.env.WORK}/run-manifest.json`, JSON.stringify(manifest, null, 2));
+          NODE
+
+      - name: Upload clean Linux evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clean-linux-evidence-${{ inputs.tag }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/mr-linux/install-verification.json
+            ${{ runner.temp }}/mr-linux/run-manifest.json
+            ${{ runner.temp }}/mr-linux/results/*.json
+            evidence/signature-verification.json
+            candidate-meta/candidate.json
+            candidate/rc-record.json

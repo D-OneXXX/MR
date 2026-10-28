@@ -46,7 +46,16 @@ export const CHANNELS = {
     platform: "linux-x86_64",
     // 高危补丁通道标签必须带 -linux-secN 后缀。
     tagPattern: /^v(\d+\.\d+\.\d+)-linux-sec(\d+)$/,
-    requiredChecks: ["freshInstall", "upgrade", "dataIntegrity"],
+    // 0.18.0 起 Linux 也必须证明 PDF 渲染、跨重启进度与备份恢复：
+    // 与 Windows 相同的用户可见能力，不能再只凭「装上了/能启动」放行。
+    requiredChecks: [
+      "freshInstall",
+      "upgrade",
+      "dataIntegrity",
+      "pdfReading",
+      "progressRestart",
+      "backupRestore",
+    ],
   },
 };
 
@@ -57,6 +66,47 @@ export const GOVERNANCE_FILES = new Set([
   "install-verification.json",
   "signature-verification.json",
 ]);
+
+/**
+ * 签名证据必须绑定的制品（更新通道实际下载的那个）。
+ *
+ * Linux 的官方签名只覆盖 AppImage（`latest-linux-critical.json` 指向它），
+ * 而安装验证实际安装 deb；两者都是同一 RC 记录中的制品，但**不能混用**：
+ * 签名证据必须绑定 AppImage，安装证据必须绑定 deb。
+ */
+export function selectSignatureArtifact(record) {
+  if (record?.channel === "linux-critical") {
+    return (
+      (record.artifacts || []).find(
+        (item) => typeof item?.name === "string" && /\.AppImage$/i.test(item.name),
+      ) || null
+    );
+  }
+  return selectPrimaryArtifact(record);
+}
+
+/**
+ * 安装验证回执必须绑定的**主制品**。
+ *
+ * 不能按字母序取第一个「看起来像安装包」的文件：Linux 的 rpm 名称以
+ * `MangaReader-` 开头，会排在 `MangaReader_…_amd64.deb` 之前，导致回执指向
+ * rpm，而真实安装验证（以及发布前的 AppImage 验签）用的是 deb / AppImage。
+ * 这里按通道明确定义优先级，保证安装验证、发布闸门与审批人看到的是同一份制品。
+ */
+export function selectPrimaryArtifact(record) {
+  const artifacts = Array.isArray(record?.artifacts) ? record.artifacts : [];
+  const patterns =
+    record?.channel === "linux-critical"
+      ? [/\.deb$/i, /\.rpm$/i, /\.AppImage$/i]
+      : [/setup\.exe$/i, /\.AppImage$/i, /\.deb$/i, /\.rpm$/i];
+  for (const pattern of patterns) {
+    const hit = artifacts.find(
+      (item) => typeof item?.name === "string" && pattern.test(item.name),
+    );
+    if (hit) return hit;
+  }
+  return null;
+}
 
 /**
  * 目录中参与制品摘要比对的文件名（排除治理文件），按名称排序。
@@ -556,9 +606,7 @@ export function verifyPublishPreconditions(input) {
     }
   }
 
-  const installer = record.artifacts.find((item) =>
-    /setup\.exe$|\.AppImage$|\.deb$|\.rpm$/.test(item.name),
-  );
+  const installer = selectPrimaryArtifact(record);
   problems.push(
     ...validateInstallAttestation(input.attestation, {
       version: record.version,

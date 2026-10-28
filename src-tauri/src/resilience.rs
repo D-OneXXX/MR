@@ -110,8 +110,12 @@ pub struct ResilienceState {
     last_reader_page: Mutex<Option<u32>>,
     recovery_context: Mutex<Option<RecoveryContext>>,
     freeze_notified: AtomicBool,
-    /// 最近一次自动唤起恢复窗的时间：关闭后可重开，但有冷却，避免关掉就立刻弹回。
+    /// 最近一次**自动唤起**恢复窗的时间：纯记账，不参与冷却判定。
     last_notified: Mutex<Option<Instant>>,
+    /// 最近一次用户**关闭**恢复窗的时间：冷却期的起点。
+    /// 只有关闭的确实是"冻结通知窗"时才记录——关闭与冻结无关的窗口
+    /// （例如启动提示）不得压制后续真实冻结的唤起。
+    last_closed: Mutex<Option<Instant>>,
     rage_last: Mutex<Option<Instant>>,
 }
 
@@ -119,12 +123,16 @@ pub struct ResilienceState {
 const RECOVERY_REOPEN_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// 是否允许再次唤起恢复窗（纯函数，便于单测）。
+///
+/// 冷却期从**用户关闭**那一刻起算，而不是从"上次通知"起算：
+/// 把两者混同会让"关闭与冻结无关的窗口"也把随后的真实冻结压进冷却，
+/// 表现为恢复窗永不出现。
 pub(crate) fn reopen_allowed(
-    last_notified: Option<Instant>,
+    last_closed: Option<Instant>,
     now: Instant,
     cooldown: Duration,
 ) -> bool {
-    match last_notified {
+    match last_closed {
         None => true,
         Some(at) => now.duration_since(at) >= cooldown,
     }
@@ -134,6 +142,38 @@ pub(crate) fn reopen_allowed(
 /// 且不残留冷却期。
 fn clear_freeze_notice(state: &ResilienceState) {
     state.freeze_notified.store(false, Ordering::SeqCst);
+    *state.last_notified.lock() = None;
+    *state.last_closed.lock() = None;
+}
+
+/// 判定是否应当自动唤起恢复窗，并按需更新通知状态。
+///
+/// 返回 true 表示调用方应当开窗。
+///
+/// - 冷却期内直接跳过：**不刷新**任何时间戳（否则冷却会被无限延长）。
+/// - 原子状态更新独立求值，不被前一个条件的短路跳过。
+pub(crate) fn maybe_notify_recovery(state: &ResilienceState, now: Instant) -> bool {
+    let allowed = reopen_allowed(*state.last_closed.lock(), now, RECOVERY_REOPEN_COOLDOWN);
+    if !allowed {
+        return false;
+    }
+    // 原子取值 + 置位：单独求值，不与冷却判定写在同一个复合条件里。
+    if state.freeze_notified.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    *state.last_notified.lock() = Some(now);
+    true
+}
+
+/// 记录"用户关闭了恢复窗"。
+///
+/// 只有当被关闭的确实是**冻结通知窗**时才进入冷却；关闭与冻结无关的窗口
+/// 不设冷却，否则后续真实冻结会被误压进冷却期而永不唤起。
+pub(crate) fn note_recovery_closed(state: &ResilienceState, now: Instant) {
+    let was_notified = state.freeze_notified.swap(false, Ordering::SeqCst);
+    if was_notified {
+        *state.last_closed.lock() = Some(now);
+    }
     *state.last_notified.lock() = None;
 }
 
@@ -147,6 +187,7 @@ pub fn new_state() -> Arc<ResilienceState> {
         recovery_context: Mutex::new(None),
         freeze_notified: AtomicBool::new(false),
         last_notified: Mutex::new(None),
+        last_closed: Mutex::new(None),
         rage_last: Mutex::new(None),
     })
 }
@@ -596,16 +637,12 @@ fn spawn_watchdog(app: AppHandle, state: Arc<ResilienceState>) {
                     continue;
                 }
                 // 用户关掉恢复窗后不要立刻弹回：冷却期内不再唤起；
-                // 冷却结束且主窗仍未恢复时再唤起一次（不修改 last_notified，
-                // 因此关闭后不会因为"已通知过"而永久失去恢复入口）。
-                let allowed = {
-                    let last_notified = *state.last_notified.lock();
-                    reopen_allowed(last_notified, Instant::now(), RECOVERY_REOPEN_COOLDOWN)
-                };
-                if !allowed || state.freeze_notified.swap(true, Ordering::SeqCst) {
+                // 冷却结束且主窗仍未恢复时再唤起一次。判定与状态更新都在
+                // maybe_notify_recovery 里完成：冷却期内不刷新任何时间戳，
+                // 原子置位独立求值、不被短路跳过。
+                if !maybe_notify_recovery(state.as_ref(), Instant::now()) {
                     continue;
                 }
-                *state.last_notified.lock() = Some(Instant::now());
 
                 if let Err(err) = open_recovery(
                     &app,
@@ -880,10 +917,8 @@ pub fn resilience_close_recovery(
     let window = app
         .get_webview_window(RECOVERY_LABEL)
         .ok_or_else(|| "恢复窗口已关闭".to_string())?;
-    // 用户主动关闭：允许主窗仍冻结时再次唤起，但先进入冷却，
-    // 避免"关掉就立刻弹回"的死循环。
-    state.freeze_notified.store(false, Ordering::SeqCst);
-    *state.last_notified.lock() = Some(Instant::now());
+    // 关闭的确实是冻结通知窗时才进入冷却；关闭与冻结无关的窗口不压制后续冻结。
+    note_recovery_closed(state.as_ref(), Instant::now());
     window.close().map_err(|err| err.to_string())
 }
 
@@ -998,10 +1033,10 @@ mod tests {
 
     #[test]
     fn recovery_can_be_reopened_after_close_but_not_in_a_loop() {
-        // 从未通知过：允许立即唤起。
+        // 从未关闭过：允许立即唤起。
         let now = Instant::now();
         assert!(reopen_allowed(None, now, RECOVERY_REOPEN_COOLDOWN));
-        // 刚唤起过（或刚被用户关闭）：冷却期内不再弹回。
+        // 刚被用户关闭：冷却期内不再弹回。
         assert!(!reopen_allowed(Some(now), now, RECOVERY_REOPEN_COOLDOWN));
         // 冷却结束后仍允许再次唤起——否则用户关掉就永远没有恢复入口。
         let after = now + RECOVERY_REOPEN_COOLDOWN;
@@ -1009,11 +1044,112 @@ mod tests {
     }
 
     #[test]
+    fn closing_unrelated_recovery_window_does_not_suppress_next_freeze() {
+        // 回归：此前"关闭恢复窗"会把"上次通知时间"写成关闭时刻，
+        // 于是关闭与冻结无关的窗口也会把随后的真实冻结压进冷却期，
+        // 表现为恢复窗永不出现（chaos:freeze-suite 超时）。
+        let state = new_state();
+        let now = Instant::now();
+        // 关闭一个与冻结无关的窗口：此时 freeze_notified 仍为 false。
+        note_recovery_closed(state.as_ref(), now);
+        assert!(
+            state.last_closed.lock().is_none(),
+            "关闭无关窗口不得进入冷却期"
+        );
+        // 随后的真实冻结必须能立刻唤起恢复窗。
+        assert!(
+            maybe_notify_recovery(state.as_ref(), now + Duration::from_millis(10)),
+            "关闭无关窗口后，真实冻结必须能立即唤起恢复窗"
+        );
+    }
+
+    #[test]
+    fn closing_freeze_notice_starts_cooldown_without_extending_it() {
+        let state = new_state();
+        let now = Instant::now();
+        // 冻结通知窗已开 → 用户关闭 → 进入冷却。
+        assert!(maybe_notify_recovery(state.as_ref(), now));
+        note_recovery_closed(state.as_ref(), now);
+        let closed_at = *state.last_closed.lock();
+        assert!(closed_at.is_some(), "关闭冻结通知窗必须进入冷却期");
+
+        // 冷却期内连续心跳：不得唤起，也**不得刷新任何时间戳**
+        // （否则冷却会被无限延长，冻结再也不会唤起恢复窗）。
+        for step in 1..=5 {
+            let tick = now + Duration::from_millis(200 * step);
+            assert!(
+                !maybe_notify_recovery(state.as_ref(), tick),
+                "冷却期内不得唤起恢复窗"
+            );
+            assert_eq!(
+                *state.last_closed.lock(),
+                closed_at,
+                "冷却期内不得延长冷却时间"
+            );
+            assert!(
+                state.last_notified.lock().is_none(),
+                "冷却期内不得刷新通知时间"
+            );
+        }
+    }
+
+    #[test]
+    fn cooldown_expires_so_recovery_can_be_reopened_again() {
+        let state = new_state();
+        let now = Instant::now();
+        assert!(maybe_notify_recovery(state.as_ref(), now));
+        note_recovery_closed(state.as_ref(), now);
+        // 冷却期内不再唤起。
+        assert!(!maybe_notify_recovery(
+            state.as_ref(),
+            now + Duration::from_secs(1)
+        ));
+        // 冷却到期后重新唤起（用户关掉仍保留恢复入口）。
+        assert!(
+            maybe_notify_recovery(
+                state.as_ref(),
+                now + RECOVERY_REOPEN_COOLDOWN + Duration::from_secs(1)
+            ),
+            "冷却结束后必须能再次唤起恢复窗"
+        );
+    }
+
+    #[test]
+    fn notify_flag_is_read_independently_from_the_cooldown_check() {
+        let state = new_state();
+        let now = Instant::now();
+        assert!(maybe_notify_recovery(state.as_ref(), now));
+        assert!(state.freeze_notified.load(Ordering::SeqCst));
+        let notified_at = *state.last_notified.lock();
+        // 已通知过时不再重复通知，且不得刷新通知时间。
+        assert!(!maybe_notify_recovery(
+            state.as_ref(),
+            now + Duration::from_secs(1)
+        ));
+        assert_eq!(
+            *state.last_notified.lock(),
+            notified_at,
+            "已通知过时不得刷新通知时间"
+        );
+    }
+
+    #[test]
     fn heartbeat_clears_notice_state_so_next_freeze_is_immediate() {
         let state = new_state();
+        let now = Instant::now();
+        assert!(maybe_notify_recovery(state.as_ref(), now));
+        note_recovery_closed(state.as_ref(), now);
         clear_freeze_notice(state.as_ref());
         assert!(!state.freeze_notified.load(Ordering::SeqCst));
         assert!(state.last_notified.lock().is_none());
+        assert!(
+            state.last_closed.lock().is_none(),
+            "心跳恢复后不得残留冷却期"
+        );
+        assert!(
+            maybe_notify_recovery(state.as_ref(), now + Duration::from_millis(10)),
+            "心跳恢复后下一次冻结必须能立即唤起"
+        );
     }
 
     #[test]

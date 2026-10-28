@@ -133,7 +133,7 @@ test("renderStatusSnapshot shows blockers, next task and gate drift", () => {
           labels: [{ name: "severity:p1" }, { name: "status:blocked" }],
           assignees: [{ login: "D-OneXXX" }],
           updatedAt: "2026-10-25T10:00:00Z",
-          url: "https://github.com/D-OneXXX/MR/issues/12",
+          url: "https://github.com/D-OneXXX/Moyu/issues/12",
         },
       ],
     },
@@ -218,13 +218,13 @@ test("renderStatusSnapshot surfaces partial GitHub errors without hiding availab
 });
 
 test("parseRepoFromRemote supports HTTPS and SSH GitHub remotes", () => {
-  assert.deepEqual(parseRepoFromRemote("https://github.com/D-OneXXX/MR.git"), {
+  assert.deepEqual(parseRepoFromRemote("https://github.com/D-OneXXX/Moyu.git"), {
     owner: "D-OneXXX",
-    name: "MR",
+    name: "Moyu",
   });
-  assert.deepEqual(parseRepoFromRemote("git@github.com:D-OneXXX/MR.git"), {
+  assert.deepEqual(parseRepoFromRemote("git@github.com:D-OneXXX/Moyu.git"), {
     owner: "D-OneXXX",
-    name: "MR",
+    name: "Moyu",
   });
   assert.equal(parseRepoFromRemote("https://example.com/not-github.git"), null);
 });

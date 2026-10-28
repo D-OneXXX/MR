@@ -11,13 +11,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/D-OneXXX/MR/releases">下载</a>
+  <a href="https://github.com/D-OneXXX/Moyu/releases">下载</a>
   ·
   <a href="README.md">English</a>
   ·
   <a href="docs/ARCHITECTURE.md">架构说明</a>
   ·
-  <a href="https://github.com/D-OneXXX/MR/issues">支持</a>
+  <a href="https://github.com/D-OneXXX/Moyu/issues">支持</a>
 </p>
 
 <p align="center">
@@ -71,7 +71,7 @@ macOS 与 ARM64 构建不在当前发布范围内。
 
 正式构建通过 GitHub Releases 分发：
 
-**[查看 Releases →](https://github.com/D-OneXXX/MR/releases)**
+**[查看 Releases →](https://github.com/D-OneXXX/Moyu/releases)**
 
 一次发布通常包含：
 
@@ -181,8 +181,8 @@ Windows 使用 **设置 → 应用**，Linux 使用包管理器。本地数据�
 
 ## 支持
 
-- 问题与功能请求：[GitHub Issues](https://github.com/D-OneXXX/MR/issues)
-- 安全报告：[GitHub Security Advisories](https://github.com/D-OneXXX/MR/security/advisories/new)
+- 问题与功能请求：[GitHub Issues](https://github.com/D-OneXXX/Moyu/issues)
+- 安全报告：[GitHub Security Advisories](https://github.com/D-OneXXX/Moyu/security/advisories/new)
 
 报告问题时请附上应用版本、操作系统、**关于与维护** 中显示的构建来源，以及复现步骤。
 发布日志或截图前，请移除个人路径、书名、Cookie、Token 和完整 URL。

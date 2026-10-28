@@ -14,7 +14,7 @@ Older releases may continue to work, but they do not receive security updates.
 
 Please use GitHub’s private vulnerability reporting:
 
-**https://github.com/D-OneXXX/MR/security/advisories/new**
+**https://github.com/D-OneXXX/Moyu/security/advisories/new**
 
 Do not open a public issue for a vulnerability, and do not publish proof-of-concept details
 before a fix is available.

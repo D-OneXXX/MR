@@ -11,13 +11,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/D-OneXXX/MR/releases">Download</a>
+  <a href="https://github.com/D-OneXXX/Moyu/releases">Download</a>
   ·
   <a href="README.zh-CN.md">简体中文</a>
   ·
   <a href="docs/ARCHITECTURE.md">Architecture</a>
   ·
-  <a href="https://github.com/D-OneXXX/MR/issues">Support</a>
+  <a href="https://github.com/D-OneXXX/Moyu/issues">Support</a>
 </p>
 
 <p align="center">
@@ -75,7 +75,7 @@ macOS and ARM64 builds are not part of the current release scope.
 
 Official builds are distributed through GitHub Releases:
 
-**[Browse releases →](https://github.com/D-OneXXX/MR/releases)**
+**[Browse releases →](https://github.com/D-OneXXX/Moyu/releases)**
 
 A release normally provides:
 
@@ -200,8 +200,8 @@ automatically; remove the data directory if you want a full cleanup.
 
 ## Support
 
-- Bugs and feature requests: [GitHub Issues](https://github.com/D-OneXXX/MR/issues)
-- Security reports: [GitHub Security Advisories](https://github.com/D-OneXXX/MR/security/advisories/new)
+- Bugs and feature requests: [GitHub Issues](https://github.com/D-OneXXX/Moyu/issues)
+- Security reports: [GitHub Security Advisories](https://github.com/D-OneXXX/Moyu/security/advisories/new)
 
 When reporting a problem, include the app version, operating system, build origin shown in
 **About & maintenance**, and the steps to reproduce. Remove personal paths, book titles,

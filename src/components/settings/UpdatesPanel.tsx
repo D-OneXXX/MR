@@ -44,8 +44,8 @@ type NativePhase =
 
 type NativeFailure = "check" | "install" | "relaunch";
 
-const RELEASE_DOWNLOAD_URL = "https://github.com/D-OneXXX/MR/releases/latest";
-const RELEASE_NOTES_URL = "https://github.com/D-OneXXX/MR/releases";
+const RELEASE_DOWNLOAD_URL = "https://github.com/D-OneXXX/Moyu/releases/latest";
+const RELEASE_NOTES_URL = "https://github.com/D-OneXXX/Moyu/releases";
 
 interface NativeDownloadState {
   downloaded: number;

@@ -4,7 +4,7 @@
  *
  * 输入（环境变量 / 文件系统）：
  * - RELEASE_TAG：发布的标签（如 v0.17.1-linux-sec1）；缺省时读 GITHUB_REF_NAME。
- * - GITHUB_REPOSITORY：owner/repo（Actions 自带）；缺省回落 D-OneXXX/MR。
+ * - GITHUB_REPOSITORY：owner/repo（Actions 自带）；缺省回落 D-OneXXX/Moyu。
  * - src-tauri/target/release/bundle/appimage/*.AppImage 与同名 .AppImage.sig
  *   （`createUpdaterArtifacts: true` + TAURI_SIGNING_PRIVATE_KEY 的产物）。
  *
@@ -18,7 +18,7 @@ const root = path.resolve(process.cwd());
 const appImageDir = path.join(root, "src-tauri", "target", "release", "bundle", "appimage");
 
 const tag = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME || "";
-const repo = process.env.GITHUB_REPOSITORY || "D-OneXXX/MR";
+const repo = process.env.GITHUB_REPOSITORY || "D-OneXXX/Moyu";
 if (!tag) {
   console.error("[linux-critical-manifest] 缺少 RELEASE_TAG / GITHUB_REF_NAME");
   process.exit(1);

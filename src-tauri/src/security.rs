@@ -611,7 +611,7 @@ mod tests {
         // 正式版形态：HTTPS 端点 + 构建配置内的 minisign 公钥。
         let release = audit_update_with(
             &channel(
-                &["https://github.com/D-OneXXX/MR/releases/latest/download/latest.json"],
+                &["https://github.com/D-OneXXX/Moyu/releases/latest/download/latest.json"],
                 "dW50cnVzdGVkIGNvbW1lbnQ=",
             ),
             false,

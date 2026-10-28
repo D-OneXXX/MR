@@ -18,7 +18,7 @@ on:
         required: false
         type: string
       release_notes:
-        description: "正式 Release Notes（可选，支持多行 Markdown）；留空时使用 Draft 占位文案"
+        description: "必填：双语 Release Notes，英文完整版在前、简体中文在后、3–5 条更新。清单 notes 在候选阶段固化，事后改 Draft 正文不会同步"
         required: false
         default: ""
         type: string
@@ -131,6 +131,16 @@ jobs:
             *) echo "release-guard 返回未知状态：$STATE；拒绝继续" >&2; exit 1 ;;
           esac
           echo "state=$STATE" >> "$GITHUB_OUTPUT"
+
+      # 备注校验前移到构建之前：Linux 通道没有演练模式，留空必须立刻失败，
+      # 而不是先编译数十分钟再报错。清单 notes 也在候选阶段固化，事后补正文无效。
+      - name: Validate and resolve bilingual release notes
+        id: notes
+        shell: bash
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: node scripts/release-governance/release-notes.mjs
+
       - name: Verify QA evidence run
         shell: bash
         env:
@@ -209,13 +219,8 @@ jobs:
             --expect-version "${{ steps.identity.outputs.version }}" \
             --require-platform linux-x86_64
 
-      - name: Resolve release notes
-        id: notes
-        shell: bash
-        env:
-          RELEASE_NOTES: ${{ inputs.release_notes }}
-        run: node scripts/release-governance/release-notes.mjs
-
+      # 非空输入先按强制结构校验（英文完整版在前、简体中文在后、3–5 条更新、
+      # 不含内部工程细节），不合格直接失败，不让不合规文案进 Draft。
       # ---------- 写入前复检 ----------
       # 守卫在构建之前，而构建可能持续数十分钟；若期间该 Release 被他人公开，
       # 仍按旧状态执行 `gh release edit --notes` 会改写已公开 Release 的正文。
@@ -242,6 +247,7 @@ jobs:
           STATE="$(node scripts/release-governance/release-guard.mjs \
             --status "$STATUS" --stdout-file "$OUT_FILE" --stderr-file "$ERR_FILE" --tag "$TAG")"
           echo "state=$STATE" >> "$GITHUB_OUTPUT"
+
       - name: Create or reuse Draft release
         id: draft
         shell: bash

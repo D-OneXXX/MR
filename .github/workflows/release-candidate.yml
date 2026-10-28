@@ -24,7 +24,7 @@ on:
         required: false
         type: string
       release_notes:
-        description: "正式 Release Notes（可选，支持多行 Markdown）；留空时使用 Draft 占位文案"
+        description: "必填（仅隔离演练可留空）：双语 Release Notes，英文完整版在前、简体中文在后、3–5 条更新。清单 notes 在候选阶段固化，事后改 Draft 正文不会同步"
         required: false
         default: ""
         type: string
@@ -112,6 +112,20 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
+      # ---------- 发布说明 ----------
+      # 多行 workflow_dispatch 输入经 step output 传给 tauri-action：不把它拼进
+      # YAML 块标量或表达式字面量，空值/纯空白时回落到既有占位文案。
+      # 非空输入先按强制结构校验（英文完整版在前、简体中文在后、3–5 条更新、
+      # 不含内部工程细节），不合格直接失败，不让不合规文案进 Draft。
+      - name: Validate and resolve bilingual release notes
+        id: notes
+        shell: bash
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          # 只有明确标记的隔离演练允许占位正文；普通发布留空会在此失败。
+          ALLOW_PLACEHOLDER: ${{ inputs.rehearsal }}
+        run: node scripts/release-governance/release-notes.mjs
+
       # ---------- 已公开的 Release 不得被候选流程改写 ----------
       # 候选阶段只允许写 Draft。tauri-action 在目标 tag 已存在时会「更新」该
       # Release（复用同一份资产），若该 Release 已经公开发布，一次误触发的
@@ -148,6 +162,7 @@ jobs:
             *) echo "release-guard 返回未知状态：$STATE；拒绝继续" >&2; exit 1 ;;
           esac
           echo "state=$STATE" >> "$GITHUB_OUTPUT"
+
       - name: Verify QA evidence run
         shell: bash
         env:
@@ -183,16 +198,6 @@ jobs:
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
           npm audit --omit=dev --audit-level=high
 
-      # ---------- 发布说明 ----------
-      # 多行 workflow_dispatch 输入经 step output 传给 tauri-action：不把它拼进
-      # YAML 块标量或表达式字面量，空值/纯空白时回落到既有占位文案。
-      - name: Resolve release notes
-        id: notes
-        shell: bash
-        env:
-          RELEASE_NOTES: ${{ inputs.release_notes }}
-        run: node scripts/release-governance/release-notes.mjs
-
       # ---------- 构建 + 签名（签名私钥来自 Environment 级 Secret） ----------
       # tauri-action 负责：签名、生成 updater 包（.nsis.zip）与 latest.json、
       # 上传资产，并且**只创建 Draft**（releaseDraft: true）。
@@ -208,7 +213,7 @@ jobs:
         with:
           tagName: ${{ steps.identity.outputs.tag }}
           releaseName: Moyu ${{ steps.identity.outputs.tag }}
-          # 由 Resolve release notes 生成的多行 step output；空输入时是占位文案。
+          # 由 Validate and resolve bilingual release notes 生成的 step output；空输入时是占位文案。
           releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false

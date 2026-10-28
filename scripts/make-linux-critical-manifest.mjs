@@ -60,7 +60,8 @@ const signature = fs.readFileSync(sigPath, "utf8").trim();
 
 const manifest = {
   version: pkg.version,
-  notes: `Linux 长期稳定分支高危安全/崩溃修复补丁（${tag}）。`,
+  // 更新弹窗直接显示这段文字：按发布说明政策给英文在前、简体中文在后的单行摘要。
+  notes: `Security and crash fixes for the Linux long-term channel (${tag}) / Linux 长期稳定分支高危安全/崩溃修复补丁（${tag}）。`,
   pub_date: new Date().toISOString(),
   platforms: {
     "linux-x86_64": {

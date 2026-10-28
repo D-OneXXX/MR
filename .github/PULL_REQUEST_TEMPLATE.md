@@ -38,6 +38,7 @@ Closes #
 - [ ] 需要版本 bump，已用 `npm run version:sync -- X.Y.Z` 同步全部版本文件
 - [ ] 影响 Updater / 签名 / 安装器 / 公开更新通道（需要单独发布审批）
 - [ ] 影响 Windows / Linux 发布通道（说明具体影响）
+- [ ] 涉及公开发布时，Release Notes 已按 `.github/RELEASE_NOTES_TEMPLATE.md` 写成双语（英文完整版在前、简体中文在后、3–5 条更新）
 
 ## 风险与回滚
 

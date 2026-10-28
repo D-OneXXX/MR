@@ -114,3 +114,36 @@ test("发布接力：只从已公开且非预发布的 Release 携带另一通�
     assert.ok(!source.includes("--jq '.[].tag_name'"), `${name} 仍会从 Draft 接力清单`);
   }
 });
+
+test("候选通道：已公开的 Release 不得被候选流程覆盖（Windows 与 Linux 一致）", () => {
+  for (const name of ["release-candidate.yml", "release-candidate-linux.yml"]) {
+    const source = workflow(name);
+    assert.ok(
+      source.includes('gh release view "$TAG" --json isDraft'),
+      `${name} 必须先判定目标 Release 是否仍是 Draft`,
+    );
+  }
+  // Windows 候选由 tauri-action 承担「创建/更新 Release」，目标 tag 已是公开
+  // Release 时它会直接改写已发布资产，因此必须显式失败关闭。
+  const windows = workflow("release-candidate.yml");
+  assert.ok(
+    windows.includes("Refuse to touch a published release"),
+    "release-candidate.yml 必须显式拒绝改写已公开发布的 Release",
+  );
+  assert.ok(
+    /已经公开发布[\s\S]{0,400}exit 1/.test(windows),
+    "release-candidate.yml 的拒绝分支必须失败关闭（exit 1）",
+  );
+});
+
+test("发布通道：干净环境证据必须来自 GitHub-hosted（Windows 与 Linux 一致）", () => {
+  for (const name of ["release-publish.yml", "release-publish-linux.yml"]) {
+    const source = workflow(name);
+    const verifyAt = source.indexOf("verify-provenance.mjs");
+    assert.ok(verifyAt >= 0, `${name} 必须在线核验安装证据 provenance`);
+    assert.ok(
+      source.slice(verifyAt, verifyAt + 400).includes("--require-github-actions"),
+      `${name} 的 provenance 核验必须要求 GitHub-hosted 干净环境，不得接受自述的本地 VM`,
+    );
+  }
+});

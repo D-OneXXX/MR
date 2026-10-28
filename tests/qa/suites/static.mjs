@@ -972,6 +972,11 @@ export function checkReleaseGovernance(root, report) {
     if (!source.includes("verify-provenance.mjs")) {
       errors.push("release-publish.yml 必须在线核验安装证据 provenance");
     }
+    if (!source.includes("--require-github-actions")) {
+      errors.push(
+        "release-publish.yml 必须强制 GitHub-hosted 干净环境证据（与 Linux 通道一致）",
+      );
+    }
     if (!source.includes("Audit deployment approval boundary")) {
       errors.push("release-publish.yml 必须记录触发者与 deployment 审批人的边界审计");
     }
@@ -1423,6 +1428,9 @@ export function checkReleaseSurface(root, report) {
     "fetch-minisign.mjs",
     "verify-signature.mjs",
     "signature-verification.json",
+    // 候选不得改写已公开发布的 Release（与 Linux 通道一致）。
+    "Refuse to touch a published release",
+    'gh release view "$TAG" --json isDraft',
     // 发布正文可由维护者随候选写入，避免公开占位文本。
     "release_notes",
   ]) {

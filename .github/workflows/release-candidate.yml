@@ -157,6 +157,29 @@ jobs:
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: node scripts/release-governance/release-notes.mjs
 
+      # ---------- 已公开的 Release 不得被候选流程改写 ----------
+      # 候选阶段只允许写 Draft。tauri-action 在目标 tag 已存在时会「更新」该
+      # Release（复用同一份资产），若该 Release 已经公开发布，一次误触发的
+      # 候选就会静默改写已发布资产与公开清单。这里先做失败关闭检查：
+      # 目标不是 Draft 就直接拒绝，与 Linux 候选通道的判定保持一致。
+      - name: Refuse to touch a published release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --json isDraft --jq .isDraft > /dev/null 2>&1; then
+            IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+            if [ "$IS_DRAFT" != "true" ]; then
+              echo "Release $TAG 已经公开发布，候选流程拒绝改写它" >&2
+              exit 1
+            fi
+            echo "Draft 已存在，复用：$TAG"
+          else
+            echo "目标 Release 尚不存在，候选流程将创建 Draft：$TAG"
+          fi
+
       # ---------- 构建 + 签名（签名私钥来自 Environment 级 Secret） ----------
       # tauri-action 负责：签名、生成 updater 包（.nsis.zip）与 latest.json、
       # 上传资产，并且**只创建 Draft**（releaseDraft: true）。

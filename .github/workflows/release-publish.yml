@@ -199,7 +199,8 @@ jobs:
       # 干净环境不能只是 cleanEnvironment=true 的声明：
       # - GitHub-hosted 证据必须能追溯到一次真实成功、由 workflow_dispatch 触发、
       #   跑在 main 上的 run，且证据时间落在 run 执行窗口内；
-      # - 本地 VM 证据会打印人工核验要求（镜像 SHA-256 + 运行日志）。
+      # - 本地 VM 证据一律拒绝（与 Linux 通道一致）：自述的镜像/主机信息无法
+      #   在线核验，不能替代 hosted 干净 VM 的真实安装证据。
       - name: Verify clean-VM provenance
         shell: bash
         env:
@@ -210,6 +211,7 @@ jobs:
             --evidence draft-assets/install-verification.json \
             --repo "${GITHUB_REPOSITORY}" \
             --expected-workflow ".github/workflows/release-install-verify.yml" \
+            --require-github-actions \
             --out evidence/provenance-verification.json
 
       # 只读审计：记录本次发布的触发者与 Environment 审批人。

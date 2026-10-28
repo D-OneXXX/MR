@@ -268,6 +268,30 @@ jobs:
           }
           NODE
 
+      # ---------- 公开说明门禁 ----------
+      # 公开 Release 必须给出双语说明（英文完整版在前、简体中文在后、3–5 条更新），
+      # 且不得包含 QA 计数、CI run、PR/Issue 号、commit/hash、CSP 或迁移内部细节。
+      # 说明随 Draft 一起被审批，因此这里校验的是**即将公开的那份正文**。
+      # latest.json 的 notes 会直接显示在应用更新弹窗里，且由候选阶段生成，
+      # 可能与后来手工改过的 Draft 正文不同步，因此单独再校验一次。
+      - name: Enforce bilingual release notes
+        if: steps.state.outputs.need_publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json body --jq .body > draft-release-notes.md
+          node scripts/release-governance/release-notes.mjs --check draft-release-notes.md
+          # 更新弹窗显示的是清单 notes，不是 Release 正文。结构与内部信息仍是硬门禁；
+          # 正文/清单是否逐字一致只告警（--warn-only）——清单在候选阶段固化，
+          # 改文案必须重跑候选，不能靠发布时改写。
+          gh release download "$TAG" --pattern latest.json --dir pre-publish-notes --clobber
+          node scripts/release-governance/release-notes.mjs \
+            --check-manifest pre-publish-notes/latest.json \
+            --require-match draft-release-notes.md --warn-only
+
       - name: Publish the Draft
         if: steps.state.outputs.need_publish == 'true'
         shell: bash

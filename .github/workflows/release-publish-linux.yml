@@ -196,6 +196,24 @@ jobs:
             --public-key evidence/configured.pub \
             --channel linux-critical \
             --commit "$COMMIT"
+      # ---------- 公开说明门禁 ----------
+      # 与 Windows 通道同一条规则：英文完整版在前、简体中文在后、3–5 条更新、
+      # 不含内部工程细节。发布的是审批时看到的 Draft 正文，此处校验的就是它。
+      - name: Enforce bilingual release notes
+        if: steps.state.outputs.need_publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json body --jq .body > draft-release-notes.md
+          node scripts/release-governance/release-notes.mjs --check draft-release-notes.md
+          # 更新弹窗显示的是清单里的 notes，不是 Release 正文：单独校验一次。
+          # Linux 高危通道的 notes 是单行双语摘要，用 summary 模式。
+          gh release download "$TAG" --pattern latest-linux-critical.json --dir pre-publish-notes --clobber
+          node scripts/release-governance/release-notes.mjs \
+            --check-manifest pre-publish-notes/latest-linux-critical.json --mode summary
       - name: Publish the Draft
         if: steps.state.outputs.need_publish == 'true'
         shell: bash

@@ -29,7 +29,7 @@ on:
         default: ""
         type: string
       rehearsal:
-        description: "隔离演练模式：只允许 v0.0.0-rehearsal 标签，产物一律带 rehearsal- 前缀且永不发布"
+        description: "隔离演练模式：只允许 v0.0.0-rehearsal 系列的标签，产物一律带 rehearsal- 前缀且永不发布"
         required: false
         default: false
         type: boolean
@@ -84,9 +84,12 @@ jobs:
           REHEARSAL="${{ inputs.rehearsal }}"
           git fetch --no-tags origin main
           if [ "$REHEARSAL" = "true" ]; then
-            # 隔离演练：标签固定为 v0.0.0-rehearsal，不参与版本语义。
-            if ! printf '%s' "$TAG" | grep -Eq '^v0\.0\.0-rehearsal$'; then
-              echo "演练模式的标签必须固定为 v0.0.0-rehearsal：$TAG" >&2
+            # 隔离演练：标签限定在 v0.0.0-rehearsal 系列，不参与版本语义。
+            # 允许递增后缀（v0.0.0-rehearsal2、v0.0.0-rehearsal12…），
+            # 让每次演练用独立标签，不必删除或改写既有演练标签。
+            # 发布侧对任何含 "rehearsal" 的标签无条件拒绝，演练产物永远无法公开。
+            if ! printf '%s' "$TAG" | grep -Eq '^v0\.0\.0-rehearsal[0-9]*$'; then
+              echo "演练模式的标签必须形如 v0.0.0-rehearsal 或 v0.0.0-rehearsal2：$TAG" >&2
               exit 1
             fi
             VERSION="0.0.0"

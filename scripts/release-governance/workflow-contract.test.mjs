@@ -652,3 +652,44 @@ test("Linux 写入前复检：真实 run 块的状态传递、失败关闭与分
     fs.rmSync(workDir, { recursive: true, force: true });
   }
 });
+
+test("演练标签门禁：候选接受 v0.0.0-rehearsal 系列，常规通道仍只收 vX.Y.Z，发布无条件拒绝 rehearsal", () => {
+  const source = workflow("release-candidate.yml");
+  const patterns = [...source.matchAll(/grep -Eq '([^']+)'/g)].map((m) => m[1]);
+  const rehearsalPattern = patterns.find((p) => p.includes("rehearsal"));
+  const releasePattern = patterns.find((p) => p.includes("v[0-9]"));
+  assert.ok(rehearsalPattern, "候选工作流缺少演练标签门控");
+  assert.ok(releasePattern, "候选工作流缺少常规标签门控");
+
+  const rehearsalGate = new RegExp(rehearsalPattern);
+  const releaseGate = new RegExp(releasePattern);
+
+  // 演练族：允许递增后缀，便于每次演练用独立标签而不动旧标签。
+  for (const tag of ["v0.0.0-rehearsal", "v0.0.0-rehearsal2", "v0.0.0-rehearsal12"]) {
+    assert.ok(rehearsalGate.test(tag), `演练标签族必须接受 ${tag}`);
+  }
+  for (const tag of ["v0.0.0-rehearsalX", "v0.0.0-rehearsal-2", "v0.1.0", "v0.19.0", "v0.0.0"]) {
+    assert.ok(!rehearsalGate.test(tag), `演练标签族必须拒绝 ${tag}`);
+  }
+
+  // 常规通道：演练标签永远不是合法发布标签。
+  for (const tag of ["v0.19.0", "v1.2.3"]) {
+    assert.ok(releaseGate.test(tag), `常规通道必须接受 ${tag}`);
+  }
+  for (const tag of ["v0.0.0-rehearsal2", "v0.19.0-linux-sec1", "v0.19", "v0.19.0.1"]) {
+    assert.ok(!releaseGate.test(tag), `常规通道必须拒绝 ${tag}`);
+  }
+
+  // 发布侧：任何含 rehearsal 的标签无条件拒绝（子串匹配，新增后缀也不放过）。
+  for (const name of ["release-publish.yml", "release-publish-linux.yml"]) {
+    const publish = workflow(name);
+    assert.ok(
+      publish.includes('grep -q "rehearsal"'),
+      `${name} 必须对任何含 rehearsal 的标签无条件拒绝`,
+    );
+    assert.ok(
+      publish.includes("演练标签永远不得发布"),
+      `${name} 必须给出明确的演练拒绝提示`,
+    );
+  }
+});

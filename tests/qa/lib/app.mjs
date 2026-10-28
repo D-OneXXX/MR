@@ -8,7 +8,12 @@ import {
   listTargets,
   waitForTarget,
 } from "./cdp.mjs";
-import { shouldRetryCdp } from "./reliability.mjs";
+import {
+  isCdpContextDestroyed,
+  isCdpTimeoutError,
+  isFreshPage,
+  shouldRetryCdp,
+} from "./reliability.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -295,6 +300,48 @@ async function runQaSession({
   await waitForTarget(cdpPort, () => true, { timeout: 90_000 });
   let page = await connectReadyApp(cdpPort);
 
+  /**
+   * 触发重载并等到**新文档**就绪。
+   *
+   * 固定 sleep + 一次重连在慢速 hosted runner 上会竞态：旧上下文的
+   * waitForApp 先返回 true，随后重载完成并销毁旧上下文，下一套件的第一次
+   * evaluate 就收到 “Execution context was destroyed”（0.18.0 qa-full
+   * 的 cache P0）。这里以 performance.timeOrigin 变化作为新文档判据，
+   * 并在 context-destroyed/timeout 时继续重连，直到拿到新文档。
+   */
+  async function reloadAndReconnect(label) {
+    const before = await page.eval("performance.timeOrigin").catch(() => null);
+    await page.eval("setTimeout(() => location.reload(), 60); true").catch(() => {});
+    const deadline = Date.now() + 25_000;
+    let lastError = null;
+    while (Date.now() < deadline) {
+      await sleep(300);
+      let candidate = null;
+      try {
+        candidate = await connectResponsiveMain(cdpPort);
+        await waitForApp(candidate, 10_000);
+        await candidate.waitFor(
+          "!!document.querySelector('main') || !!document.querySelector('.reader-root')",
+          { timeout: 5000, label: `${label} shell` },
+        );
+        const after = await candidate.eval("performance.timeOrigin").catch(() => null);
+        if (Number.isFinite(Number(before)) && !isFreshPage(before, after)) {
+          await candidate.close().catch(() => {});
+          continue;
+        }
+        return candidate;
+      } catch (error) {
+        lastError = error;
+        if (candidate) await candidate.close().catch(() => {});
+        // 上下文销毁与重载超时都只说明页面仍在切换；继续等到 deadline。
+        if (!isCdpContextDestroyed(error) && !isCdpTimeoutError(error)) {
+          // 连接失败同样可能发生在 target 切换中，继续重试。
+        }
+      }
+    }
+    throw new Error(`页面重载后未恢复（${label}）：${lastError?.message || "timeout"}`);
+  }
+
   // Prevent the first-run privacy dialog from covering the deterministic
   // test surface. This mirrors the product's own acknowledgement token.
   const ack = `${privacyPolicyVersion(root)}:${packageMajor(root)}`;
@@ -304,14 +351,7 @@ async function runQaSession({
     localStorage.setItem("mr-locale", "zh-CN");
     return true;
   })()`);
-  await page.eval("setTimeout(() => location.reload(), 60); true");
-  await sleep(1200);
-  page = await connectResponsiveMain(cdpPort);
-  await waitForApp(page);
-  await page.waitFor("!!document.querySelector('main') || !!document.querySelector('.reader-root')", {
-    timeout: 20_000,
-    label: "app shell",
-  });
+  page = await reloadAndReconnect("privacy acknowledgement");
 
   const preexisting = await invoke(page, "list_books", { query: null });
   if (!allowExistingBooks && Array.isArray(preexisting) && preexisting.length > 0) {
@@ -329,10 +369,7 @@ async function runQaSession({
       imported.push({ path: fixturePath, result: null, error: String(error) });
     }
   }
-  await page.eval("setTimeout(() => location.reload(), 60); true");
-  await sleep(1200);
-  page = await connectResponsiveMain(cdpPort);
-  await waitForApp(page);
+  page = await reloadAndReconnect("fixture import");
   const books = await invoke(page, "list_books", { query: null });
 
   const context = {
@@ -410,21 +447,12 @@ async function runQaSession({
     async resetWorkspace() {
       const steps = [];
       try {
-        await page.eval("setTimeout(() => location.reload(), 60); true");
-        steps.push("已触发页面重载");
-        await sleep(1200);
-        const reconnected = await connectResponsiveMain(cdpPort);
-        steps.push("已重连主窗口");
+        const reconnected = await reloadAndReconnect("workspace reset");
+        steps.push("已重载并取得新文档");
         // 先换引用：旧 target 可能已经随崩溃消失，指向它的求值会全部失败。
         page = reconnected;
         context.page = reconnected;
-        await waitForApp(reconnected);
-        steps.push("应用已就绪");
-        await reconnected.waitFor(
-          "!!document.querySelector('main') || !!document.querySelector('.reader-root')",
-          { timeout: 20_000, label: "workspace reset" },
-        );
-        steps.push("工作区外壳已渲染");
+        steps.push("应用已就绪", "工作区外壳已渲染");
       } catch (error) {
         const failure = new Error(
           `工作区重置失败（${steps.join(" → ") || "尚未开始"}）：${error.message}` +
@@ -438,12 +466,8 @@ async function runQaSession({
       }
     },
     async setLocale(locale) {
-      await page.eval(
-        `localStorage.setItem("mr-locale", ${JSON.stringify(locale)}); setTimeout(() => location.reload(), 60); true`,
-      );
-      await sleep(1000);
-      page = await connectResponsiveMain(cdpPort);
-      await waitForApp(page);
+      await page.eval(`localStorage.setItem("mr-locale", ${JSON.stringify(locale)}); true`);
+      page = await reloadAndReconnect(`locale ${locale}`);
       context.page = page;
       await page.waitFor(`document.documentElement.lang === ${JSON.stringify(locale)}`, {
         timeout: 5000,
@@ -451,12 +475,8 @@ async function runQaSession({
       });
     },
     async setTheme(theme) {
-      await page.eval(
-        `localStorage.setItem("mr-theme", ${JSON.stringify(theme)}); setTimeout(() => location.reload(), 60); true`,
-      );
-      await sleep(1000);
-      page = await connectResponsiveMain(cdpPort);
-      await waitForApp(page);
+      await page.eval(`localStorage.setItem("mr-theme", ${JSON.stringify(theme)}); true`);
+      page = await reloadAndReconnect(`theme ${theme}`);
       context.page = page;
       await page.waitFor(
         `document.documentElement.dataset.theme === ${JSON.stringify(theme === "system" ? (await page.eval("matchMedia('(prefers-color-scheme: dark)').matches") ? "dark" : "light") : theme)}`,

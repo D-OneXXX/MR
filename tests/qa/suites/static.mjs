@@ -920,11 +920,15 @@ export function checkReleaseGovernance(root, report) {
     if (/push:\s*\n\s*tags:/m.test(source)) {
       errors.push("release-install-verify-linux.yml 不得由 Tag 推送触发");
     }
-    if (!/permissions:\s*\n\s*contents:\s*read/.test(source)) {
-      errors.push("release-install-verify-linux.yml 必须声明只读 permissions: contents: read");
+    // Draft Release 只对具备写权限的令牌可见；权限是这个工作流唯一需要 write
+    // 的地方，行为仍然是只读——下面的守卫禁止任何 Release 写入。
+    if (!/permissions:\s*\n\s*contents:\s*write/.test(source)) {
+      errors.push(
+        "release-install-verify-linux.yml 必须声明 contents: write（否则看不到 Draft）",
+      );
     }
-    if (/permissions:\s*\n\s*contents:\s*write/.test(source)) {
-      errors.push("release-install-verify-linux.yml 不得写 Release（contents: write）");
+    if (!/仅用于让令牌可见 \*\*Draft\*\* Release/.test(source)) {
+      errors.push("release-install-verify-linux.yml 必须注明 contents: write 只用于 Draft 可见性");
     }
     const secretRefs = [...source.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(
       (match) => match[1],
@@ -935,8 +939,15 @@ export function checkReleaseGovernance(root, report) {
         `release-install-verify-linux.yml 不得引用非默认 Secret：${disallowed.join(", ")}`,
       );
     }
-    if (/gh release\s+(upload|edit|delete)|--draft=false/i.test(source)) {
-      errors.push("release-install-verify-linux.yml 不得上传或修改 Release");
+    // 写权限只为可见 Draft；不得出现任何 Release / API 写操作。
+    if (/gh release\s+(create|upload|edit|delete)|--draft=false/i.test(source)) {
+      errors.push("release-install-verify-linux.yml 不得创建/上传/修改/发布 Release");
+    }
+    if (/\bgh api\b(?![^\n]*(--method|-X)\s*(GET|HEAD)\b)/.test(source)) {
+      errors.push("release-install-verify-linux.yml 不得调用 gh api 写方法");
+    }
+    if (/\bmethod:\s*(POST|PATCH|PUT|DELETE)\b/i.test(source)) {
+      errors.push("release-install-verify-linux.yml 不得以 POST/PATCH/PUT/DELETE 调用 API");
     }
     evidence.push(
       "release-install-verify-linux.yml: workflow_dispatch + ubuntu-22.04 + 只读下载 + 真实 deb 安装/升级/PDF/备份证据",

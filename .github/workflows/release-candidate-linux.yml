@@ -96,6 +96,41 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
+      # ---------- 已公开的 Release 不得被候选流程改写 ----------
+      # 与 Windows 候选一致：目标 tag 已对应公开 Release 时立即失败关闭，
+      # 且必须发生在构建与任何 gh release 写入之前——否则复用同一份资产会
+      # 静默改写已发布的清单与证据（v0.17.2 曾出现发布 31 小时后资产被重传）。
+      - name: Refuse to touch a published release
+        id: release_guard
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # gh 对「不存在 / 401 / 403 限流 / 5xx / DNS 失败」都返回 exit 1，必须看诊断输出分类；
+          # 旧写法 `if ! gh release view` 会把瞬时故障当成"不存在"，继续构建并改写已发布资产。
+          # 临时文件放在 Node 也可见的原生临时目录（Git Bash 的 /tmp 原生 Node 读不到）。
+          WORKDIR="${RUNNER_TEMP:-$(node -p 'require("os").tmpdir()')}"
+          mkdir -p "$WORKDIR"
+          OUT_FILE="$WORKDIR/mr-release-guard-out-$$.txt"
+          ERR_FILE="$WORKDIR/mr-release-guard-err-$$.txt"
+          : >"$OUT_FILE"
+          : >"$ERR_FILE"
+          trap 'status=$?; rm -f "$OUT_FILE" "$ERR_FILE" 2>/dev/null || true; exit $status' EXIT
+          set +e
+          gh release view "$TAG" --json isDraft --jq .isDraft >"$OUT_FILE" 2>"$ERR_FILE"
+          STATUS=$?
+          set -e
+          # 只有正向 404 才放行；401/403/限流/5xx/网络/空输出/未知文本一律失败关闭。
+          STATE="$(node scripts/release-governance/release-guard.mjs \
+            --status "$STATUS" --stdout-file "$OUT_FILE" --stderr-file "$ERR_FILE" --tag "$TAG")"
+          case "$STATE" in
+            draft) echo "Draft 已存在，复用：$TAG" ;;
+            missing) echo "确认 Release 不存在，候选流程将创建 Draft：$TAG" ;;
+            *) echo "release-guard 返回未知状态：$STATE；拒绝继续" >&2; exit 1 ;;
+          esac
+          echo "state=$STATE" >> "$GITHUB_OUTPUT"
       - name: Verify QA evidence run
         shell: bash
         env:
@@ -181,6 +216,32 @@ jobs:
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: node scripts/release-governance/release-notes.mjs
 
+      # ---------- 写入前复检 ----------
+      # 守卫在构建之前，而构建可能持续数十分钟；若期间该 Release 被他人公开，
+      # 仍按旧状态执行 `gh release edit --notes` 会改写已公开 Release 的正文。
+      # 真正写入前再判定一次：published / unknown 一律失败关闭。
+      - name: Re-check release state before Draft write
+        id: release_recheck
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          WORKDIR="${RUNNER_TEMP:-$(node -p 'require("os").tmpdir()')}"
+          mkdir -p "$WORKDIR"
+          OUT_FILE="$WORKDIR/mr-release-recheck-out-$$.txt"
+          ERR_FILE="$WORKDIR/mr-release-recheck-err-$$.txt"
+          : >"$OUT_FILE"
+          : >"$ERR_FILE"
+          trap 'status=$?; rm -f "$OUT_FILE" "$ERR_FILE" 2>/dev/null || true; exit $status' EXIT
+          set +e
+          gh release view "$TAG" --json isDraft --jq .isDraft >"$OUT_FILE" 2>"$ERR_FILE"
+          STATUS=$?
+          set -e
+          STATE="$(node scripts/release-governance/release-guard.mjs \
+            --status "$STATUS" --stdout-file "$OUT_FILE" --stderr-file "$ERR_FILE" --tag "$TAG")"
+          echo "state=$STATE" >> "$GITHUB_OUTPUT"
       - name: Create or reuse Draft release
         id: draft
         shell: bash
@@ -188,9 +249,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.identity.outputs.tag }}
           RELEASE_BODY: ${{ steps.notes.outputs.body }}
+          # 复检刚写出的状态：构建前的判定可能已经过期。
+          RELEASE_STATE: ${{ steps.release_recheck.outputs.state }}
         run: |
           set -euo pipefail
-          if gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null | grep -qx true; then
+          if [ "$RELEASE_STATE" = "draft" ]; then
             echo "Draft 已存在，复用：$TAG"
             # 只更新 Draft 正文（仍为 Draft）；发布前审批人看到的是正式说明。
             gh release edit "$TAG" --notes "$RELEASE_BODY"

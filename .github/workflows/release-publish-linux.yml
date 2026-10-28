@@ -2,6 +2,12 @@ name: Publish release (Linux critical)
 
 # Phase 4 正式发布（Linux 高危补丁通道，与 Windows 通道完全独立）。
 # 只把**已存在的 Draft** 变成公开 Release，且必须先过人工审批与绑定校验。
+#
+# 状态模型与 Windows 通道一致：published / need_publish / need_handoff / need_verify
+# 由 `scripts/release-governance/publish-state.mjs --channel linux` 判定。
+# 已公开但缺 `latest.json` 时，重跑只补清单，不会重新公开、不会动其它资产。
+#
+# 部分失败恢复：重跑本工作流即可；两条清单齐备前保持红色，不要手工改清单"凑绿"。
 on:
   workflow_dispatch:
     inputs:
@@ -78,7 +84,10 @@ jobs:
           git checkout FETCH_HEAD -- scripts/
           echo "发布门禁脚本已对齐 main（$(git rev-parse --short FETCH_HEAD)）"
 
-      - name: Inspect release state
+      # ---------- 发布状态 ----------
+      # 与 Windows 通道同一条规则：「已公开」与「清单齐全」分开判定。
+      # 已公开但缺另一通道清单时，重跑必须继续补清单，而不是幂等跳过。
+      - name: Assess publication state
         id: state
         shell: bash
         env:
@@ -86,21 +95,16 @@ jobs:
           TAG: ${{ steps.identity.outputs.tag }}
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" --json isDraft,tagName >/dev/null 2>&1; then
+          if ! gh release view "$TAG" --json isDraft,assets > release-state.json 2>/dev/null; then
             echo "找不到 Release $TAG：必须先由 release-candidate-linux 工作流创建 Draft" >&2
             exit 1
           fi
-          IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
-          if [ "$IS_DRAFT" != "true" ]; then
-            echo "Release $TAG 已公开（isDraft=false）。本工作流只负责发布 Draft；已发布视为幂等完成。" >&2
-            echo "published=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "published=false" >> "$GITHUB_OUTPUT"
+          node scripts/release-governance/publish-state.mjs --channel linux --input release-state.json
 
+      # 同 Windows 通道：这一步是 draft-assets/ 的唯一产出者，必须同时覆盖
+      # 「首次公开」与「已公开但缺 latest.json」的重跑，否则下游验签步骤会读到空目录。
       - name: Download Draft assets and verify binding
         id: verify
-        if: steps.state.outputs.published != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -146,12 +150,11 @@ jobs:
           rm -rf evidence && mkdir -p evidence
           # 公钥来自仓库当前配置（信任锚点），不是任何外部输入。
           node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json","utf8"));fs.writeFileSync("evidence/configured.pub",Buffer.from(c.plugins.updater.pubkey,"base64"));'
-          INSTALLER="$(ls draft-assets/*.AppImage | head -1)"
-          SIGNATURE="$(ls draft-assets/*.AppImage.sig | head -1)"
-          if [ -z "${INSTALLER}" ] || [ -z "${SIGNATURE}" ]; then
-            echo "Draft 缺少安装包或签名文件，无法验签：拒绝发布" >&2
-            exit 1
-          fi
+          # 显式唯一解析安装包与签名：0 个或多个都失败并说明原因（不用 ls 的失败语义）。
+          INSTALLER="$(node scripts/release-governance/resolve-draft-asset.mjs \
+            --dir draft-assets --pattern '*.AppImage' --label 安装包)"
+          SIGNATURE="$(node scripts/release-governance/resolve-draft-asset.mjs \
+            --dir draft-assets --pattern '*.AppImage.sig' --label 签名文件)"
           node scripts/release-governance/verify-signature.mjs \
             --artifact "$INSTALLER" \
             --signature "$SIGNATURE" \
@@ -194,7 +197,7 @@ jobs:
             --channel linux-critical \
             --commit "$COMMIT"
       - name: Publish the Draft
-        if: steps.state.outputs.published != 'true'
+        if: steps.state.outputs.need_publish == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -204,13 +207,18 @@ jobs:
           gh release edit "$TAG" --draft=false --verify-tag --title "Moyu $TAG (Linux critical)"
 
       - name: Channel hand-off (carry the other channel manifest)
-        if: steps.state.outputs.published != 'true'
+        if: steps.state.outputs.need_handoff == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.identity.outputs.tag }}
         run: |
           set -euo pipefail
+          # 接力只发生在已公开的 Release 上：Draft 阶段补齐由候选流程负责。
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "false" ]; then
+            echo "Release $TAG 仍未公开：拒绝在 Draft 上执行通道接力" >&2
+            exit 1
+          fi
           if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx 'latest.json'; then
             echo "已包含 latest.json"
             exit 0
@@ -224,14 +232,19 @@ jobs:
             if gh release download "$PREV" -p latest.json -D handoff --clobber 2>/dev/null; then
               gh release upload "$TAG" handoff/latest.json --clobber
               echo "已从 ${PREV} 接力 latest.json"
+              if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx 'latest.json'; then
+                echo "接力后仍未见 latest.json" >&2
+                exit 1
+              fi
               exit 0
             fi
           done
           echo "未找到可接力的 latest.json：Windows 通道清单必须存在，否则公开下载会 404" >&2
           exit 1
 
+      # 最终判据：公开状态 + 两条通道的清单都必须存在且可下载。
+      # 不使用 always()：上游失败时跳过，工作流保持红色。
       - name: Post-release verification
-        if: steps.state.outputs.published != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -253,9 +266,18 @@ jobs:
           node scripts/verify-updater-manifest.mjs published/public-manifest.json \
             --expect-version "$VERSION" \
             --require-platform linux-x86_64
+          # 另一通道的清单也必须在本 Release 里且可从 latest 端点下载。
+          # 版本号允许与本通道不同（Windows 通道可能尚未发布同一版本），只校验平台。
+          if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx 'latest.json'; then
+            echo "缺少 latest.json：Windows 更新端点会 404" >&2
+            exit 1
+          fi
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" -o published/public-peer.json
+          node scripts/verify-updater-manifest.mjs published/public-peer.json \
+            --require-platform windows-x86_64
 
       - name: Summarize publication
-        if: always()
+        if: success()
         shell: bash
         env:
           TAG: ${{ steps.identity.outputs.tag }}
@@ -266,5 +288,5 @@ jobs:
             echo ""
             echo "- Tag: \`${TAG}\`"
             echo "- Commit: \`${COMMIT}\`"
-            echo "- 状态：${{ steps.state.outputs.published == 'true' && '此前已公开（幂等跳过）' || '已公开' }}"
+            echo "- 状态：${{ steps.state.outputs.need_publish == 'true' && '本次公开' || '此前已公开（本次只补齐/复核清单）' }}"
           } >> "$GITHUB_STEP_SUMMARY"

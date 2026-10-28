@@ -12,6 +12,19 @@ name: Publish release (Windows)
 # - 必须存在干净 Windows VM 的安装验证回执 `install-verification.json`，
 #   且其版本 / Commit / 平台 / 安装包摘要与候选完全一致；
 # - 公开更新清单必须结构合法且含本通道平台项。
+#
+# 状态模型（与 Linux 通道一致）：
+#   published    = Release 是否已公开
+#   need_publish = 仍需公开（Draft）
+#   need_handoff = 仍缺**另一通道清单**（已公开也可能缺）
+#   need_verify  = 永远校验（公开状态 + 两个清单都要能下载）
+# 由 `scripts/release-governance/publish-state.mjs` 判定，工作流只按判定执行。
+#
+# 部分失败恢复（人工）：
+#   1) 直接重跑本工作流（同一 tag）。已公开不会再次公开，只会补 missing 清单；
+#   2) 若接力仍失败，先确认另一通道存在**已公开**的 Release 且含对应清单，
+#      再重跑；不得手工上传未审批的清单；
+#   3) 两条清单齐备前，工作流保持红色，不要手工改 `latest*` 资产来"凑绿"。
 on:
   workflow_dispatch:
     inputs:
@@ -92,7 +105,10 @@ jobs:
           git checkout FETCH_HEAD -- scripts/
           echo "发布门禁脚本已对齐 main（$(git rev-parse --short FETCH_HEAD)）"
 
-      - name: Inspect release state
+      # ---------- 发布状态 ----------
+      # 「已公开」与「清单齐全」是两个独立状态：已公开但缺另一通道清单时，
+      # 重跑必须继续补清单，而不是把 isDraft=false 当作"幂等完成"。
+      - name: Assess publication state
         id: state
         shell: bash
         env:
@@ -100,21 +116,17 @@ jobs:
           TAG: ${{ steps.identity.outputs.tag }}
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" --json isDraft,tagName >/dev/null 2>&1; then
+          if ! gh release view "$TAG" --json isDraft,assets > release-state.json 2>/dev/null; then
             echo "找不到 Release $TAG：必须先由 release-candidate 工作流创建 Draft" >&2
             exit 1
           fi
-          IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
-          if [ "$IS_DRAFT" != "true" ]; then
-            echo "Release $TAG 已公开（isDraft=false）。本工作流只负责发布 Draft；已发布视为幂等完成。" >&2
-            echo "published=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "published=false" >> "$GITHUB_OUTPUT"
+          node scripts/release-governance/publish-state.mjs --channel windows --input release-state.json
 
+      # 这一步同时服务两条路径：首次公开前的绑定校验，以及「已公开但缺对端清单」
+      # 的重跑。下游验签/证据/来源校验直接读取 draft-assets/，因此这里不能按
+      # need_publish 跳过——否则恢复路径会在接力之前就因缺目录而失败。
       - name: Download Draft assets and verify binding
         id: verify
-        if: steps.state.outputs.published != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -161,12 +173,13 @@ jobs:
           rm -rf evidence && mkdir -p evidence
           # 公钥来自仓库当前配置（信任锚点），不是任何外部输入。
           node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json","utf8"));fs.writeFileSync("evidence/configured.pub",Buffer.from(c.plugins.updater.pubkey,"base64"));'
-          INSTALLER="$(ls draft-assets/*.exe | head -1)"
-          SIGNATURE="$(ls draft-assets/*.exe.sig | head -1)"
-          if [ -z "${INSTALLER}" ] || [ -z "${SIGNATURE}" ]; then
-            echo "Draft 缺少安装包或签名文件，无法验签：拒绝发布" >&2
-            exit 1
-          fi
+          # 显式唯一解析安装包与签名：0 个或多个都失败并说明原因。
+          # 不用 `ls ... | head -1`：它在 set -euo pipefail 下无匹配会直接退出，
+          # 后面的空串判断执行不到，用户只会看到 ls 的原始报错。
+          INSTALLER="$(node scripts/release-governance/resolve-draft-asset.mjs \
+            --dir draft-assets --pattern '*.exe' --label 安装包)"
+          SIGNATURE="$(node scripts/release-governance/resolve-draft-asset.mjs \
+            --dir draft-assets --pattern '*.exe.sig' --label 签名文件)"
           node scripts/release-governance/verify-signature.mjs \
             --artifact "$INSTALLER" \
             --signature "$SIGNATURE" \
@@ -256,7 +269,7 @@ jobs:
           NODE
 
       - name: Publish the Draft
-        if: steps.state.outputs.published != 'true'
+        if: steps.state.outputs.need_publish == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -265,14 +278,21 @@ jobs:
           set -euo pipefail
           gh release edit "$TAG" --draft=false --verify-tag --title "Moyu $TAG"
 
+      # 幂等接力：缺才补。已公开的 Release 也允许补——这是部分失败的唯一自救路径，
+      # 且只新增"另一通道清单"这一个资产，不会重新公开、不会改写其它资产。
       - name: Channel hand-off (carry the other channel manifest)
-        if: steps.state.outputs.published != 'true'
+        if: steps.state.outputs.need_handoff == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.identity.outputs.tag }}
         run: |
           set -euo pipefail
+          # 接力只发生在已公开的 Release 上：Draft 阶段补齐由候选流程负责。
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "false" ]; then
+            echo "Release $TAG 仍未公开：拒绝在 Draft 上执行通道接力" >&2
+            exit 1
+          fi
           # 本次发布会成为最新 release：必须带上 Linux 高危通道的清单，
           # 否则 releases/latest/download/latest-linux-critical.json 会 404。
           if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx 'latest-linux-critical.json'; then
@@ -288,14 +308,21 @@ jobs:
             if gh release download "$PREV" -p latest-linux-critical.json -D handoff --clobber 2>/dev/null; then
               gh release upload "$TAG" handoff/latest-linux-critical.json --clobber
               echo "已从 ${PREV} 接力 latest-linux-critical.json"
+              # 上传后立刻确认资产真的在，避免"命令返回 0 但资产未落地"。
+              if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx 'latest-linux-critical.json'; then
+                echo "接力后仍未见 latest-linux-critical.json" >&2
+                exit 1
+              fi
               exit 0
             fi
           done
           echo "未找到可接力的 latest-linux-critical.json：Linux 通道清单必须存在，否则公开下载会 404" >&2
           exit 1
 
+      # 最终判据：公开状态 + 两条通道的清单都必须存在且可下载。
+      # 不使用 always()：上游任一环节失败时本步骤跳过，工作流保持红色，
+      # 不会出现"失败但打印成功摘要"的假绿灯。
       - name: Post-release verification
-        if: steps.state.outputs.published != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -318,18 +345,28 @@ jobs:
           node scripts/verify-updater-manifest.mjs published/public-latest.json \
             --expect-version "$VERSION" \
             --require-platform windows-x86_64
+          # 另一通道的清单也必须在本 Release 里，且能从 latest 端点下载。
+          # 版本号允许与本通道不同（另一通道可能尚未发布同一版本），只校验平台。
+          if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx 'latest-linux-critical.json'; then
+            echo "缺少 latest-linux-critical.json：Linux 更新端点会 404" >&2
+            exit 1
+          fi
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-linux-critical.json" -o published/public-peer.json
+          node scripts/verify-updater-manifest.mjs published/public-peer.json \
+            --require-platform linux-x86_64
 
       - name: Summarize publication
-        if: always()
+        if: success()
         shell: bash
         env:
           TAG: ${{ steps.identity.outputs.tag }}
           COMMIT: ${{ steps.identity.outputs.commit }}
+          PUBLISHED_NOW: ${{ steps.state.outputs.need_publish }}
         run: |
           {
             echo "### 发布结果（Windows）"
             echo ""
             echo "- Tag: \`${TAG}\`"
             echo "- Commit: \`${COMMIT}\`"
-            echo "- 状态：${{ steps.state.outputs.published == 'true' && '此前已公开（幂等跳过）' || '已公开' }}"
+            echo "- 状态：${{ steps.state.outputs.need_publish == 'true' && '本次公开' || '此前已公开（本次只补齐/复核清单）' }}"
           } >> "$GITHUB_STEP_SUMMARY"

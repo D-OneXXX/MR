@@ -13,13 +13,13 @@ const BOOK_ID = "e".repeat(64);
 
 const provenance = {
   kind: "github-actions",
-  repository: "D-OneXXX/MR",
+  repository: "D-OneXXX/Moyu",
   runId: "1234567890",
-  runUrl: "https://github.com/D-OneXXX/MR/actions/runs/1234567890",
+  runUrl: "https://github.com/D-OneXXX/Moyu/actions/runs/1234567890",
   runnerName: "GitHub Actions 1",
   imageOs: "ubuntu22",
   imageVersion: "20261021.1.0",
-  workflow: "D-OneXXX/MR/.github/workflows/release-install-verify-linux.yml@refs/heads/main",
+  workflow: "D-OneXXX/Moyu/.github/workflows/release-install-verify-linux.yml@refs/heads/main",
   actor: "D-OneXXX",
 };
 
@@ -151,5 +151,5 @@ test("linux-install-evidence：恢复结果失败 → 拒绝", () => {
 });
 
 test("provenanceFromEnvironment：缺 run 字段 → 拒绝", () => {
-  assert.throws(() => provenanceFromEnvironment({ GITHUB_REPOSITORY: "D-OneXXX/MR" }), /provenance/);
+  assert.throws(() => provenanceFromEnvironment({ GITHUB_REPOSITORY: "D-OneXXX/Moyu" }), /provenance/);
 });

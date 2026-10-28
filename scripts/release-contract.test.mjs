@@ -117,7 +117,7 @@ test("清单契约：生成的 latest-linux-critical.json 结构完整且带签�
   fs.writeFileSync(path.join(bundle, image), "fake-appimage");
   fs.writeFileSync(path.join(bundle, `${image}.sig`), "untrusted comment: signature\nRULEDATA\n");
 
-  runManifest(dir, { RELEASE_TAG: tag, GITHUB_REPOSITORY: "D-OneXXX/MR" });
+  runManifest(dir, { RELEASE_TAG: tag, GITHUB_REPOSITORY: "D-OneXXX/Moyu" });
 
   const manifest = JSON.parse(
     fs.readFileSync(path.join(bundle, "latest-linux-critical.json"), "utf8"),
@@ -130,7 +130,7 @@ test("清单契约：生成的 latest-linux-critical.json 结构完整且带签�
   assert.match(platform.signature, /signature/);
   assert.equal(
     platform.url,
-    `https://github.com/D-OneXXX/MR/releases/download/v0.17.1-linux-sec1/${image}`,
+    `https://github.com/D-OneXXX/Moyu/releases/download/v0.17.1-linux-sec1/${image}`,
   );
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -187,7 +187,7 @@ test("Linux 0.18.0：latest-linux-critical.json 按候选版本生成（同端�
     "untrusted comment: signature\nRULEDATA\n",
   );
 
-  runManifest(dir, { RELEASE_TAG: tag, GITHUB_REPOSITORY: "D-OneXXX/MR" });
+  runManifest(dir, { RELEASE_TAG: tag, GITHUB_REPOSITORY: "D-OneXXX/Moyu" });
 
   const manifest = JSON.parse(
     fs.readFileSync(path.join(bundle, "latest-linux-critical.json"), "utf8"),
@@ -198,7 +198,7 @@ test("Linux 0.18.0：latest-linux-critical.json 按候选版本生成（同端�
   assert.deepEqual(Object.keys(manifest.platforms), ["linux-x86_64"]);
   assert.equal(
     manifest.platforms["linux-x86_64"].url,
-    `https://github.com/D-OneXXX/MR/releases/download/v0.18.0-linux-sec1/${image}`,
+    `https://github.com/D-OneXXX/Moyu/releases/download/v0.18.0-linux-sec1/${image}`,
   );
   assert.deepEqual(
     verifyUpdaterManifest(manifest, {
@@ -228,7 +228,7 @@ const validManifest = {
   platforms: {
     "windows-x86_64": {
       signature: "untrusted comment: signature\nRULEDATA\n",
-      url: "https://github.com/D-OneXXX/MR/releases/download/v0.17.1/MangaReader_0.17.1_x64-setup.exe",
+      url: "https://github.com/D-OneXXX/Moyu/releases/download/v0.17.1/MangaReader_0.17.1_x64-setup.exe",
     },
   },
 };

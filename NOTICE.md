@@ -1,6 +1,6 @@
 # MangaReader — NOTICE
 
-Required Notice: MangaReader (https://github.com/D-OneXXX/MR) — Copyright the MangaReader authors. Licensed under the PolyForm Noncommercial License 1.0.0 (see [`LICENSE`](./LICENSE)).
+Required Notice: MangaReader (https://github.com/D-OneXXX/Moyu) — Copyright the MangaReader authors. Licensed under the PolyForm Noncommercial License 1.0.0 (see [`LICENSE`](./LICENSE)).
 
 This file identifies the work covered by [`LICENSE`](./LICENSE) and spells out
 the project's authorization boundary in plain language. Where this file and

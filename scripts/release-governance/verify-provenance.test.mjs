@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { verifyProvenance } from "./verify-provenance.mjs";
 
-const REPO = "D-OneXXX/MR";
+const REPO = "D-OneXXX/Moyu";
 const RUN_ID = "1234567890";
 const VERIFIED_AT = "2026-10-26T12:40:00.000Z";
 
@@ -102,7 +102,7 @@ test("verifyProvenance：证据时间不在 run 窗口 → 拒绝", () => {
 
 test("verifyProvenance：runUrl 与 repository/runId 不一致 → 拒绝", () => {
   const bad = evidence();
-  bad.machine.provenance.runUrl = "https://github.com/D-OneXXX/MR/actions/runs/999";
+  bad.machine.provenance.runUrl = "https://github.com/D-OneXXX/Moyu/actions/runs/999";
   const verdict = verifyProvenance(bad, run(), options);
   assert.equal(verdict.ok, false);
   assert.ok(verdict.problems.some((problem) => problem.includes("runUrl")));

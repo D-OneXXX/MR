@@ -103,14 +103,14 @@ function makeAttestation(overrides = {}) {
       host: "RUNNER-01",
       provenance: {
         kind: "github-actions",
-        repository: "D-OneXXX/MR",
+        repository: "D-OneXXX/Moyu",
         runId: "1234567890",
-        runUrl: "https://github.com/D-OneXXX/MR/actions/runs/1234567890",
+        runUrl: "https://github.com/D-OneXXX/Moyu/actions/runs/1234567890",
         runnerName: "RUNNER-01",
         imageOs: "win22",
         imageVersion: "20261021.1.0",
         workflow:
-          "D-OneXXX/MR/.github/workflows/release-install-verify.yml@refs/heads/main",
+          "D-OneXXX/Moyu/.github/workflows/release-install-verify.yml@refs/heads/main",
         actor: "D-OneXXX",
         runAttempt: "1",
         startedAt: new Date().toISOString(),

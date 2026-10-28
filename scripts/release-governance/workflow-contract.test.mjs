@@ -693,3 +693,28 @@ test("演练标签门禁：候选接受 v0.0.0-rehearsal 系列，常规通道�
     );
   }
 });
+
+test("qa-full：证据来源必须是实际检出的提交，且无效引用必须明确失败", () => {
+  const source = workflow("qa-full.yml");
+  // 必须先解析引用，再按解析结果检出。
+  assert.match(
+    source,
+    /node scripts\/release-governance\/resolve-qa-ref\.mjs/,
+    "必须用解析器校验 ref 输入",
+  );
+  assert.match(
+    source,
+    /ref: \$\{\{ steps\.resolve\.outputs\.ref \}\}/,
+    "检出必须使用解析后的引用",
+  );
+  // 不得把用户输入直接当作检出来源（那会让无效引用静默回退到默认分支）。
+  assert.ok(
+    !/ref: \$\{\{ inputs\.ref \}\}/.test(source),
+    "不得直接用 inputs.ref 检出",
+  );
+  // head_sha 来自实际检出的提交，并与解析出的提交比对。
+  assert.match(source, /git rev-parse HEAD/, "head_sha 必须来自实际检出的 HEAD");
+  assert.match(source, /EXPECTED_SHA/, "必须比对检出的提交与解析出的提交");
+  // 解析失败必须让作业失败（set -euo pipefail + 非零退出码）。
+  assert.match(source, /set -euo pipefail/, "解析步骤必须在严格模式下运行");
+});

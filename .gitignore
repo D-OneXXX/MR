@@ -62,3 +62,6 @@ tests/qa/qa-knowledge-base.json
 /docs/TECHNICAL.md
 /docs/TESTING.md
 /docs/dev/
+
+# Local agent workspace (session memory and notes, kept locally, never published)
+/.workbuddy/

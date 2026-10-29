@@ -1,0 +1,75 @@
+name: QA L2 (full regression gate)
+
+# 分层 QA 门禁说明（三层，互不冒充）：
+#
+#   L1 快速门禁（ci-windows-check / ci-linux-check）：类型检查、静态 QA、发布治理契约、构建。
+#      —— 必须通过，分钟级。
+#   L2 完整回归（本工作流）：完整 QA（视觉 / 阅读器 / PDF / 在线 / 缓存 / 隐私 / 架构 / 混沌）。
+#      —— 必须通过，或命中 qa-known-issues.json 里"信息完整且未过期"的豁免；
+#         P0 / P1 永远不得豁免（由 scripts/release-governance/qa-gate.mjs 强制）。
+#   L3 发布验收（release-candidate* / release-publish* / release-install-verify*）：
+#      候选构建、签名与证据、Draft、审批、跨通道清单接力、干净机安装/升级。
+#      —— 只在正式发布前执行；需要真实 VM、外部服务与人工审批的检查**不伪装成**普通自动化门禁。
+#
+# 注意：本工作流首次引入的那个 PR 不会触发自己（GitHub 只从默认分支/合并后的工作流文件解析
+# pull_request 事件），合并后对后续 PR 生效；分支保护里把 "L2 · QA gate" 设为必需检查即可。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  actions: read # 下载本 run 的 QA 证据
+
+concurrency:
+  group: qa-l2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  full-qa:
+    name: L2 · full QA
+    uses: ./.github/workflows/qa-full.yml
+    with:
+      # 对 PR 的 head 提交做完整回归；短 SHA 不受支持，因此用完整 SHA。
+      ref: ${{ github.event.pull_request.head.sha }}
+
+  gate:
+    name: L2 · QA gate (known-issues)
+    needs: full-qa
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      # 证据是本门禁的输入，必须能取到；取不到就让下一步判定"缺证据 → 阻断"。
+      - name: Download QA evidence
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ github.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name "qa-evidence-${{ github.event.pull_request.head.sha }}" \
+            --dir qa-evidence
+
+      - name: QA gate
+        run: |
+          set -euo pipefail
+          node scripts/release-governance/qa-gate.mjs --report qa-evidence/reports/latest.json
+
+      - name: Summarize gate
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### L2 QA gate"
+            echo ""
+            echo "- PR head: \`${{ github.event.pull_request.head.sha }}\`"
+            echo "- Full QA job: ${{ needs.full-qa.result }}"
+            echo "- Registry: \`scripts/release-governance/qa-known-issues.json\`"
+          } >> "$GITHUB_STEP_SUMMARY"

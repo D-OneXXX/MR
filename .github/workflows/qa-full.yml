@@ -6,14 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Commit / branch / tag to verify (exact source)"
+        description: "要验证的来源：分支名 / 标签名 / 完整 40 位 Commit SHA（无法解析时明确失败，不回退默认分支）"
         required: true
         default: main
         type: string
   workflow_call:
     inputs:
       ref:
-        description: "Commit / branch / tag to verify (exact source)"
+        description: "要验证的来源：分支名 / 标签名 / 完整 40 位 Commit SHA（无法解析时明确失败，不回退默认分支）"
         required: true
         type: string
 
@@ -30,16 +30,52 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
-      - name: Checkout requested ref
+      # 工具链检出：只为拿到解析脚本与 git 远端配置。
+      # 真正的证据来源是下面那次「按解析结果检出」的提交。
+      - name: Checkout tooling ref
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.ref }}
           persist-credentials: false
 
+      # 解析输入的 ref：分支 / 标签 / 完整 Commit SHA。
+      # 解析不出来就明确失败——绝不悄悄回退到默认分支（否则报告会带着 main 的
+      # 提交冒充用户要的证据）。
+      - name: Resolve requested ref
+        id: resolve
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          node scripts/release-governance/resolve-qa-ref.mjs "$REQUESTED_REF" --remote origin > "$RUNNER_TEMP/resolved-ref.json"
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/resolved-ref.json", "utf8"));
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `ref=${r.ref}\nkind=${r.kind}\nsha=${r.sha}\n`);
+            console.log(`[resolve-qa-ref] 请求 ${r.requested} → ${r.kind} ${r.ref} @ ${r.sha}`);
+          '
+
+      - name: Checkout requested source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
+          persist-credentials: false
+
+      # 证据里的 head_sha 必须来自**实际检出的提交**，而不是用户输入的字符串。
       - name: Resolve source commit
         id: source
         shell: bash
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          EXPECTED_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          echo "sha=$ACTUAL" >> "$GITHUB_OUTPUT"
+          if [ -n "$EXPECTED_SHA" ] && [ "$ACTUAL" != "$EXPECTED_SHA" ]; then
+            echo "检出的提交 ${ACTUAL} 与解析出的 ${EXPECTED_SHA} 不一致" >&2
+            exit 1
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -116,6 +152,7 @@ jobs:
           {
             echo "### Full QA evidence"
             echo ""
+            echo "- Requested ref: \`${{ inputs.ref }}\`（${{ steps.resolve.outputs.kind }}）"
             echo "- Source: \`${{ steps.source.outputs.sha }}\`"
             echo "- Workflow run: ${{ github.run_id }}"
             if [ -f tests/qa/reports/latest.json ]; then

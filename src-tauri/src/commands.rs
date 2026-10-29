@@ -3120,10 +3120,6 @@ fn path_key(path: &Path) -> String {
     }
 }
 
-fn same_path(a: &Path, b: &Path) -> bool {
-    path_key(a) == path_key(b)
-}
-
 /// `target` 是否等于 `root` 或位于其下（用于系统目录，不用于用户主目录）。
 fn path_within(target: &Path, root: &Path) -> bool {
     let t = path_key(target);
@@ -3181,7 +3177,8 @@ fn sensitive_system_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
-fn sensitive_user_dirs() -> Vec<PathBuf> {
+/// 宽目录：本身及其祖先不可作为删除目标，但其子目录可作为正常书库。
+fn sensitive_user_wide_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     let mut push = |path: Option<PathBuf>| {
         if let Some(path) = path {
@@ -3198,10 +3195,41 @@ fn sensitive_user_dirs() -> Vec<PathBuf> {
     push(dirs::picture_dir());
     push(dirs::video_dir());
     push(dirs::audio_dir());
+    dirs
+}
+
+/// 用户数据/配置/缓存目录：本身及其祖先不可作为删除目标。
+///
+/// Windows 的 `AppData`、macOS 的 `Library`、Linux 的 `~/.local` 是上述
+/// 目录的共同父级。只做等值判断会漏掉这些宽目录本身；一旦它们被当作
+/// 书源，`remove_dir_all` 会波及其它应用的数据。
+///
+/// 注意：这里只用于**祖先**判定。不能把所有子孙都拒绝——`%TEMP%` 位于
+/// `%LOCALAPPDATA%` 之下，浏览器下载/导入的临时书源必须仍可删除。应用自己的
+/// 数据/缓存目录由 `protected_app_roots` 单独做子孙判定。
+fn sensitive_user_data_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut push = |path: Option<PathBuf>| {
+        if let Some(path) = path {
+            if let Some(path) = canonical_existing(&path) {
+                dirs.push(path);
+            }
+        }
+    };
     push(dirs::data_dir());
     push(dirs::data_local_dir());
     push(dirs::cache_dir());
     push(dirs::config_dir());
+    if let Some(home) = dirs::home_dir() {
+        let private = if cfg!(windows) {
+            Some(home.join("AppData"))
+        } else if cfg!(target_os = "macos") {
+            Some(home.join("Library"))
+        } else {
+            Some(home.join(".local"))
+        };
+        push(private);
+    }
     if let Ok(data) = crate::data_dir() {
         push(Some(data));
     }
@@ -3211,15 +3239,57 @@ fn sensitive_user_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// 应用自己的数据/缓存根：其内部一律不可删除（library.db、日志、缓存）。
+fn protected_app_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(data) = crate::data_dir() {
+        if let Some(path) = canonical_existing(&data) {
+            roots.push(path);
+        }
+    }
+    if let Some(cache) = crate::paths::cache_dir() {
+        if let Some(path) = canonical_existing(cache) {
+            roots.push(path);
+        }
+    }
+    roots
+}
+
+/// 删除目标是否落在受保护范围：系统目录双向、宽目录的祖先、数据目录的祖先、
+/// 应用数据/缓存目录的子孙。
+fn is_protected_source_path(
+    canon: &Path,
+    system_dirs: &[PathBuf],
+    wide_dirs: &[PathBuf],
+    data_dirs: &[PathBuf],
+    app_roots: &[PathBuf],
+) -> bool {
+    if system_dirs
+        .iter()
+        .any(|root| path_within(canon, root) || path_within(root, canon))
+    {
+        return true;
+    }
+    if wide_dirs.iter().any(|dir| path_within(dir, canon)) {
+        return true;
+    }
+    if data_dirs.iter().any(|dir| path_within(dir, canon)) {
+        return true;
+    }
+    app_roots.iter().any(|root| path_within(canon, root))
+}
+
 /// 判断一个本地书源路径是否允许参与“删除源文件”。
 ///
 /// 规则：
 /// - 必须是绝对路径、当前存在；
 /// - 文件必须是 `.zip`/`.cbz`/`.pdf`（绝不删除 library.db、日志或任意普通文件）；
-/// - 目录不得是文件系统根、系统目录、用户主目录/文档/桌面/下载等宽目录本身；
-/// - 允许这些目录的**子目录**作为漫画书目录，避免误伤正常书库。
+/// - 目录不得是文件系统根、系统目录、用户主目录/文档/桌面/下载等宽目录本身，
+///   也不得是这些目录或用户数据/缓存目录的**祖先**（例如 Windows 的 `AppData`）；
+/// - 允许宽目录的**子目录**作为漫画书目录，避免误伤正常书库；数据/缓存目录内部
+///   一律拒绝。
 ///
-/// 该函数同时用于 `.mrbackup` 恢复过滤，避免恶意备份把宽目录伪装成书籍。
+/// 该函数同时用于 `.mrbackup` 恢复过滤，避免恶意备份把宽目录或其祖先伪装成书籍。
 pub(crate) fn is_safe_library_source_path(path: &Path) -> bool {
     if !path.is_absolute() {
         return false;
@@ -3238,31 +3308,13 @@ pub(crate) fn is_safe_library_source_path(path: &Path) -> bool {
     if canon.parent().is_none() {
         return false;
     }
-    if sensitive_system_dirs()
-        .iter()
-        .any(|root| path_within(&canon, root))
-    {
-        return false;
-    }
-    if sensitive_user_dirs()
-        .iter()
-        .any(|dir| same_path(&canon, dir))
-    {
-        return false;
-    }
-    // 应用数据/缓存目录内部一律不可删除：library.db、日志、缓存都在这里。
-    let mut protected_roots = Vec::new();
-    if let Ok(data) = crate::data_dir() {
-        if let Some(path) = canonical_existing(&data) {
-            protected_roots.push(path);
-        }
-    }
-    if let Some(cache) = crate::paths::cache_dir() {
-        if let Some(path) = canonical_existing(cache) {
-            protected_roots.push(path);
-        }
-    }
-    if protected_roots.iter().any(|root| path_within(&canon, root)) {
+    if is_protected_source_path(
+        &canon,
+        &sensitive_system_dirs(),
+        &sensitive_user_wide_dirs(),
+        &sensitive_user_data_dirs(),
+        &protected_app_roots(),
+    ) {
         return false;
     }
     true
@@ -3669,6 +3721,44 @@ mod tests {
         )));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn protected_source_path_rejects_ancestors_and_appdata_descendants() {
+        let base = test_temp_dir("protected-source");
+        let appdata = base.join("AppData");
+        let roaming = appdata.join("Roaming");
+        let other_app = roaming.join("OtherApp");
+        let books = base.join("Books");
+        let volume = books.join("vol1");
+        std::fs::create_dir_all(&other_app).unwrap();
+        std::fs::create_dir_all(&volume).unwrap();
+
+        let data_dirs = std::slice::from_ref(&roaming);
+        assert!(
+            is_protected_source_path(&appdata, &[], &[], data_dirs, &[]),
+            "AppData 是 Roaming 的祖先，必须拒绝"
+        );
+        let app_roots = std::slice::from_ref(&roaming);
+        assert!(
+            is_protected_source_path(&other_app, &[], &[], &[], app_roots),
+            "应用数据根下的其它目录必须拒绝"
+        );
+        assert!(
+            !is_protected_source_path(&books, &[], &[], data_dirs, app_roots),
+            "普通书库不得被误判"
+        );
+
+        let wide_dirs = std::slice::from_ref(&books);
+        assert!(
+            is_protected_source_path(&base, &[], wide_dirs, &[], &[]),
+            "宽目录的祖先必须拒绝"
+        );
+        assert!(
+            !is_protected_source_path(&volume, &[], wide_dirs, &[], &[]),
+            "宽目录的子目录必须允许"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 
     fn tiny_png(path: &Path) {

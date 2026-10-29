@@ -1049,8 +1049,11 @@ export function checkActionsPinned(root, report) {
     for (const line of source.split(/\r?\n/)) {
       const match = line.match(/uses:\s*([^\s#]+)/);
       if (!match) continue;
-      count += 1;
       const ref = match[1];
+      // 本地可复用工作流 / 本地 action（`./...`）与调用方是同一个 commit，
+      // 不存在"版本漂移"的问题，因此不能要求 40 位 SHA。
+      if (ref.startsWith("./")) continue;
+      count += 1;
       const sha = ref.match(/@([0-9a-f]{40})$/);
       if (!sha) {
         errors.push(`${name}: ${ref} 未固定到 40 位 commit SHA`);

@@ -718,3 +718,42 @@ test("qa-full：证据来源必须是实际检出的提交，且无效引用必�
   // 解析失败必须让作业失败（set -euo pipefail + 非零退出码）。
   assert.match(source, /set -euo pipefail/, "解析步骤必须在严格模式下运行");
 });
+
+test("L2 门禁：qa-l2 对 PR head 跑完整 QA，并用登记表判定；P0/P1 不得登记豁免", () => {
+  const source = workflow("qa-l2.yml");
+  assert.match(
+    source,
+    /uses: \.\/\.github\/workflows\/qa-full\.yml/,
+    "L2 必须复用 qa-full，而不是另写一套 QA",
+  );
+  assert.match(
+    source,
+    /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/,
+    "L2 必须对 PR 的 head 提交跑回归（短 SHA 不受支持）",
+  );
+  assert.match(source, /qa-gate\.mjs/, "L2 必须用登记表门禁判定，而不是直接看 QA 退出码");
+  assert.match(
+    source,
+    /qa-evidence-\$\{\{ github\.event\.pull_request\.head\.sha \}\}/,
+    "门禁必须读取与 head 绑定的证据",
+  );
+
+  // 登记表本身：字段完整、不得登记 P0/P1 豁免。
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const registryRaw = fs.readFileSync(
+    path.join(repoRoot, "scripts/release-governance/qa-known-issues.json"),
+    "utf8",
+  );
+  const registry = JSON.parse(registryRaw);
+  assert.ok(Array.isArray(registry.issues), "登记表必须有 issues 数组");
+  for (const issue of registry.issues) {
+    for (const field of ["id", "scope", "evidence", "owner", "reviewBy"]) {
+      assert.ok(String(issue[field] ?? "").trim(), `登记表条目 ${issue.id ?? "?"} 缺少 ${field}`);
+    }
+    assert.ok(
+      !["P0", "P1"].includes(String(issue.severity ?? "").toUpperCase()),
+      `登记表不得为 ${issue.id} 登记 ${issue.severity} 豁免（P0/P1 永不豁免）`,
+    );
+    assert.match(String(issue.reviewBy), /^\d{4}-\d{2}-\d{2}$/, `登记表条目 ${issue.id} 的 reviewBy 必须是日期`);
+  }
+});

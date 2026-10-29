@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "说明": [
+    "L2 全量 QA 的已知问题登记表。豁免必须绑定：缺陷 ID、影响范围、证据、责任人、复查日期。",
+    "P0 / P1 永远不得登记为豁免——qa-gate 会直接判失败。",
+    "reviewBy 到期后 qa-gate 判失败，强制重新评估：要么修掉，要么续期并更新证据。",
+    "blocksRelease=true 表示该问题不阻断 L2 合并门禁，但在 L3 发布验收时必须单独结论。"
+  ],
+  "issues": [
+    {
+      "id": "pdf:worker-network-observed",
+      "severity": "P2",
+      "status": "accepted-test-defect",
+      "scope": "仅测试观测机制：qa 观测器用 CDP 的 HTTP /json/list 枚举 target，而 Chromium/WebView2 的该端点不暴露专用 Worker target，因此 pdf.js worker 永远枚举不到（workerTargets=0）。不影响 PDF 阅读功能，也不影响主上下文的网络观察（mainNetworkEnabled=true）。",
+      "evidence": "自 #97 引入该检查以来从未通过；基线 8f04b85 与最新 main 8c92ed7 的全量 QA 都只有这一项红（259/260，结论 success）；同一份报告里 pdf 渲染/进度/安全策略等检查全部通过，且应用以 worker: workerHandle.worker 自带专用 worker（src/features/pdf/document.ts）。",
+      "owner": "D-OneXXX",
+      "reviewBy": "2026-11-30",
+      "blocksRelease": false,
+      "复查条件": "改用 CDP Target 域（Target.setDiscoverTargets）能枚举到 worker 且仍失败，或 pdf 渲染相关检查出现失败时，必须升级为产品缺陷调查。"
+    }
+  ]
+}

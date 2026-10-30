@@ -765,14 +765,39 @@ pub fn list_books(conn: &Connection, query: Option<&str>) -> Result<Vec<BookRow>
     Ok(out)
 }
 
+/// 进度是否**真的**发生变化（比较两个被持久化的字段）。
+///
+/// `set_progress` 与 `set_progress_cas` **必须共用**这一判定：
+/// 否则会出现"一边短路、一边不短路"，`progress_rev` 的
+/// 「当且仅当进度变化才 +1」不变量随即失真。
+///
+/// 百分比用**位级**比较：写入值与读回值同为 IEEE754 double，往返精确；
+/// 位比较也避免"极小差值"被误判成"没变"。
+pub fn progress_changed(current_page: u32, current_pct: f64, new_page: u32, new_pct: f64) -> bool {
+    current_page != new_page || current_pct.to_bits() != new_pct.to_bits()
+}
+
+/// CAS 条件进度写入的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgressOutcome {
+    /// 已达到目标状态（可能写了一行，也可能本来就是这个状态）。
+    /// `rev` 是**操作后**的版本号：真实写入时 +1；本来就是目标状态时不变。
+    Applied { rev: i64 },
+    /// 版本过期：`base_rev` 与库中当前版本不一致，**未写入任何东西**
+    /// （含 `books` 与 `reading_log`）。
+    Conflict { current_page: u32, current_rev: i64 },
+    /// 书不存在。
+    NotFound,
+}
+
 /// 设置进度并把"前进页数"计入当日 `reading_log`（只增不减，避免回翻刷榜）。
 /// `pct`：条漫模式的滚动偏移百分比（0.0..1.0）；分页模式传 None（清为 -1）。
 ///
 /// **no-op 短路（W2）**：被持久化的进度字段只有 `current_page` 与 `scroll_pct`。
-/// 两者都没变时直接返回——不执行 UPDATE、不刷新 `updated_at`、不写 `reading_log`。
-/// 桌面阅读器在分页模式下会每 500 ms 提交一次**相同**进度（W1 实测 2.00 Hz），
-/// 这些空转写既刷新 `updated_at`（影响"最近阅读"排序与恢复位置仲裁），
-/// 又会让后续基于版本号的乐观并发抖动。
+/// 两者都没变时直接返回——不执行 UPDATE、不刷新 `updated_at`、不 bump `progress_rev`、
+/// 不写 `reading_log`。桌面阅读器在分页模式下会每 500 ms 提交一次**相同**进度
+/// （W1 实测 2.00 Hz），空转写既刷新 `updated_at` 又会让后续基于版本号的
+/// 乐观并发抖动。
 /// 行不存在时不短路，保留既有错误语义（`page=0` 静默命中 0 行、`page>0` 外键失败）。
 pub fn set_progress(
     conn: &Connection,
@@ -791,9 +816,7 @@ pub fn set_progress(
         )
         .ok();
     if let Some((prev_page, prev_pct)) = prev {
-        // 位级比较：写入值与读回值同为 IEEE754 double，往返精确；
-        // 位比较也避免"极小差值"被误判成"没变"。
-        if prev_page.max(0) as u32 == page && prev_pct.to_bits() == pct_val.to_bits() {
+        if !progress_changed(prev_page.max(0) as u32, prev_pct, page, pct_val) {
             tx.commit()?;
             return Ok(());
         }
@@ -820,6 +843,97 @@ pub fn set_progress(
     }
     tx.commit()?;
     Ok(())
+}
+
+/// 条件进度写入（CAS）：只有当库中进度版本仍等于 `base_rev` 时才写入。
+///
+/// 供未来的多端并发场景使用（桌面端与浏览器端同时写同一本书）。
+/// 与 [`set_progress`] 的关系：
+/// - 桌面端是单写者，**不需要** CAS，既有 `set_progress` 保持不变；
+/// - 两条路径**共用** [`progress_changed`] 判定，保证 `progress_rev` 的
+///   「当且仅当进度变化才 +1」不变量在两条路径上一致；
+/// - 本函数**不做页码钳制**——与 `set_progress` 一致，钳制由调用方按
+///   `clamp_reading_page` 语义完成（命令层既有做法）。
+///
+/// 事务用 **`BEGIN IMMEDIATE`**（不是 DEFERRED）：CAS 必须先读后写，
+/// 而 DEFERRED 事务在 WAL 下从读锁升级到写锁时，若期间有别的连接提交，
+/// 会返回 `SQLITE_BUSY_SNAPSHOT`——`busy_timeout` 对这种快照冲突**不重试**。
+/// 仓库已有 `BEGIN IMMEDIATE` + 显式 `COMMIT`/`ROLLBACK` 的先例
+/// （本文件的 `reading_log` 迁移段）。
+pub fn set_progress_cas(
+    conn: &Connection,
+    id: &str,
+    page: u32,
+    pct: Option<f64>,
+    base_rev: i64,
+) -> Result<ProgressOutcome, BackendError> {
+    let pct_val = pct.unwrap_or(-1.0).clamp(-1.0, 1.0);
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let outcome = (|| -> Result<ProgressOutcome, BackendError> {
+        // 在写锁内读出被确认的那一行：版本、页码、条漫百分比。
+        let current: Option<(i64, f64, i64)> = conn
+            .query_row(
+                "SELECT current_page, scroll_pct, progress_rev FROM books WHERE id=?1",
+                params![id],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, f64>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .ok();
+        let Some((cur_page, cur_pct, cur_rev)) = current else {
+            return Ok(ProgressOutcome::NotFound);
+        };
+        if cur_rev != base_rev {
+            return Ok(ProgressOutcome::Conflict {
+                current_page: cur_page.max(0) as u32,
+                current_rev: cur_rev,
+            });
+        }
+        let cur_page = cur_page.max(0) as u32;
+        // 已经是目标状态：不写、不 bump rev，返回当前版本（幂等）。
+        if !progress_changed(cur_page, cur_pct, page, pct_val) {
+            return Ok(ProgressOutcome::Applied { rev: cur_rev });
+        }
+        // 条件更新：版本必须仍等于 base_rev。写锁在手，这一步在理论上必然命中；
+        // `changes() == 0` 作为第二道防线，绝不静默覆盖。
+        let updated = conn.execute(
+            "UPDATE books SET current_page=?1, scroll_pct=?2, updated_at=?3,
+                progress_rev=progress_rev+1
+             WHERE id=?4 AND progress_rev=?5",
+            params![page as i64, pct_val, now_str(), id, base_rev],
+        )?;
+        if updated == 0 {
+            return Ok(ProgressOutcome::Conflict {
+                current_page: cur_page,
+                current_rev: cur_rev,
+            });
+        }
+        // reading_log 的增量必须由**被确认的那一行**算出来——
+        // 不是客户端记忆，也不是另一次读。多端并发时算错就会重复计数。
+        if page > cur_page {
+            let delta = (page - cur_page) as i64;
+            conn.execute(
+                "INSERT INTO reading_log(date, book_id, pages) VALUES (?1, ?2, ?3)
+                 ON CONFLICT DO UPDATE SET pages = reading_log.pages + excluded.pages",
+                params![today_str(), id, delta],
+            )?;
+        }
+        Ok(ProgressOutcome::Applied { rev: cur_rev + 1 })
+    })();
+    match outcome {
+        Ok(result) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(result)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
 }
 
 /// 记录「最近打开」（方案 C）：**只**写 `last_opened_at`。
@@ -2666,5 +2780,210 @@ mod tests {
         assert!(!row.last_opened_at.is_empty(), "新书必须有 last_opened_at");
         assert_eq!(row.updated_at, "", "从未读过的书不得有 updated_at");
         assert_eq!(row.progress_rev, 0);
+    }
+
+    // ── W4：CAS 条件进度写入 ──────────────────────────────────────────
+
+    /// 钉住 `updated_at` 哨兵：秒级精度下无法用"值不等"判定"有没有写过"。
+    fn pin_updated_at(conn: &Connection, id: &str) {
+        conn.execute(
+            "UPDATE books SET updated_at='1999-01-01 00:00:00' WHERE id=?1",
+            params![id],
+        )
+        .expect("钉住时间戳");
+    }
+
+    /// W4：CAS 成功写入 ⇒ rev +1、`updated_at` 刷新、历史按前进量记录。
+    #[test]
+    fn cas_applies_and_bumps_rev() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        let base = get_book(&conn, "b1").unwrap().unwrap().progress_rev;
+
+        let outcome = set_progress_cas(&conn, "b1", 5, None, base).unwrap();
+        assert_eq!(outcome, ProgressOutcome::Applied { rev: base + 1 });
+
+        let row = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(row.current_page, 5, "页码必须落库");
+        assert_eq!(row.progress_rev, base + 1, "进度变化必须 bump rev");
+        assert_eq!(reading_log_total(&conn, "b1"), 5, "前进 5 页必须记 5");
+    }
+
+    /// W4：版本过期 ⇒ `books` / `reading_log` / `updated_at` / rev **逐项不变**。
+    #[test]
+    fn cas_conflict_leaves_everything_untouched() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        set_progress(&conn, "b1", 3, None).unwrap();
+        let base = get_book(&conn, "b1").unwrap().unwrap().progress_rev;
+        // 把库推到 base+1，客户端手里的 base 就过期了。
+        set_progress(&conn, "b1", 4, None).unwrap();
+        pin_updated_at(&conn, "b1");
+        let log_before = reading_log_total(&conn, "b1");
+
+        let outcome = set_progress_cas(&conn, "b1", 20, None, base).unwrap();
+        assert_eq!(
+            outcome,
+            ProgressOutcome::Conflict {
+                current_page: 4,
+                current_rev: base + 1
+            }
+        );
+
+        let after = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(after.current_page, 4, "冲突不得改动页码");
+        assert_eq!(
+            after.updated_at, "1999-01-01 00:00:00",
+            "冲突不得刷新 updated_at"
+        );
+        assert_eq!(after.progress_rev, base + 1, "冲突不得增加 rev");
+        assert_eq!(
+            reading_log_total(&conn, "b1"),
+            log_before,
+            "冲突不得写阅读历史"
+        );
+    }
+
+    /// W4：书不存在 ⇒ NotFound（不创建行、不写历史）。
+    #[test]
+    fn cas_reports_not_found() {
+        let conn = mem();
+        assert_eq!(
+            set_progress_cas(&conn, "缺失", 1, None, 0).unwrap(),
+            ProgressOutcome::NotFound
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "不得凭空创建书行");
+    }
+
+    /// W4：同一个 base_rev 写两次 ⇒ 第二次必为冲突（绝不静默覆盖）。
+    #[test]
+    fn cas_same_base_rev_twice_second_is_conflict() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        let base = get_book(&conn, "b1").unwrap().unwrap().progress_rev;
+
+        assert_eq!(
+            set_progress_cas(&conn, "b1", 3, None, base).unwrap(),
+            ProgressOutcome::Applied { rev: base + 1 }
+        );
+        assert_eq!(
+            set_progress_cas(&conn, "b1", 9, None, base).unwrap(),
+            ProgressOutcome::Conflict {
+                current_page: 3,
+                current_rev: base + 1
+            },
+            "过期 base 必须冲突，绝不静默覆盖"
+        );
+        assert_eq!(get_book(&conn, "b1").unwrap().unwrap().current_page, 3);
+    }
+
+    /// W4：两个写者交替 ⇒ 历史增量之和 == 真实前进页数（**不重复计数**）。
+    #[test]
+    fn cas_two_writers_do_not_double_count() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        let base = get_book(&conn, "b1").unwrap().unwrap().progress_rev;
+
+        // A 前进到 5。
+        assert_eq!(
+            set_progress_cas(&conn, "b1", 5, None, base).unwrap(),
+            ProgressOutcome::Applied { rev: base + 1 }
+        );
+        // B 拿着同一个 base 写 3 ⇒ 冲突，不写历史。
+        assert!(matches!(
+            set_progress_cas(&conn, "b1", 3, None, base).unwrap(),
+            ProgressOutcome::Conflict { .. }
+        ));
+        // B 重新取版本后前进到 7 ⇒ 增量按**被确认的那一行**算：7 - 5 = 2。
+        let b_base = get_book(&conn, "b1").unwrap().unwrap().progress_rev;
+        assert_eq!(
+            set_progress_cas(&conn, "b1", 7, None, b_base).unwrap(),
+            ProgressOutcome::Applied { rev: b_base + 1 }
+        );
+        assert_eq!(
+            reading_log_total(&conn, "b1"),
+            7,
+            "两写者交替后历史必须等于真实前进页数，不能重复计数"
+        );
+    }
+
+    /// W4：目标状态已达成 ⇒ 幂等返回，不写库、不 bump rev。
+    #[test]
+    fn cas_noop_does_not_write_or_bump_rev() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        set_progress(&conn, "b1", 4, None).unwrap();
+        let rev = get_book(&conn, "b1").unwrap().unwrap().progress_rev;
+        pin_updated_at(&conn, "b1");
+
+        let outcome = set_progress_cas(&conn, "b1", 4, None, rev).unwrap();
+        assert_eq!(
+            outcome,
+            ProgressOutcome::Applied { rev },
+            "已是目标状态必须幂等返回当前版本"
+        );
+        let after = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(after.updated_at, "1999-01-01 00:00:00", "no-op 不得写库");
+        assert_eq!(after.progress_rev, rev, "no-op 不得 bump rev");
+    }
+
+    /// W4：并发写者 ⇒ 恰好一个成功、另一个冲突，**不得**出现 `SQLITE_BUSY_SNAPSHOT`。
+    #[test]
+    fn cas_concurrent_writers_conflict_instead_of_busy_snapshot() {
+        let path = unique_temp_db("cas-race");
+        {
+            let conn = open(&path).expect("打开临时库");
+            init_schema(&conn).expect("建表");
+            upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        }
+        let base = {
+            let conn = open(&path).unwrap();
+            get_book(&conn, "b1").unwrap().unwrap().progress_rev
+        };
+
+        let results: Vec<Result<ProgressOutcome, String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..2u32)
+                .map(|i| {
+                    let path = path.clone();
+                    scope.spawn(move || {
+                        let conn = open(&path).expect("打开连接");
+                        set_progress_cas(&conn, "b1", 5 + i, None, base)
+                            .map_err(|e| format!("{e:?}"))
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("线程结束"))
+                .collect()
+        });
+
+        let applied = results
+            .iter()
+            .filter(|r| matches!(r, Ok(ProgressOutcome::Applied { .. })))
+            .count();
+        let conflicts = results
+            .iter()
+            .filter(|r| matches!(r, Ok(ProgressOutcome::Conflict { .. })))
+            .count();
+        assert_eq!(applied, 1, "并发下必须恰好一个成功：{results:?}");
+        assert_eq!(conflicts, 1, "另一个必须以冲突表达：{results:?}");
+        assert!(
+            results.iter().all(|r| r.is_ok()),
+            "不得出现 SQLITE_BUSY_SNAPSHOT：{results:?}"
+        );
+
+        {
+            let conn = open(&path).unwrap();
+            let total = reading_log_total(&conn, "b1");
+            assert!(
+                total == 5 || total == 6,
+                "历史必须是胜者的那一次增量，不得重复计数（实际 {total}）"
+            );
+        }
+        cleanup_db_files(&path);
     }
 }

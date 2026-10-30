@@ -240,6 +240,19 @@ function canonicalRecents(parsed: unknown): unknown | null {
 }
 
 /**
+ * W6 能力探针的心跳样本：必须是有限数值的数组（截断到最近 240 个）。
+ * 与 `src/web/CapabilityProbe.tsx` 的写入形态保持一致。
+ */
+function canonicalProbeTicks(parsed: unknown): unknown | null {
+  if (!Array.isArray(parsed)) return null;
+  const numbers = parsed.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+  if (numbers.length === 0) return null;
+  return numbers.slice(-240);
+}
+
+/**
  * 已知键注册表：键 -> 合法值 + 修复策略。
  * 键名与取值全部对照真实代码（ThemeProvider / i18n / tauri / Reader / Browser / Library /
  * onlineLastTest / PrivacyDialog），不在此表的键只会命中动态前缀或被当作未知键删除。
@@ -271,6 +284,11 @@ const KEY_RULES: Record<string, Rule> = {
   // 书库分组 / 来源筛选（pages/Library.tsx）。
   "mr-library-group-series": flagRule("书库分组开关"),
   "mr-library-source-filter": enumRule(["all", "local", "online"], "书库来源筛选"),
+  // W6 能力探针（src/web/CapabilityProbe.tsx）：心跳样本与访问次数。
+  // 探针只在 Web 入口的 ?probe=1 下可达，但键名仍须登记——
+  // 未登记的键会被清洗器当作"未知键"删除，用户状态在启动时静默丢失。
+  "mr-probe-ticks": jsonRule("W6 能力探针心跳样本", canonicalProbeTicks),
+  "mr-probe-visits": numberRule(0, 1000000, "W6 能力探针访问次数"),
 };
 
 /** 已知键清单（QA 断言用）。 */

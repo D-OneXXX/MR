@@ -707,6 +707,13 @@ pub fn list_books(conn: &Connection, query: Option<&str>) -> Result<Vec<BookRow>
 
 /// 设置进度并把"前进页数"计入当日 `reading_log`（只增不减，避免回翻刷榜）。
 /// `pct`：条漫模式的滚动偏移百分比（0.0..1.0）；分页模式传 None（清为 -1）。
+///
+/// **no-op 短路（W2）**：被持久化的进度字段只有 `current_page` 与 `scroll_pct`。
+/// 两者都没变时直接返回——不执行 UPDATE、不刷新 `updated_at`、不写 `reading_log`。
+/// 桌面阅读器在分页模式下会每 500 ms 提交一次**相同**进度（W1 实测 2.00 Hz），
+/// 这些空转写既刷新 `updated_at`（影响"最近阅读"排序与恢复位置仲裁），
+/// 又会让后续基于版本号的乐观并发抖动。
+/// 行不存在时不短路，保留既有错误语义（`page=0` 静默命中 0 行、`page>0` 外键失败）。
 pub fn set_progress(
     conn: &Connection,
     id: &str,
@@ -714,22 +721,31 @@ pub fn set_progress(
     pct: Option<f64>,
 ) -> Result<(), BackendError> {
     let tx = conn.unchecked_transaction()?;
-    let prev: u32 = tx
-        .query_row(
-            "SELECT current_page FROM books WHERE id=?1",
-            params![id],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|v| v.max(0) as u32)
-        .unwrap_or(0);
-    let now = now_str();
     let pct_val = pct.unwrap_or(-1.0).clamp(-1.0, 1.0);
+    // 一次性读出两个被持久化的进度字段；行不存在时为 None。
+    let prev: Option<(i64, f64)> = tx
+        .query_row(
+            "SELECT current_page, scroll_pct FROM books WHERE id=?1",
+            params![id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?)),
+        )
+        .ok();
+    if let Some((prev_page, prev_pct)) = prev {
+        // 位级比较：写入值与读回值同为 IEEE754 double，往返精确；
+        // 位比较也避免"极小差值"被误判成"没变"。
+        if prev_page.max(0) as u32 == page && prev_pct.to_bits() == pct_val.to_bits() {
+            tx.commit()?;
+            return Ok(());
+        }
+    }
+    let prev_page = prev.map(|(p, _)| p.max(0) as u32).unwrap_or(0);
+    let now = now_str();
     tx.execute(
         "UPDATE books SET current_page=?1, scroll_pct=?2, updated_at=?3 WHERE id=?4",
         params![page as i64, pct_val, now, id],
     )?;
-    if page > prev {
-        let delta = (page - prev) as i64;
+    if page > prev_page {
+        let delta = (page - prev_page) as i64;
         let today = today_str();
         // reading_log 的唯一约束是表达式索引 (date, COALESCE(book_id,''))，
         // 不能用 (date, book_id) 作为 conflict target；无目标 UPSERT 对所有
@@ -2206,5 +2222,163 @@ mod tests {
             vec![(today_str(), 4)],
             "其它书的阅读历史不得被影响"
         );
+    }
+
+    // ── W2：set_progress 的 no-op 短路回归 ──────────────────────────────
+    //
+    // 背景：桌面阅读器在分页模式下每 500 ms 提交一次相同进度（W1 实测 2.00 Hz）。
+    // 短路要求"两个被持久化的进度字段都没变"时不写库。
+    //
+    // 断言主仪器是**哨兵时间戳**：`updated_at` 只可能被 `set_progress` 的 UPDATE
+    // 改写，所以把它钉成一个不可能与真实时间相等的值，就能直接判定"有没有发生
+    // UPDATE"。这比计数接口更可靠——`updated_at` 只有秒级精度，靠时间戳差分
+    // 判"写没写"会漏判；而 rusqlite 0.31 也没有 `total_changes()`。
+
+    const SENTINEL_TS: &str = "1999-01-01 00:00:00";
+
+    /// 取书当前的 (current_page, scroll_pct, updated_at)。
+    fn progress_row(conn: &Connection, id: &str) -> (i64, f64, String) {
+        conn.query_row(
+            "SELECT current_page, scroll_pct, updated_at FROM books WHERE id=?1",
+            params![id],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .expect("读取进度行")
+    }
+
+    /// 把 `updated_at` 钉成哨兵值；之后它若发生变化，即说明发生了 UPDATE。
+    fn pin_timestamp(conn: &Connection, id: &str) {
+        conn.execute(
+            "UPDATE books SET updated_at=?2 WHERE id=?1",
+            params![id, SENTINEL_TS],
+        )
+        .expect("钉住时间戳");
+    }
+
+    /// 某书的阅读历史累计页数。
+    fn reading_log_total(conn: &Connection, id: &str) -> i64 {
+        conn.query_row(
+            "SELECT COALESCE(SUM(pages),0) FROM reading_log WHERE book_id=?1",
+            params![id],
+            |r| r.get::<_, i64>(0),
+        )
+        .expect("读取阅读历史")
+    }
+
+    /// T1：相同进度不重复写库。
+    #[test]
+    fn set_progress_does_not_write_when_nothing_changed() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        set_progress(&conn, "b1", 7, None).unwrap();
+        let (page, pct, _) = progress_row(&conn, "b1");
+
+        pin_timestamp(&conn, "b1");
+        set_progress(&conn, "b1", 7, None).unwrap();
+        set_progress(&conn, "b1", 7, None).unwrap();
+
+        let (page2, pct2, updated_at2) = progress_row(&conn, "b1");
+        assert_eq!(
+            updated_at2, SENTINEL_TS,
+            "相同进度不得写库（哨兵时间戳未被覆盖即证明没有 UPDATE）"
+        );
+        assert_eq!((page2, pct2), (page, pct), "进度值不得被改动");
+    }
+
+    /// T2：进度真的变化时照常写入。
+    #[test]
+    fn set_progress_writes_when_progress_changes() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        pin_timestamp(&conn, "b1");
+
+        set_progress(&conn, "b1", 7, None).unwrap();
+
+        let (page, pct, updated_at) = progress_row(&conn, "b1");
+        assert_eq!(page, 7, "页码必须落库");
+        assert_eq!(pct, -1.0, "分页模式必须把条漫百分比清为 -1");
+        assert_ne!(updated_at, SENTINEL_TS, "真实变化必须写库并刷新 updated_at");
+    }
+
+    /// T3：`updated_at` 只在真实变化时更新（含"仅百分比变化"这一路）。
+    #[test]
+    fn set_progress_refreshes_timestamp_only_on_real_change() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        set_progress(&conn, "b1", 7, Some(0.25)).unwrap();
+
+        // 同页、同百分比 → 不得写库。
+        pin_timestamp(&conn, "b1");
+        set_progress(&conn, "b1", 7, Some(0.25)).unwrap();
+        assert_eq!(
+            progress_row(&conn, "b1").2,
+            SENTINEL_TS,
+            "百分比未变时不得写库"
+        );
+
+        // 仅百分比变化 → 必须写库（页码不动）。
+        set_progress(&conn, "b1", 7, Some(0.5)).unwrap();
+        let (page, pct, updated_at) = progress_row(&conn, "b1");
+        assert_eq!(page, 7, "页码不得被百分比写入改动");
+        assert!((pct - 0.5).abs() < 1e-9, "百分比必须落库");
+        assert_ne!(updated_at, SENTINEL_TS, "百分比变化必须写库");
+    }
+
+    /// T4：`reading_log` 语义保持不变（前进 +1 / 回翻 +0 / 重复 +0 / 跳页记差值）。
+    #[test]
+    fn set_progress_keeps_reading_log_semantics() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+
+        set_progress(&conn, "b1", 1, None).unwrap();
+        assert_eq!(reading_log_total(&conn, "b1"), 1, "前进一页必须记 +1");
+
+        set_progress(&conn, "b1", 0, None).unwrap();
+        assert_eq!(reading_log_total(&conn, "b1"), 1, "回翻不得计入历史");
+
+        set_progress(&conn, "b1", 0, None).unwrap();
+        assert_eq!(reading_log_total(&conn, "b1"), 1, "同页重复写不得计入历史");
+
+        set_progress(&conn, "b1", 5, None).unwrap();
+        assert_eq!(reading_log_total(&conn, "b1"), 6, "跳页必须记差值");
+    }
+
+    /// 行不存在时不得短路：既有分裂语义原样保留。
+    #[test]
+    fn set_progress_keeps_missing_book_semantics() {
+        let conn = mem();
+        // page=0：UPDATE 命中 0 行且不写历史 → 静默成功（既有行为）。
+        set_progress(&conn, "missing", 0, None).unwrap();
+        // page>0：reading_log 外键失败 → 报错（既有行为）。
+        assert!(
+            set_progress(&conn, "missing", 1, None).is_err(),
+            "不存在的书 + page>0 必须报错"
+        );
+    }
+
+    /// T6：SQLite 完整性正常。
+    #[test]
+    fn set_progress_keeps_database_integrity() {
+        let path = unique_temp_db("noop-integrity");
+        {
+            let conn = open(&path).expect("打开临时库");
+            init_schema(&conn).expect("建表");
+            upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+            for page in 0..6u32 {
+                set_progress(&conn, "b1", page, None).unwrap();
+                set_progress(&conn, "b1", page, None).unwrap();
+            }
+            let check: String = conn
+                .query_row("PRAGMA quick_check", [], |r| r.get(0))
+                .expect("quick_check");
+            assert_eq!(check, "ok", "quick_check 必须通过");
+        }
+        cleanup_db_files(&path);
     }
 }

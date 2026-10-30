@@ -238,6 +238,8 @@ mod tests {
             page_count: 3,
             current_page: 0,
             updated_at: String::new(),
+            last_opened_at: String::new(),
+            progress_rev: 0,
             scroll_pct: -1.0,
             source_type: "local".into(),
             format: "image".into(),

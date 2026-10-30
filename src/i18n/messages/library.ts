@@ -4,6 +4,9 @@
  */
 const zhCN = {
   "library.summary": "共 {total} 本 · 在读 {reading} · 今日 {today} 页",
+  "library.sortAria": "排序方式",
+  "library.sortRecentOpened": "最近打开",
+  "library.sortRecentRead": "最近阅读",
   "library.searchPlaceholder": "搜索书名、合集…（Ctrl+K）",
   "library.searchAria": "搜索书名",
   "library.sourceFilterAria": "来源筛选",
@@ -119,6 +122,9 @@ type LibraryMessages = { [K in keyof typeof zhCN]: string };
 
 const zhTW: LibraryMessages = {
   "library.summary": "共 {total} 本 · 在讀 {reading} · 今日 {today} 頁",
+  "library.sortAria": "排序方式",
+  "library.sortRecentOpened": "最近開啟",
+  "library.sortRecentRead": "最近閱讀",
   "library.searchPlaceholder": "搜尋書名、合集…（Ctrl+K）",
   "library.searchAria": "搜尋書名",
   "library.sourceFilterAria": "來源篩選",
@@ -232,6 +238,9 @@ const zhTW: LibraryMessages = {
 
 const en: LibraryMessages = {
   "library.summary": "Books {total} · Reading {reading} · Today {today} pages",
+  "library.sortAria": "Sort",
+  "library.sortRecentOpened": "Recently opened",
+  "library.sortRecentRead": "Recently read",
   "library.searchPlaceholder": "Search titles, series… (Ctrl+K)",
   "library.searchAria": "Search titles",
   "library.sourceFilterAria": "Source filter",
@@ -356,6 +365,9 @@ const en: LibraryMessages = {
 
 const es: LibraryMessages = {
   "library.summary": "Libros {total} · Leyendo {reading} · Hoy {today} págs.",
+  "library.sortAria": "Orden",
+  "library.sortRecentOpened": "Abiertos recientemente",
+  "library.sortRecentRead": "Leídos recientemente",
   "library.searchPlaceholder": "Buscar títulos, series… (Ctrl+K)",
   "library.searchAria": "Buscar títulos",
   "library.sourceFilterAria": "Filtro de origen",
@@ -486,6 +498,9 @@ const es: LibraryMessages = {
 
 const ja: LibraryMessages = {
   "library.summary": "全 {total} 冊 · 読書中 {reading} · 今日 {today} ページ",
+  "library.sortAria": "並び順",
+  "library.sortRecentOpened": "最近開いた",
+  "library.sortRecentRead": "最近読んだ",
   "library.searchPlaceholder": "タイトル・シリーズを検索…（Ctrl+K）",
   "library.searchAria": "タイトルを検索",
   "library.sourceFilterAria": "ソースフィルター",
@@ -613,6 +628,9 @@ const ja: LibraryMessages = {
 
 const ko: LibraryMessages = {
   "library.summary": "전체 {total}권 · 읽는 중 {reading} · 오늘 {today}페이지",
+  "library.sortAria": "정렬",
+  "library.sortRecentOpened": "최근 연",
+  "library.sortRecentRead": "최근 읽음",
   "library.searchPlaceholder": "제목, 시리즈 검색… (Ctrl+K)",
   "library.searchAria": "제목 검색",
   "library.sourceFilterAria": "출처 필터",

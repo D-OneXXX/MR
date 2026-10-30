@@ -136,6 +136,9 @@ export default defineConfig(() => ({
       input: {
         main: fileURLToPath(new URL("./index.html", import.meta.url)),
         recovery: fileURLToPath(new URL("./recovery.html", import.meta.url)),
+        // Web Access 独立入口（W2 / BLK-2 验证原型）。
+        // 刻意与桌面入口分离：不共享 Provider 栈，不引入任何 Tauri IPC 依赖。
+        web: fileURLToPath(new URL("./web.html", import.meta.url)),
       },
     },
   },

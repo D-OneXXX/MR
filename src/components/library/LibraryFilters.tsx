@@ -1,14 +1,19 @@
-import { Layers, LayoutGrid } from "lucide-react";
+import { Clock, History, Layers, LayoutGrid } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 export type SourceFilter = "all" | "local" | "online";
+
+/** 方案 C：书库排序方式——「最近打开」或「最近阅读」。 */
+export type SortMode = "recentOpened" | "recentRead";
 
 interface Props {
   sourceFilter: SourceFilter;
   onSourceFilterChange: (filter: SourceFilter) => void;
   groupSeries: boolean;
   onGroupSeriesChange: (grouped: boolean) => void;
+  sortMode: SortMode;
+  onSortModeChange: (mode: SortMode) => void;
 }
 
 const CHIP =
@@ -17,12 +22,14 @@ const CHIP_ON =
   "border-border bg-primary text-primary-foreground shadow-hard-sm";
 const CHIP_OFF = "text-muted-foreground hover:bg-accent hover:text-foreground";
 
-/** 来源分段胶囊 + 合集/平铺切换，全部保留为可访问的 aria-pressed 按钮。 */
+/** 来源分段胶囊 + 合集/平铺切换 + 排序方式，全部保留为可访问的 aria-pressed 按钮。 */
 export default function LibraryFilters({
   sourceFilter,
   onSourceFilterChange,
   groupSeries,
   onGroupSeriesChange,
+  sortMode,
+  onSortModeChange,
 }: Props) {
   const { t } = useI18n();
   const sourceOptions: { key: SourceFilter; label: string }[] = [
@@ -78,6 +85,31 @@ export default function LibraryFilters({
         >
           <LayoutGrid className="size-3.5" />
           {t("library.flat")}
+        </button>
+      </div>
+
+      <div
+        role="group"
+        aria-label={t("library.sortAria")}
+        className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-full border border-border bg-card p-1 shadow-hard-sm"
+      >
+        <button
+          type="button"
+          aria-pressed={sortMode === "recentOpened"}
+          onClick={() => onSortModeChange("recentOpened")}
+          className={cn(CHIP, sortMode === "recentOpened" ? CHIP_ON : CHIP_OFF)}
+        >
+          <Clock className="size-3.5" />
+          {t("library.sortRecentOpened")}
+        </button>
+        <button
+          type="button"
+          aria-pressed={sortMode === "recentRead"}
+          onClick={() => onSortModeChange("recentRead")}
+          className={cn(CHIP, sortMode === "recentRead" ? CHIP_ON : CHIP_OFF)}
+        >
+          <History className="size-3.5" />
+          {t("library.sortRecentRead")}
         </button>
       </div>
     </>

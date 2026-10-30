@@ -571,6 +571,9 @@ export default function Reader() {
             return;
           }
           ws.reportBook(b.id, b.title);
+          // 方案 C：记录「最近打开」。只写 last_opened_at —— 不动 updated_at /
+          // progress_rev，也不产生任何阅读历史事件。
+          void api.markBookOpened(b.id).catch(() => {});
           // PDF（PDF-2）：页数由 pdf.js 解析，入库时留 0 —— 必须先打开文档
           // 才知道真实页数，页码恢复也按真实页数钳制。
           if (b.format === "pdf") {

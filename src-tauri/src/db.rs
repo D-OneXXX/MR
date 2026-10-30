@@ -2944,21 +2944,29 @@ mod tests {
             get_book(&conn, "b1").unwrap().unwrap().progress_rev
         };
 
+        // **串行**打开全部连接，再让线程并发执行 CAS 写入。
+        //
+        // 若让多个线程同时**首次**打开同一个文件，WAL 的 -shm 共享内存会互相踩：
+        // 后开的连接可能因拿不到可写的 -shm 而被 SQLite **静默降级为只读**，
+        // 随后的写入报 `attempt to write a readonly database`（SQLITE_READONLY）。
+        // 那是**连接打开时机**的竞态，不是 CAS 的问题——失败轮里 CAS 逻辑根本没执行到。
+        // 生产上应用只有一条连接（`DbSlot` 加锁串行访问），不存在这个竞态；
+        // 但若将来引入连接池，池初始化必须串行完成 WAL 初始化。
+        let _keeper = open(&path).expect("打开应用侧连接");
+        let conn_a = open(&path).expect("打开写者 A");
+        let conn_b = open(&path).expect("打开写者 B");
+
         let results: Vec<Result<ProgressOutcome, String>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..2u32)
-                .map(|i| {
-                    let path = path.clone();
-                    scope.spawn(move || {
-                        let conn = open(&path).expect("打开连接");
-                        set_progress_cas(&conn, "b1", 5 + i, None, base)
-                            .map_err(|e| format!("{e:?}"))
-                    })
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|handle| handle.join().expect("线程结束"))
-                .collect()
+            let h1 = scope.spawn(move || {
+                set_progress_cas(&conn_a, "b1", 5, None, base).map_err(|e| format!("{e:?}"))
+            });
+            let h2 = scope.spawn(move || {
+                set_progress_cas(&conn_b, "b1", 6, None, base).map_err(|e| format!("{e:?}"))
+            });
+            vec![
+                h1.join().expect("线程 A 结束"),
+                h2.join().expect("线程 B 结束"),
+            ]
         });
 
         let applied = results

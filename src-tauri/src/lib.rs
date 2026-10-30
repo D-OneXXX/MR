@@ -24,6 +24,7 @@ mod state;
 mod system_proxy;
 pub mod update;
 mod versioning;
+pub mod web_contract;
 pub use state::AppState;
 
 use serde::{Deserialize, Serialize};

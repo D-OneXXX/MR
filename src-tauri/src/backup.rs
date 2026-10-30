@@ -83,6 +83,10 @@ const BOOK_COLUMNS: &[&str] = &[
     "source_type",
     "meta_json",
     "format",
+    // W3（方案 C）：「最近打开」与进度修订号。
+    // 不进 BOOK_COLUMNS_REQUIRED —— 老备份没有这两列，进了就不可恢复。
+    "last_opened_at",
+    "progress_rev",
 ];
 
 /// 备份校验所需的**最小**列集合（不含 PDF-1 新增的 `format`）。
@@ -186,6 +190,10 @@ struct ValidatedBackup {
     skipped_books: Vec<SkippedBook>,
     /// 备份库的 books 表是否带 `format` 列（PDF-1 之前导出的备份没有）。
     backup_has_format: bool,
+    /// 备份库的 books 表是否带 W3（方案 C）新增的两列
+    /// `last_opened_at` 与 `progress_rev`。两列由同一次迁移加入，
+    /// 因此备份要么都有、要么都没有——一个 bool 即可。
+    backup_has_progress_columns: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -740,6 +748,7 @@ fn restore_backup_blocking(
         extracted.path(),
         &validated.allowed_books,
         validated.backup_has_format,
+        validated.backup_has_progress_columns,
     )?;
     let restored_counts = count_live_core_rows(db_path)?;
 
@@ -866,6 +875,10 @@ fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<Valida
 
     // 备份库实际有没有 `format` 列：决定复制语句是否带上该列。
     let backup_has_format = backup_has_format_column(&conn)?;
+    // W3（方案 C）新增的两列：老备份没有，复制语句必须剔除，
+    // 否则 `SELECT ... last_opened_at FROM backup_db.books` 会 no such column，
+    // **全部历史备份**恢复失败（活库不损坏，但恢复功能整体失效）。
+    let backup_has_progress_columns = backup_has_progress_columns_column(&conn)?;
 
     let counts = count_core_rows(&conn)?;
     if counts != manifest.counts {
@@ -920,6 +933,7 @@ fn validate_restored_db(path: &Path, manifest: &BackupManifest) -> Result<Valida
         allowed_books,
         skipped_books,
         backup_has_format,
+        backup_has_progress_columns,
     })
 }
 
@@ -928,6 +942,7 @@ fn apply_restore(
     backup_db: &Path,
     allowed_books: &[String],
     backup_has_format: bool,
+    backup_has_progress_columns: bool,
 ) -> Result<Option<PathBuf>, String> {
     let backup = backup_db
         .to_str()
@@ -942,7 +957,12 @@ fn apply_restore(
     let snapshot = snapshot_before_restore(&conn, db_path)?;
     conn.execute("ATTACH DATABASE ?1 AS backup_db", params![backup])
         .map_err(|e| format!("挂载备份数据库失败：{e}"))?;
-    let applied = copy_from_backup(&conn, allowed_books, backup_has_format);
+    let applied = copy_from_backup(
+        &conn,
+        allowed_books,
+        backup_has_format,
+        backup_has_progress_columns,
+    );
     let detached = conn
         .execute("DETACH DATABASE backup_db", [])
         .map_err(|e| format!("卸载备份数据库失败：{e}"));
@@ -1003,10 +1023,16 @@ fn copy_from_backup(
     conn: &Connection,
     allowed_books: &[String],
     backup_has_format: bool,
+    backup_has_progress_columns: bool,
 ) -> Result<(), String> {
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("开始恢复事务失败：{e}"))?;
-    match copy_all_tables(conn, allowed_books, backup_has_format) {
+    match copy_all_tables(
+        conn,
+        allowed_books,
+        backup_has_format,
+        backup_has_progress_columns,
+    ) {
         Ok(()) => match conn.execute_batch("COMMIT") {
             Ok(()) => Ok(()),
             Err(error) => {
@@ -1025,6 +1051,7 @@ fn copy_all_tables(
     conn: &Connection,
     allowed_books: &[String],
     backup_has_format: bool,
+    backup_has_progress_columns: bool,
 ) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS restore_allowed_books(id TEXT PRIMARY KEY);
@@ -1052,17 +1079,10 @@ fn copy_all_tables(
          INSERT INTO settings(k, v)
             SELECT k, v FROM backup_db.settings WHERE k IN ({keys});"
     );
-    // 备份库可能来自 PDF-1 之前（books 表没有 `format` 列）：
-    // 这时复制语句不带该列，活库表的 DEFAULT 'image' 生效。
-    let book_columns: Vec<&str> = if backup_has_format {
-        BOOK_COLUMNS.to_vec()
-    } else {
-        BOOK_COLUMNS
-            .iter()
-            .copied()
-            .filter(|column| *column != "format")
-            .collect()
-    };
+    // 备份库可能来自更早的版本（books 表没有 `format` / `last_opened_at` /
+    // `progress_rev` 列）：这些列不写进复制语句，活库表的 DEFAULT 生效。
+    // **少剔除一列就会让全部历史备份恢复失败**（no such column → 事务回滚）。
+    let book_columns = book_columns_for_backup(backup_has_format, backup_has_progress_columns);
     sql.push_str(&copy_sql_where(
         "books",
         &book_columns,
@@ -1145,6 +1165,32 @@ fn require_columns(conn: &Connection, table: &str, columns: &[&str]) -> Result<(
     Ok(())
 }
 
+/// 备份库缺哪些可选列，复制语句就**不带**哪些列。
+///
+/// 可选列有三批，按"引入它们的版本"分组：
+/// - `format`（PDF-1 引入）
+/// - `last_opened_at` / `progress_rev`（W3 方案 C 引入，两列同时存在）
+///
+/// 活库表的 DEFAULT 负责补上被剔除的列，因此**老备份必须仍然能恢复**。
+/// 反过来，漏剔除一列就会让恢复报 `no such column` 并整体回滚——
+/// 那会让**全部历史备份**不可恢复，故此函数单测逐列钉死。
+fn book_columns_for_backup(
+    backup_has_format: bool,
+    backup_has_progress_columns: bool,
+) -> Vec<&'static str> {
+    let mut columns: Vec<&'static str> = BOOK_COLUMNS.to_vec();
+    for (present, column) in [
+        (backup_has_format, "format"),
+        (backup_has_progress_columns, "last_opened_at"),
+        (backup_has_progress_columns, "progress_rev"),
+    ] {
+        if !present {
+            columns.retain(|c| *c != column);
+        }
+    }
+    columns
+}
+
 /// 备份库的 books 表是否带 `format` 列（PDF-1 之前导出的备份没有该列）。
 ///
 /// 只读探测备份库自身的表结构，决定复制语句是否带上 `format`。
@@ -1157,6 +1203,27 @@ fn backup_has_format_column(conn: &Connection) -> Result<bool, String> {
         )
         .map_err(|e| format!("读取备份表结构失败：{e}"))?;
     Ok(count > 0)
+}
+
+/// 备份库的 books 表是否带 W3（方案 C）新增的两列 `last_opened_at` 与 `progress_rev`。
+///
+/// 两列由同一次迁移加入，备份要么都有、要么都没有，因此一个 bool 即可；
+/// 这里要求**两列都在**才算有（只在一列时也按"没有"处理，宁可丢列也不让恢复失败）。
+///
+/// **必须**在**备份库自身的连接**上探测（`validate_restored_db` 打开备份文件的那条连接，
+/// 此时 `main` 就是备份库）。若搬到已 `ATTACH backup_db` 的活库连接上，
+/// 裸表名会按 `main` 优先命中**活库**、恒返回"有该列"，门控静默失效，
+/// 最终表现为**全部历史备份恢复失败**。
+fn backup_has_progress_columns_column(conn: &Connection) -> Result<bool, String> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('books')
+             WHERE name='last_opened_at' OR name='progress_rev'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("读取备份表结构失败：{e}"))?;
+    Ok(count == 2)
 }
 
 // ---------- 本地书源判定（目录 / 压缩包 / PDF） ----------
@@ -2344,6 +2411,121 @@ mod tests {
         assert_eq!(result.books, 0);
         assert_eq!(result.skipped_books.len(), 1);
         assert_eq!(result.skipped_books[0].reason, "path-not-book");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M-05a：列清单必须**逐列**剔除——备份缺哪列，复制语句就不带哪列。
+    ///
+    /// 漏剔除一列的后果不是"少一个字段"，而是恢复时报 `no such column`
+    /// 并整体回滚 ⇒ **全部历史备份不可恢复**。故逐列钉死。
+    #[test]
+    fn book_columns_exclude_missing_optional_columns() {
+        let full = book_columns_for_backup(true, true);
+        assert!(full.contains(&"format"));
+        assert!(full.contains(&"last_opened_at"));
+        assert!(full.contains(&"progress_rev"));
+
+        // PDF-1 之后 / W3 之前：真实历史备份的常见形态。
+        let mid = book_columns_for_backup(true, false);
+        assert!(mid.contains(&"format"), "PDF-1 之后的备份带 format 列");
+        assert!(
+            !mid.contains(&"last_opened_at"),
+            "W3 之前的备份不得带 last_opened_at 列"
+        );
+        assert!(
+            !mid.contains(&"progress_rev"),
+            "W3 之前的备份不得带 progress_rev 列"
+        );
+        assert!(mid.contains(&"updated_at"), "必需列必须始终保留");
+        assert!(mid.contains(&"current_page"));
+
+        // PDF-1 之前：连 format 都没有。
+        let oldest = book_columns_for_backup(false, false);
+        assert!(!oldest.contains(&"format"));
+        assert!(!oldest.contains(&"last_opened_at"));
+        assert!(!oldest.contains(&"progress_rev"));
+        assert!(oldest.contains(&"id"));
+        assert!(oldest.contains(&"path"));
+    }
+
+    /// M-05b：列探测必须在**备份库自己的连接**上做，且要能识别老备份。
+    ///
+    /// 陷阱：若在已 `ATTACH backup_db` 的**活库**连接上探测，裸表名会按 `main`
+    /// 优先命中活库 → 恒返回"有该列" → 门控静默失效 → 老备份恢复失败。
+    #[test]
+    fn progress_columns_probe_reads_the_backup_database_itself() {
+        let dir = temp_dir("probe-cols");
+        // PDF-1 之后 / W3 之前的备份库：有 format，没有 W3 两列。
+        let legacy_path = dir.join("legacy.db");
+        {
+            let conn = rusqlite::Connection::open(&legacy_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE books(id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+                    page_count INTEGER NOT NULL DEFAULT 0, current_page INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL DEFAULT '', removed INTEGER NOT NULL DEFAULT 0,
+                    scroll_pct REAL NOT NULL DEFAULT -1, source_type TEXT NOT NULL DEFAULT 'local',
+                    meta_json TEXT NOT NULL DEFAULT '{}', format TEXT NOT NULL DEFAULT 'image');",
+            )
+            .unwrap();
+        }
+        {
+            let conn = rusqlite::Connection::open(&legacy_path).unwrap();
+            assert!(backup_has_format_column(&conn).unwrap());
+            assert!(
+                !backup_has_progress_columns_column(&conn).unwrap(),
+                "老备份不得被判定为带 W3 两列"
+            );
+        }
+        // v3 备份库：两列都在。
+        let v3_path = dir.join("v3.db");
+        {
+            let conn = db::open(&v3_path).unwrap();
+            db::init_schema(&conn).unwrap();
+        }
+        {
+            let conn = rusqlite::Connection::open(&v3_path).unwrap();
+            assert!(backup_has_progress_columns_column(&conn).unwrap());
+        }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M-04：备份往返后 `last_opened_at` 与 `progress_rev` 必须原值保留。
+    #[test]
+    fn export_then_restore_preserves_progress_columns() {
+        let dir = temp_dir("roundtrip-cols");
+        let db_path = dir.join("library.db");
+        let book_dir = dir.join("books/b1");
+        fs::create_dir_all(&book_dir).unwrap();
+        {
+            let conn = db::open(&db_path).unwrap();
+            db::init_schema(&conn).unwrap();
+            db::upsert_book(&conn, "b1", &book_dir.to_string_lossy(), "第一卷", 30).unwrap();
+            db::set_progress(&conn, "b1", 12, Some(0.5)).unwrap();
+            conn.execute(
+                "UPDATE books SET last_opened_at='2026-05-05 05:05:05' WHERE id='b1'",
+                [],
+            )
+            .unwrap();
+        }
+        let backup = dir.join("s.mrbackup");
+        export_backup_blocking(&db_path, &backup, None, "9.9.9").unwrap();
+        {
+            // 破坏活库，确保恢复确实来自备份。
+            let conn = db::open(&db_path).unwrap();
+            conn.execute("DELETE FROM books", []).unwrap();
+            conn.execute("DELETE FROM reading_log", []).unwrap();
+        }
+        restore_backup_blocking(&db_path, &backup, true).unwrap();
+
+        let conn = db::open(&db_path).unwrap();
+        let row = db::get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(
+            row.last_opened_at, "2026-05-05 05:05:05",
+            "last_opened_at 必须原值保留"
+        );
+        assert_eq!(row.progress_rev, 1, "progress_rev 必须原值保留");
+        assert_eq!(row.current_page, 12, "页码必须原值保留");
+        assert_eq!(row.scroll_pct, 0.5, "条漫百分比必须原值保留");
         fs::remove_dir_all(&dir).ok();
     }
 }

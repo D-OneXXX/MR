@@ -101,7 +101,7 @@ pub fn find_book_id_by_path(conn: &Connection, path: &str) -> Result<Option<Stri
 /// 1 = 0.17.0 起：reading_log 可空外键 + 表达式唯一索引 + source_stats。
 /// 2 = PDF-1：books.format 记录书籍来源格式（image / pdf），增量 ALTER，老库默认 image。
 /// 只增不减；前向库（更高版本）保持原值，绝不降级。
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// 书籍来源格式：图片（目录 / `.zip` / `.cbz` / 在线书）。
 pub const BOOK_FORMAT_IMAGE: &str = "image";
@@ -135,7 +135,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
             scroll_pct REAL NOT NULL DEFAULT -1,
             source_type TEXT NOT NULL DEFAULT 'local',
             meta_json TEXT NOT NULL DEFAULT '{}',
-            format TEXT NOT NULL DEFAULT 'image'
+            format TEXT NOT NULL DEFAULT 'image',
+            last_opened_at TEXT NOT NULL DEFAULT '',
+            progress_rev INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS source_stats(
             book_id TEXT PRIMARY KEY
@@ -204,7 +206,11 @@ pub fn init_schema(conn: &Connection) -> Result<(), BackendError> {
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_log_book_date
              ON reading_log(date, COALESCE(book_id, ''));
          CREATE INDEX IF NOT EXISTS idx_books_list
-             ON books(removed, updated_at DESC);",
+             ON books(removed, updated_at DESC);
+         -- 方案 C：默认书库排序按「最近打开」（last_opened_at），
+         -- 「最近阅读」排序仍走 updated_at（上面的索引）。
+         CREATE INDEX IF NOT EXISTS idx_books_list_opened
+             ON books(removed, last_opened_at DESC);",
     )?;
     if schema_version(conn)? < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -411,6 +417,44 @@ fn migrate_book_columns(conn: &Connection) -> Result<(), BackendError> {
             [],
         )?;
     }
+    // W3（方案 C）：「最近打开」与「最近阅读进度」分列。
+    let books_has_opened: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name='last_opened_at'",
+        [],
+        |r| r.get(0),
+    )?;
+    if books_has_opened == 0 {
+        conn.execute(
+            "ALTER TABLE books ADD COLUMN last_opened_at TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    let books_has_rev: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name='progress_rev'",
+        [],
+        |r| r.get(0),
+    )?;
+    if books_has_rev == 0 {
+        conn.execute(
+            "ALTER TABLE books ADD COLUMN progress_rev INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    // 回填：迁移前 updated_at 会被「打开」动作刷新，它的实际语义就是"最近打开"；
+    // 回填后默认书库排序与迁移前完全一致（观感不变）。
+    // 带 WHERE 保证幂等；只在确有待回填行时才写，避免每次启动都产生写事务。
+    let pending_backfill: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM books WHERE last_opened_at = '' AND updated_at <> ''",
+        [],
+        |r| r.get(0),
+    )?;
+    if pending_backfill > 0 {
+        conn.execute(
+            "UPDATE books SET last_opened_at = updated_at
+             WHERE last_opened_at = '' AND updated_at <> ''",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -427,6 +471,10 @@ pub struct BookRow {
     pub meta_json: String,
     /// 来源格式：`image`（目录/压缩包/在线）或 `pdf`（PDF-1）。
     pub format: String,
+    /// 最近一次**打开**这本书的时间（方案 C：与"最近阅读进度"分列）。
+    pub last_opened_at: String,
+    /// 进度修订号：进度每次变化 +1，供未来的乐观并发控制。
+    pub progress_rev: i64,
 }
 
 fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<BookRow> {
@@ -444,6 +492,9 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<BookRow> {
         format: row
             .get::<_, Option<String>>(9)?
             .unwrap_or_else(|| BOOK_FORMAT_IMAGE.to_string()),
+        // 同样容忍缺失：这两列由 W3 迁移补齐，但历史脏行/外部导入库仍可能没有。
+        last_opened_at: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+        progress_rev: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
     })
 }
 
@@ -473,11 +524,11 @@ pub fn upsert_book_with_format(
 ) -> Result<(), BackendError> {
     let now = now_str();
     conn.execute(
-        "INSERT INTO books(id, path, title, page_count, updated_at, source_type, meta_json, format)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'local', '{}', ?6)
+        "INSERT INTO books(id, path, title, page_count, updated_at, last_opened_at, source_type, meta_json, format)
+         VALUES (?1, ?2, ?3, ?4, '', ?5, 'local', '{}', ?6)
          ON CONFLICT(id) DO UPDATE SET
             path=excluded.path, title=excluded.title,
-            page_count=excluded.page_count, updated_at=excluded.updated_at,
+            page_count=excluded.page_count,
             removed=0, source_type='local', meta_json='{}',
             format=excluded.format",
         params![id, path, title, page_count as i64, now, format],
@@ -496,14 +547,23 @@ pub fn upsert_online_book(
     meta_json: &str,
 ) -> Result<(), BackendError> {
     let now = now_str();
+    // 方案 C：updated_at 只在**进度真的变化**时更新。
+    // 在线书重新解析会把 current_page 钳到新页数末尾——钳动了就是进度变了，
+    // updated_at 与 progress_rev 同步更新；没钳动则两者都不动。
+    // （SQLite 的 SET 右侧一律看到**更新前**的行值，故 MIN(...) 的比较可靠。）
     conn.execute(
-        "INSERT INTO books(id, path, title, page_count, updated_at, source_type, meta_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO books(id, path, title, page_count, updated_at, last_opened_at, source_type, meta_json)
+         VALUES (?1, ?2, ?3, ?4, '', ?5, ?6, ?7)
          ON CONFLICT(id) DO UPDATE SET
             path=excluded.path, title=excluded.title,
-            page_count=excluded.page_count, updated_at=excluded.updated_at,
+            page_count=excluded.page_count,
+            last_opened_at=?5,
             removed=0, source_type=excluded.source_type, meta_json=excluded.meta_json,
-            current_page=MIN(books.current_page, excluded.page_count - 1)",
+            current_page=MIN(books.current_page, excluded.page_count - 1),
+            updated_at=CASE WHEN MIN(books.current_page, excluded.page_count - 1) <> books.current_page
+                            THEN ?5 ELSE books.updated_at END,
+            progress_rev=books.progress_rev + CASE WHEN MIN(books.current_page, excluded.page_count - 1) <> books.current_page
+                            THEN 1 ELSE 0 END",
         params![
             id,
             path,
@@ -617,7 +677,7 @@ fn relocate_book_inner(
 
 pub fn get_book(conn: &Connection, id: &str) -> Result<Option<BookRow>, BackendError> {
     let mut stmt = conn.prepare(
-        "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json, format FROM books WHERE id=?1",
+        "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json, format, last_opened_at, progress_rev FROM books WHERE id=?1",
     )?;
     let mut rows = stmt.query(params![id])?;
     if let Some(r) = rows.next()? {
@@ -683,13 +743,13 @@ pub fn book_is_removed(conn: &Connection, id: &str) -> Result<bool, BackendError
 pub fn list_books(conn: &Connection, query: Option<&str>) -> Result<Vec<BookRow>, BackendError> {
     let (sql, param): (&str, Option<String>) = match query {
         Some(q) if !q.trim().is_empty() => (
-            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json, format FROM books
-             WHERE removed=0 AND (title LIKE ?1 OR path LIKE ?1) ORDER BY updated_at DESC",
+            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json, format, last_opened_at, progress_rev FROM books
+             WHERE removed=0 AND (title LIKE ?1 OR path LIKE ?1) ORDER BY last_opened_at DESC",
             Some(format!("%{}%", q.trim())),
         ),
         _ => (
-            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json, format FROM books
-             WHERE removed=0 ORDER BY updated_at DESC",
+            "SELECT id, path, title, page_count, current_page, updated_at, scroll_pct, source_type, meta_json, format, last_opened_at, progress_rev FROM books
+             WHERE removed=0 ORDER BY last_opened_at DESC",
             None,
         ),
     };
@@ -741,7 +801,9 @@ pub fn set_progress(
     let prev_page = prev.map(|(p, _)| p.max(0) as u32).unwrap_or(0);
     let now = now_str();
     tx.execute(
-        "UPDATE books SET current_page=?1, scroll_pct=?2, updated_at=?3 WHERE id=?4",
+        "UPDATE books SET current_page=?1, scroll_pct=?2, updated_at=?3,
+            progress_rev=progress_rev+1
+         WHERE id=?4",
         params![page as i64, pct_val, now, id],
     )?;
     if page > prev_page {
@@ -757,6 +819,19 @@ pub fn set_progress(
         )?;
     }
     tx.commit()?;
+    Ok(())
+}
+
+/// 记录「最近打开」（方案 C）：**只**写 `last_opened_at`。
+///
+/// 与 `set_progress` 是两条**独立**的写路径——打开漫画不得改动 `updated_at`、
+/// `progress_rev`，也不得产生任何 `reading_log` 事件。
+/// 行不存在时静默返回（不报错、不创建行）。
+pub fn touch_opened(conn: &Connection, id: &str) -> Result<(), BackendError> {
+    conn.execute(
+        "UPDATE books SET last_opened_at=?2 WHERE id=?1",
+        params![id, now_str()],
+    )?;
     Ok(())
 }
 
@@ -2128,9 +2203,9 @@ mod tests {
 
     /// schema 版本：PDF-1 起必须是 2；v1 库升级后 user_version 变成 2。
     #[test]
-    fn schema_version_is_two_and_v1_database_is_upgraded() {
-        assert_eq!(SCHEMA_VERSION, 2, "PDF-1 起 schema 版本必须是 2");
-        let path = unique_temp_db("schema-v2");
+    fn schema_version_is_three_and_v1_database_is_upgraded() {
+        assert_eq!(SCHEMA_VERSION, 3, "W3（方案 C）起 schema 版本必须是 3");
+        let path = unique_temp_db("schema-v3");
         {
             let conn = open(&path).expect("打开临时库");
             conn.pragma_update(None, "user_version", 1).unwrap();
@@ -2140,12 +2215,12 @@ mod tests {
             init_schema(&conn).expect("迁移");
             assert_eq!(
                 schema_version(&conn).unwrap(),
-                2,
-                "v1 库升级后 user_version 必须变成 2"
+                3,
+                "v1 库升级后 user_version 必须变成 3"
             );
             // 幂等：重复 init 不得改写版本。
             init_schema(&conn).expect("重复迁移");
-            assert_eq!(schema_version(&conn).unwrap(), 2);
+            assert_eq!(schema_version(&conn).unwrap(), 3);
         }
         cleanup_db_files(&path);
     }
@@ -2380,5 +2455,216 @@ mod tests {
             assert_eq!(check, "ok", "quick_check 必须通过");
         }
         cleanup_db_files(&path);
+    }
+
+    // ── W3（方案 C）：last_opened_at / progress_rev ──────────────────────
+
+    /// v2 库（11 列）的 books 表结构，用于验证升级路径。
+    const V2_BOOKS_SCHEMA: &str = "CREATE TABLE books(
+        id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+        page_count INTEGER NOT NULL DEFAULT 0, current_page INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT '', removed INTEGER NOT NULL DEFAULT 0,
+        scroll_pct REAL NOT NULL DEFAULT -1, source_type TEXT NOT NULL DEFAULT 'local',
+        meta_json TEXT NOT NULL DEFAULT '{}', format TEXT NOT NULL DEFAULT 'image'
+    );";
+
+    /// 手工把某本书的三个时间/版本列设成确定值，避免秒级精度导致断言抖动。
+    fn set_book_timestamps(conn: &Connection, id: &str, opened: &str, updated: &str, rev: i64) {
+        conn.execute(
+            "UPDATE books SET last_opened_at=?2, updated_at=?3, progress_rev=?4 WHERE id=?1",
+            params![id, opened, updated, rev],
+        )
+        .expect("写入时间戳");
+    }
+
+    /// M-01：v2 库升级后，现有进度、阅读历史与书库数据必须**逐项不变**。
+    #[test]
+    fn w3_migration_preserves_progress_history_and_library() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "{V2_BOOKS_SCHEMA}
+            CREATE TABLE reading_log(date TEXT NOT NULL, book_id TEXT, pages INTEGER NOT NULL DEFAULT 0);
+            INSERT INTO books(id,path,title,page_count,current_page,updated_at,scroll_pct)
+                VALUES('b1','p/b1','旧书',10,5,'2026-01-02 03:04:05',0.25);
+            INSERT INTO reading_log(date,book_id,pages) VALUES('2026-01-02','b1',5);"
+        ))
+        .unwrap();
+        init_schema(&conn).unwrap();
+
+        let row = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(row.current_page, 5, "页码必须保留");
+        assert_eq!(row.scroll_pct, 0.25, "条漫百分比必须保留");
+        assert_eq!(row.updated_at, "2026-01-02 03:04:05", "updated_at 必须保留");
+        assert_eq!(row.page_count, 10, "页数必须保留");
+        assert_eq!(row.title, "旧书", "书库数据必须保留");
+        assert_eq!(reading_log_total(&conn, "b1"), 5, "阅读历史必须保留");
+        assert_eq!(schema_version(&conn).unwrap(), 3, "版本号必须推进到 3");
+        assert_eq!(row.progress_rev, 0, "新列初始值必须是 0");
+        assert_eq!(
+            row.last_opened_at, "2026-01-02 03:04:05",
+            "回填：last_opened_at 取自旧 updated_at"
+        );
+    }
+
+    /// M-02：迁移幂等——重复 init_schema 不重复加列、不重复回填、版本号稳定。
+    #[test]
+    fn w3_migration_is_idempotent() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 10).unwrap();
+        set_book_timestamps(&conn, "b1", "2026-02-01 00:00:00", "2026-01-01 00:00:00", 0);
+
+        init_schema(&conn).unwrap();
+        init_schema(&conn).unwrap();
+
+        let row = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(
+            row.last_opened_at, "2026-02-01 00:00:00",
+            "第二次迁移不得覆盖已回填的值"
+        );
+        assert_eq!(schema_version(&conn).unwrap(), 3, "版本号必须稳定在 3");
+        let columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('books')
+                 WHERE name='last_opened_at' OR name='progress_rev'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 2, "两列各只应存在一次");
+    }
+
+    /// M-07：打开书**不得**改动 updated_at / progress_rev，也不得产生阅读历史。
+    #[test]
+    fn w3_opened_does_not_touch_progress_or_history() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        set_progress(&conn, "b1", 7, None).unwrap();
+        let before = get_book(&conn, "b1").unwrap().unwrap();
+        let log_before = reading_log_total(&conn, "b1");
+        // 钉住哨兵：时间戳只有秒级精度，同秒写入无法用"值不等"判定是否写过，
+        // 因此改判"哨兵是否被覆盖"。
+        set_book_timestamps(
+            &conn,
+            "b1",
+            "1999-01-01 00:00:00",
+            &before.updated_at,
+            before.progress_rev,
+        );
+
+        touch_opened(&conn, "b1").unwrap();
+
+        let after = get_book(&conn, "b1").unwrap().unwrap();
+        assert_ne!(
+            after.last_opened_at, "1999-01-01 00:00:00",
+            "打开必须写 last_opened_at"
+        );
+        assert_eq!(
+            after.updated_at, before.updated_at,
+            "打开不得刷新 updated_at"
+        );
+        assert_eq!(
+            after.progress_rev, before.progress_rev,
+            "打开不得增加 progress_rev"
+        );
+        assert_eq!(after.current_page, before.current_page, "打开不得改动页码");
+        assert_eq!(
+            after.scroll_pct, before.scroll_pct,
+            "打开不得改动条漫百分比"
+        );
+        assert_eq!(
+            reading_log_total(&conn, "b1"),
+            log_before,
+            "打开不得产生阅读历史"
+        );
+    }
+
+    /// M-06：进度变化时 updated_at 与 progress_rev 必须同步更新。
+    #[test]
+    fn w3_progress_change_bumps_rev_and_timestamp() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 30).unwrap();
+        set_progress(&conn, "b1", 3, None).unwrap();
+        let first = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(first.progress_rev, 1, "第一次进度变化后 rev 必须是 1");
+
+        set_progress(&conn, "b1", 4, None).unwrap();
+        let second = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(second.progress_rev, 2, "再前进一页 rev 必须是 2");
+        assert_eq!(second.current_page, 4);
+
+        // 回翻也是进度变化 ⇒ 同样 +1（历史不记，但版本号要跟）
+        set_progress(&conn, "b1", 2, None).unwrap();
+        let third = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(third.progress_rev, 3, "回翻同样是进度变化，rev 必须 +1");
+
+        // 重复写同一页：no-op 短路 ⇒ rev 不动
+        set_progress(&conn, "b1", 2, None).unwrap();
+        let fourth = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(fourth.progress_rev, 3, "相同进度不得增加 rev");
+    }
+
+    /// M-09：默认书库排序按「最近打开」。
+    #[test]
+    fn w3_default_sort_is_recent_opened() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "甲", 10).unwrap();
+        upsert_book(&conn, "b2", "p/b2", "乙", 10).unwrap();
+        set_book_timestamps(&conn, "b1", "2026-01-01 00:00:00", "2026-03-01 00:00:00", 9);
+        set_book_timestamps(&conn, "b2", "2026-02-01 00:00:00", "2026-01-01 00:00:00", 1);
+
+        let ids: Vec<String> = list_books(&conn, None)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["b2".to_string(), "b1".to_string()],
+            "默认排序必须按 last_opened_at 倒序（最近打开），与 updated_at 无关"
+        );
+    }
+
+    /// M-10：打开不存在的书必须静默无副作用。
+    #[test]
+    fn w3_touch_opened_on_missing_book_is_noop() {
+        let conn = mem();
+        touch_opened(&conn, "不存在").unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "不得凭空创建书行");
+    }
+
+    /// 扫描/重导入既有书时，两个时间戳都**不动**（否则一次扫描会让整库都像"最近打开"）。
+    #[test]
+    fn w3_upsert_existing_book_keeps_timestamps() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 10).unwrap();
+        set_book_timestamps(&conn, "b1", "2026-01-01 00:00:00", "2026-01-02 00:00:00", 4);
+
+        upsert_book(&conn, "b1", "p/b1", "书", 12).unwrap();
+
+        let row = get_book(&conn, "b1").unwrap().unwrap();
+        assert_eq!(
+            row.last_opened_at, "2026-01-01 00:00:00",
+            "重导入不得改 last_opened_at"
+        );
+        assert_eq!(
+            row.updated_at, "2026-01-02 00:00:00",
+            "重导入不得改 updated_at"
+        );
+        assert_eq!(row.progress_rev, 4, "重导入不得改 progress_rev");
+        assert_eq!(row.page_count, 12, "重导入仍应刷新页数");
+    }
+
+    /// 新书入库：有 last_opened_at、但 updated_at 为空（从未读过）。
+    #[test]
+    fn w3_new_book_has_opened_but_never_updated() {
+        let conn = mem();
+        upsert_book(&conn, "b1", "p/b1", "书", 10).unwrap();
+        let row = get_book(&conn, "b1").unwrap().unwrap();
+        assert!(!row.last_opened_at.is_empty(), "新书必须有 last_opened_at");
+        assert_eq!(row.updated_at, "", "从未读过的书不得有 updated_at");
+        assert_eq!(row.progress_rev, 0);
     }
 }

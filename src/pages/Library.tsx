@@ -35,6 +35,7 @@ import PixelPet from "@/components/PixelPet";
 import { toast, toastErr } from "@/components/Toast";
 import { localizeBackendError } from "@/features/errors/localize";
 import LibraryFilters, {
+  type SortMode,
   type SourceFilter,
 } from "@/components/library/LibraryFilters";
 import LibrarySearch from "@/components/library/LibrarySearch";
@@ -90,6 +91,8 @@ export default function LibraryPage() {
   const { t, locale, formatNumber } = useI18n();
   const { active: safeMode } = useSafeMode();
   const [groupSeries, setGroupSeries] = useState(readGrouping);
+  // 方案 C：默认「最近打开」（后端按 last_opened_at 排序）；可切「最近阅读」。
+  const [sortMode, setSortMode] = useState<SortMode>("recentOpened");
   const [sourceFilter, setSourceFilter] = useState(readSourceFilter);
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [books, setBooks] = useState<BookInfo[]>([]);
@@ -172,10 +175,18 @@ export default function LibraryPage() {
     const localOnly = safeMode
       ? books.filter((book) => book.sourceType === "local")
       : books;
-    if (sourceFilter === "all") return localOnly;
-    const local = sourceFilter === "local";
-    return localOnly.filter((book) => (book.sourceType === "local") === local);
-  }, [books, sourceFilter, safeMode]);
+    const filtered =
+      sourceFilter === "all"
+        ? localOnly
+        : localOnly.filter(
+            (book) =>
+              (book.sourceType === "local") === (sourceFilter === "local"),
+          );
+    // 方案 C：后端默认按「最近打开」（last_opened_at）排序；
+    // 「最近阅读」需要按 updated_at 重排（后端只提供一种顺序）。
+    if (sortMode !== "recentRead") return filtered;
+    return [...filtered].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, [books, sourceFilter, safeMode, sortMode]);
 
   const accessibleAllBooks = useMemo(
     () =>
@@ -201,6 +212,10 @@ export default function LibraryPage() {
       });
     }
 
+    // 方案 C：代表卡取「当前排序键最大」的那本——最近打开模式看
+    // lastOpenedAt，最近阅读模式看 updatedAt。
+    const rank = (b: BookInfo) =>
+      sortMode === "recentRead" ? b.updatedAt : b.lastOpenedAt || b.updatedAt;
     const groups = new Map<string, { book: BookInfo; filteredCount: number }>();
     for (const book of visibleBooks) {
       const sid = book.seriesId?.trim();
@@ -210,7 +225,7 @@ export default function LibraryPage() {
         groups.set(key, { book, filteredCount: 1 });
       } else {
         existing.filteredCount += 1;
-        if (book.updatedAt > existing.book.updatedAt) existing.book = book;
+        if (rank(book) > rank(existing.book)) existing.book = book;
       }
     }
     return [...groups.entries()].map(([key, group]) => {
@@ -220,7 +235,7 @@ export default function LibraryPage() {
         seriesCount: sid ? counts.get(sid) ?? group.filteredCount : 1,
       };
     });
-  }, [visibleBooks, groupSeries, accessibleAllBooks]);
+  }, [visibleBooks, groupSeries, sortMode, accessibleAllBooks]);
 
   // 搜索 / 来源筛选 / 合集模式变化后回到首屏窗口。
   useEffect(() => {
@@ -646,6 +661,8 @@ export default function LibraryPage() {
           onSourceFilterChange={setSourceFilter}
           groupSeries={groupSeries}
           onGroupSeriesChange={setGroupSeries}
+          sortMode={sortMode}
+          onSortModeChange={setSortMode}
         />
         <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
           {loading ? (

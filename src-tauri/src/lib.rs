@@ -41,7 +41,12 @@ pub struct BookInfo {
     pub path: String,
     pub page_count: u32,
     pub current_page: u32,
+    /// 最近一次**阅读进度发生变化**的时间（方案 C：与「最近打开」分列）。
     pub updated_at: String,
+    /// 最近一次**打开这本书**的时间（方案 C：与「最近阅读进度」分列）。
+    pub last_opened_at: String,
+    /// 进度修订号：进度每次变化 +1，供未来的乐观并发控制。
+    pub progress_rev: i64,
     /// 条漫滚动偏移百分比（0.0..1.0）；-1 = 无条漫阅读记录。
     pub scroll_pct: f64,
     /// local | generic_manga | anime（预留）。
@@ -569,6 +574,7 @@ pub fn run() {
             commands::get_reading_log,
             commands::get_reading_by_book,
             commands::set_progress,
+            commands::mark_book_opened,
             commands::clear_pages,
             commands::get_settings,
             commands::set_settings,

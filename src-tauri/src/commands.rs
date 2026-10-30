@@ -84,6 +84,8 @@ fn to_book_info(r: db::BookRow) -> BookInfo {
         page_count: r.page_count,
         current_page: r.current_page,
         updated_at: r.updated_at,
+        last_opened_at: r.last_opened_at,
+        progress_rev: r.progress_rev,
         scroll_pct: r.scroll_pct,
         source_type: r.source_type,
         format: r.format,
@@ -1664,6 +1666,20 @@ pub async fn set_progress(
     })
 }
 
+/// 记录「最近打开」（方案 C）：**只**写 `last_opened_at`。
+///
+/// 与 `set_progress` 是两条**独立**的写路径：打开漫画**不得**改动 `updated_at`
+/// 与 `progress_rev`，也**不得**产生任何 `reading_log` 事件。
+#[tauri::command]
+pub async fn mark_book_opened(
+    state: State<'_, Arc<AppState>>,
+    book_id: String,
+) -> Result<(), String> {
+    state
+        .db
+        .with(|conn| db::touch_opened(conn, &book_id).map_err(err))
+}
+
 /// 显式清空阅读页窗口（阅读器卸载/切书时可调；换书首个 get_page 也会自动清）。
 #[tauri::command]
 pub async fn clear_pages(state: State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -2677,8 +2693,12 @@ pub async fn mark_online_page_non_content(
                 };
                 let current = current.min(new_page_count.saturating_sub(1));
                 tx.execute(
-                    "UPDATE books SET current_page=?1 WHERE id=?2",
-                    rusqlite::params![current as i64, row.id],
+                    // 方案 C：这里**改变了 current_page**，属于进度变化 ⇒
+                    // updated_at 与 progress_rev 必须同步更新。
+                    "UPDATE books SET current_page=?1, updated_at=?3,
+                        progress_rev=progress_rev+1
+                     WHERE id=?2",
+                    rusqlite::params![current as i64, row.id, db::now_str()],
                 )
                 .map_err(err)?;
                 db::record_filter_event(
@@ -2841,8 +2861,12 @@ pub async fn restore_online_filtered_page(
                 };
                 let current = current.min(new_page_count.saturating_sub(1));
                 tx.execute(
-                    "UPDATE books SET current_page=?1 WHERE id=?2",
-                    rusqlite::params![current as i64, row.id],
+                    // 方案 C：这里**改变了 current_page**，属于进度变化 ⇒
+                    // updated_at 与 progress_rev 必须同步更新。
+                    "UPDATE books SET current_page=?1, updated_at=?3,
+                        progress_rev=progress_rev+1
+                     WHERE id=?2",
+                    rusqlite::params![current as i64, row.id, db::now_str()],
                 )
                 .map_err(err)?;
                 db::record_filter_event(
@@ -3835,6 +3859,8 @@ mod tests {
             page_count: 1,
             current_page: 0,
             updated_at: String::new(),
+            last_opened_at: String::new(),
+            progress_rev: 0,
             scroll_pct: -1.0,
             source_type: "local".into(),
             meta_json: "{}".into(),
@@ -3845,6 +3871,7 @@ mod tests {
         let online = db::BookRow {
             id: "o".into(), path: "http://x/a".into(), title: "O".into(),
             page_count: 2, current_page: 0, updated_at: String::new(),
+            last_opened_at: String::new(), progress_rev: 0,
             scroll_pct: -1.0, source_type: "generic_manga".into(),
             meta_json: r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg","width":800,"height":1200},{"url":"http://x/2.jpg"}]}"#.into(),
             format: db::BOOK_FORMAT_IMAGE.into(),
@@ -3855,6 +3882,7 @@ mod tests {
         let online_ok = db::BookRow {
             id: "o2".into(), path: "http://x/b".into(), title: "O2".into(),
             page_count: 1, current_page: 0, updated_at: String::new(),
+            last_opened_at: String::new(), progress_rev: 0,
             scroll_pct: -1.0, source_type: "generic_manga".into(),
             meta_json: r#"{"schema":1,"manifestHash":"h","fetchedAt":"t","pages":[{"url":"http://x/1.jpg","width":800,"height":1200}]}"#.into(),
             format: db::BOOK_FORMAT_IMAGE.into(),
@@ -3869,6 +3897,8 @@ mod tests {
             page_count: 1,
             current_page: 0,
             updated_at: String::new(),
+            last_opened_at: String::new(),
+            progress_rev: 0,
             scroll_pct: -1.0,
             source_type: "generic_manga".into(),
             meta_json: "{not-json".into(),
@@ -4371,6 +4401,8 @@ mod tests {
             page_count: 1,
             current_page: 0,
             updated_at: String::new(),
+            last_opened_at: String::new(),
+            progress_rev: 0,
             scroll_pct: -1.0,
             source_type: source_type.into(),
             meta_json: "{}".into(),

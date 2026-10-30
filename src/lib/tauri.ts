@@ -7,7 +7,12 @@ export interface BookInfo {
   path: string;
   pageCount: number;
   currentPage: number;
+  /** 最近一次**阅读进度发生变化**的时间（本地时间串）。打开书不改它。 */
   updatedAt: string;
+  /** 最近一次**打开这本书**的时间（本地时间串）。 */
+  lastOpenedAt: string;
+  /** 进度修订号：进度每次变化 +1，供乐观并发控制。打开书不改它。 */
+  progressRev: number;
   /** 本地源路径已不存在（NotFound）；在线书恒为 false，需重新指定位置。 */
   missing: boolean;
   /** 条漫滚动偏移百分比（0..1）；-1 = 无条漫阅读记录。 */
@@ -373,6 +378,8 @@ export const api = {
     invoke<BookDayPoint[]>("get_reading_by_book", { days }),
   setProgress: (bookId: string, page: number, scrollPct?: number) =>
     invoke<void>("set_progress", { bookId, page, scrollPct: scrollPct ?? null }),
+  /** 记录「最近打开」：只写 last_opened_at，不动 updated_at / progress_rev / 阅读历史。 */
+  markBookOpened: (bookId: string) => invoke<void>("mark_book_opened", { bookId }),
   clearPages: () => invoke<void>("clear_pages"),
   // 条漫：整话逐页源尺寸（header 解析）+ 单切片获取。
   getWebtoonLayout: (bookId: string) =>

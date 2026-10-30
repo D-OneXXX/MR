@@ -359,7 +359,10 @@ function finalize(report) {
   const kb = loadKnowledgeBase(KB_PATH);
   updateKnowledgeBase(kb, report);
   fs.writeFileSync(KB_PATH, JSON.stringify(redactLocalPaths(kb), null, 2), "utf8");
-  report.staticAudit = (kb.backlog || []).filter((entry) => entry.status === "open");
+  // 与 report.mjs 保持一致：台账字段是 defects，不是已不存在的 backlog。
+  report.staticAudit = (kb.defects || []).filter(
+    (entry) => entry.status === "open",
+  );
   const jsonPath = path.join(REPORTS_DIR, "latest.json");
   const mdPath = path.join(REPORTS_DIR, "latest.md");
   writeJsonReport(report, jsonPath);
@@ -380,6 +383,9 @@ function finalize(report) {
     console.log(`- [${defect.severity}] ${defect.id} ${defect.title} ${defect.location ? `@ ${defect.location}` : ""}`);
   }
   console.log("===============================================");
+  // 静态台账的 open P0/P1 已在报告中完整列出；暂不直接阻断退出码，
+  // 避免 26 条历史条目一次性把每次 QA 变成红灯。台账逐条复核后再开启
+  // 阻断，届时这里同时检查 report.staticAudit。
   if (summary.bySeverity.P0 > 0 || summary.bySeverity.P1 > 0) process.exitCode = 2;
 }
 

@@ -285,6 +285,9 @@ pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), Stri
         WebviewWindowBuilder::new(&app, BROWSER_LABEL, WebviewUrl::External(url))
             .title(BROWSER_TITLE)
             .inner_size(BROWSER_WIDTH, BROWSER_HEIGHT)
+            // §4.3：辅助浏览器只服务当次人工验证，不持久化第三方 Cookie
+            // 或站点存储；关闭窗口即丢弃，避免下次启动复用上一站凭据。
+            .incognito(true)
             .on_download(move |_webview, event| handle_download_event(&download_app, event))
             .on_navigation(navigation_allowed)
             .build()

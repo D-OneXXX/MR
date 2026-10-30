@@ -1,4 +1,5 @@
 import { currentLocale, translate, type MessageKey } from "@/i18n";
+import { hasStableCode } from "./stableCodes";
 
 const CJK = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
 
@@ -75,7 +76,7 @@ export function localizeBackendError(
   if (!raw) return translate("error.backendGeneric");
   if (locale.startsWith("zh")) return raw;
   for (const entry of STABLE_ERROR_CODES) {
-    if (raw.includes(`(${entry.code})`)) return translate(entry.key as MessageKey);
+    if (hasStableCode(raw, entry.code)) return translate(entry.key as MessageKey);
   }
   if (!CJK.test(raw)) return raw;
   const http = raw.match(/HTTP\s*(\d{3})/i)?.[1];

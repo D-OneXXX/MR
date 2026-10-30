@@ -64,8 +64,9 @@ pub struct AppInfo {
     pub build_baseline: String,
     pub target: String,
     pub profile: String,
-    /// 任一更新通道配置了签名公钥（补丁通道 MR_UPDATE_PUBKEY 或
-    /// tauri.conf.json plugins.updater.pubkey）；「软件更新」卡片徽章使用。
+    /// 原生更新通道配置了签名公钥（tauri.conf.json plugins.updater.pubkey）；
+    /// 「软件更新」卡片徽章使用。编译期 MR_UPDATE_PUBKEY 属已下线补丁通道，
+    /// 不参与该判定。
     pub signature_configured: bool,
     pub sha256_enforced: bool,
     /// 构建来源指纹：`official`（官方 CI 注入 `MR_BUILD_ORIGIN=official`，
@@ -611,13 +612,12 @@ pub fn signature_configured() -> bool {
     configured_public_key().is_some()
 }
 
-/// 是否配置了任一更新通道的签名公钥：
-/// - 补丁通道：编译期 `MR_UPDATE_PUBKEY`；
-/// - 原生 GitHub 通道：`tauri.conf.json plugins.updater.pubkey`。
+/// 原生 GitHub 更新通道是否配置了签名公钥。
 ///
-/// 这是设置页「软件更新」卡片签名徽章的唯一事实源。
+/// 唯一事实源是 `tauri.conf.json plugins.updater.pubkey`；编译期
+/// `MR_UPDATE_PUBKEY` 只服务已下线的补丁通道，不参与徽章或安全自检。
 pub fn any_update_signature_configured(native: &NativeUpdaterConfig) -> bool {
-    signature_configured() || native.has_pubkey()
+    native.has_pubkey()
 }
 
 /// 最近一次校验的时间与状态（"verified" / "failed"）；安全面板使用。

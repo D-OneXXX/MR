@@ -14,7 +14,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use url::{Host, Url};
 
-use crate::update::{signature_configured, NativeUpdaterConfig};
+use crate::update::NativeUpdaterConfig;
 use crate::AppState;
 
 /// Capability files embedded at compile time (same sources as the generated ACL).
@@ -75,8 +75,7 @@ pub struct UpdateAudit {
     pub signature_configured: bool,
     /// The updater module always verifies SHA-256 of downloaded artifacts.
     pub sha256_enforced: bool,
-    /// `config` (tauri.conf.json plugins.updater.pubkey) / `build`
-    /// (compile-time MR_UPDATE_PUBKEY) / `none`.
+    /// `config` (tauri.conf.json plugins.updater.pubkey) / `none`.
     pub key_source: String,
 }
 
@@ -226,12 +225,12 @@ pub async fn clear_online_traces(
 /// Tauri 配置。旧自定义补丁通道的 IPC 已下线，不再作为审计对象——继续按
 /// 已停用的通道判定只会让正式版出现「未配置 / 未签名」的假告警。
 fn audit_update(channel: &NativeUpdaterConfig) -> UpdateAudit {
-    audit_update_with(channel, signature_configured())
+    audit_update_with(channel)
 }
 
-/// `build_key_present` 是编译期 `MR_UPDATE_PUBKEY` 的存在性；测试可显式注入，
-/// 避免依赖构建环境变量导致结论漂移。
-fn audit_update_with(channel: &NativeUpdaterConfig, build_key_present: bool) -> UpdateAudit {
+/// 只认构建期 `tauri.conf.json plugins.updater.pubkey`。旧补丁通道的
+/// 编译期 `MR_UPDATE_PUBKEY` 不再参与自检或徽章判定。
+fn audit_update_with(channel: &NativeUpdaterConfig) -> UpdateAudit {
     let mut secure_transport = true;
     let mut all_loopback = !channel.endpoints.is_empty();
     let mut invalid = false;
@@ -271,11 +270,9 @@ fn audit_update_with(channel: &NativeUpdaterConfig, build_key_present: bool) -> 
     }
 
     let manifest_configured = channel.has_endpoints();
-    let signature_configured = build_key_present || channel.has_pubkey();
-    let key_source = if channel.has_pubkey() {
+    let signature_configured = channel.has_pubkey();
+    let key_source = if signature_configured {
         "config"
-    } else if build_key_present {
-        "build"
     } else {
         "none"
     };
@@ -609,13 +606,10 @@ mod tests {
     #[test]
     fn update_audit_reads_the_official_channel_from_build_config() {
         // 正式版形态：HTTPS 端点 + 构建配置内的 minisign 公钥。
-        let release = audit_update_with(
-            &channel(
-                &["https://github.com/D-OneXXX/Moyu/releases/latest/download/latest.json"],
-                "dW50cnVzdGVkIGNvbW1lbnQ=",
-            ),
-            false,
-        );
+        let release = audit_update_with(&channel(
+            &["https://github.com/D-OneXXX/Moyu/releases/latest/download/latest.json"],
+            "dW50cnVzdGVkIGNvbW1lbnQ=",
+        ));
         assert_eq!(release.status, SecurityStatus::Pass);
         assert!(release.manifest_configured);
         assert!(release.manifest_https);
@@ -627,51 +621,40 @@ mod tests {
 
     #[test]
     fn update_audit_requires_https_or_loopback_and_rejects_userinfo() {
-        let remote_http = audit_update_with(
-            &channel(&["http://updates.example.com/latest.json"], "key"),
-            false,
-        );
+        let remote_http =
+            audit_update_with(&channel(&["http://updates.example.com/latest.json"], "key"));
         assert_eq!(remote_http.status, SecurityStatus::Fail);
         assert!(!remote_http.manifest_https);
 
-        let localhost_http = audit_update_with(
-            &channel(&["http://localhost:8080/latest.json"], "key"),
-            false,
-        );
+        let localhost_http =
+            audit_update_with(&channel(&["http://localhost:8080/latest.json"], "key"));
         assert_eq!(localhost_http.status, SecurityStatus::Pass);
         assert!(localhost_http.manifest_https);
         assert!(localhost_http.manifest_loopback);
 
-        let loopback_v4 =
-            audit_update_with(&channel(&["http://127.0.0.1/latest.json"], "key"), false);
+        let loopback_v4 = audit_update_with(&channel(&["http://127.0.0.1/latest.json"], "key"));
         assert_eq!(loopback_v4.status, SecurityStatus::Pass);
 
-        let loopback_v6 =
-            audit_update_with(&channel(&["http://[::1]:9000/latest.json"], "key"), false);
+        let loopback_v6 = audit_update_with(&channel(&["http://[::1]:9000/latest.json"], "key"));
         assert_eq!(loopback_v6.status, SecurityStatus::Pass);
 
-        let userinfo = audit_update_with(
-            &channel(
-                &["https://user:pass@updates.example.com/latest.json"],
-                "key",
-            ),
-            false,
-        );
+        let userinfo = audit_update_with(&channel(
+            &["https://user:pass@updates.example.com/latest.json"],
+            "key",
+        ));
         assert_eq!(userinfo.status, SecurityStatus::Fail);
 
-        let unsupported = audit_update_with(
-            &channel(&["ftp://updates.example.com/latest.json"], "key"),
-            false,
-        );
+        let unsupported =
+            audit_update_with(&channel(&["ftp://updates.example.com/latest.json"], "key"));
         assert_eq!(unsupported.status, SecurityStatus::Fail);
 
-        let invalid = audit_update_with(&channel(&["not a url"], "key"), false);
+        let invalid = audit_update_with(&channel(&["not a url"], "key"));
         assert_eq!(invalid.status, SecurityStatus::Fail);
     }
 
     #[test]
     fn update_audit_without_endpoint_or_key_warns() {
-        let blank = audit_update_with(&channel(&[], ""), false);
+        let blank = audit_update_with(&channel(&[], ""));
         assert!(!blank.manifest_configured);
         assert!(!blank.manifest_https);
         assert!(!blank.manifest_loopback);
@@ -680,22 +663,12 @@ mod tests {
         assert!(blank.sha256_enforced);
 
         // 端点齐备但没有公钥：仍是「注意」，不谎报通过。
-        let without_key = audit_update_with(
-            &channel(&["https://updates.example.com/latest.json"], ""),
-            false,
-        );
+        let without_key =
+            audit_update_with(&channel(&["https://updates.example.com/latest.json"], ""));
         assert_eq!(without_key.status, SecurityStatus::Warn);
         assert!(without_key.manifest_configured);
         assert!(!without_key.signature_configured);
         assert_eq!(without_key.key_source, "none");
-
-        // 编译期 MR_UPDATE_PUBKEY 注入时，公钥来源标记为 build。
-        let build_key = audit_update_with(
-            &channel(&["https://updates.example.com/latest.json"], ""),
-            true,
-        );
-        assert_eq!(build_key.status, SecurityStatus::Pass);
-        assert_eq!(build_key.key_source, "build");
     }
 
     #[test]

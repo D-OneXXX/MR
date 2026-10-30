@@ -102,7 +102,9 @@ export function writeMarkdownReport(report, file, kb = null) {
   const cosmetic = report.defects
     .filter((issue) => issue.severity === "P2" || issue.severity === "P3")
     .sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
-  const staticOpen = (kb?.backlog || []).filter((issue) => issue.status === "open");
+  // QA 台账的真实字段是 defects；历史 backlog 字段不存在，读取它会让
+  // 静态缺陷恒为 0，已登记的 open P0/P1 在报告里完全消失。
+  const staticOpen = (kb?.defects || []).filter((issue) => issue.status === "open");
   const staticBlocking = staticOpen
     .filter((issue) => issue.severity === "P0" || issue.severity === "P1")
     .sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));

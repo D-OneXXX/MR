@@ -1434,6 +1434,14 @@ mod tests {
         conn
     }
 
+    /// Date relative to local today, so `reading_log_days(..., 30)` remains
+    /// deterministic regardless of when the suite runs.
+    fn test_day(days_ago: i64) -> String {
+        (Local::now() - chrono::Duration::days(days_ago))
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
     /// 唯一临时库路径（进程号 + 纳秒），测试结束连同 -wal/-shm 一起删除。
     fn unique_temp_db(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -1620,19 +1628,22 @@ mod tests {
     #[test]
     fn reading_log_migration_preserves_history() {
         // 模拟旧版库:老形状 reading_log + 历史,init_schema 应迁移且数据保全。
+        let older = test_day(2);
+        let newer = test_day(1);
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE reading_log(date TEXT PRIMARY KEY, pages INTEGER NOT NULL DEFAULT 0);
-             INSERT INTO reading_log(date, pages) VALUES ('2026-10-01', 12), ('2026-10-02', 30);",
+            "CREATE TABLE reading_log(date TEXT PRIMARY KEY, pages INTEGER NOT NULL DEFAULT 0);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO reading_log(date, pages) VALUES (?1, 12), (?2, 30)",
+            params![older, newer],
         )
         .unwrap();
         init_schema(&conn).unwrap();
         // 全局视图聚合旧史。
         let days = reading_log_days(&conn, None, 30).unwrap();
-        assert_eq!(
-            days,
-            vec![("2026-10-01".into(), 12), ("2026-10-02".into(), 30)]
-        );
+        assert_eq!(days, vec![(older, 12), (newer, 30)]);
         // 旧史无按书归属,按书视图为空。
         assert!(reading_log_days(&conn, Some("b1"), 30).unwrap().is_empty());
         // 堆叠趋势排除全局旧史。
@@ -1642,24 +1653,30 @@ mod tests {
     #[test]
     fn reading_log_migration_recovers_legacy_after_crash() {
         // 模拟上次崩在 rename 之后：只剩 reading_log_legacy，没有新表。
+        let day = test_day(1);
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE reading_log_legacy(
                  date TEXT PRIMARY KEY, pages INTEGER NOT NULL DEFAULT 0
-             );
-             INSERT INTO reading_log_legacy(date, pages) VALUES ('2026-10-03', 7);",
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO reading_log_legacy(date, pages) VALUES (?1, 7)",
+            params![day],
         )
         .unwrap();
         init_schema(&conn).unwrap();
-        assert_eq!(
-            reading_log_days(&conn, None, 30).unwrap(),
-            vec![("2026-10-03".into(), 7)]
-        );
+        assert_eq!(reading_log_days(&conn, None, 30).unwrap(), vec![(day, 7)]);
         assert!(!table_exists(&conn, "reading_log_legacy").unwrap());
     }
 
     #[test]
     fn reading_log_foreign_key_migration_backfills_and_drops_orphans() {
+        let global_day = test_day(3);
+        let book_day = test_day(2);
+        let ghost_day = test_day(1);
+        let later_day = test_day(0);
         let conn = mem();
         upsert_book(&conn, "b1", "p/b1", "第一卷", 10).unwrap();
         // 回退成 0.17.0 之前的 reading_log 形态，模拟待迁移旧库。
@@ -1672,11 +1689,15 @@ mod tests {
                  pages INTEGER NOT NULL DEFAULT 0,
                  PRIMARY KEY(date, book_id)
              );
-             INSERT INTO reading_log(date, book_id, pages) VALUES
-                 ('2026-10-01', '', 12),
-                 ('2026-10-02', 'b1', 5),
-                 ('2026-10-03', 'ghost', 3);
              DROP TABLE reading_log_before_fk;",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO reading_log(date, book_id, pages) VALUES
+                 (?1, '', 12),
+                 (?2, 'b1', 5),
+                 (?3, 'ghost', 3)",
+            params![global_day.as_str(), book_day.as_str(), ghost_day.as_str()],
         )
         .unwrap();
 
@@ -1685,8 +1706,8 @@ mod tests {
         // 全局旧史迁为 NULL；孤儿 ghost 被丢弃；真实书保留。
         let global: Option<String> = conn
             .query_row(
-                "SELECT book_id FROM reading_log WHERE date='2026-10-01'",
-                [],
+                "SELECT book_id FROM reading_log WHERE date=?1",
+                [global_day.as_str()],
                 |r| r.get(0),
             )
             .unwrap();
@@ -1701,27 +1722,27 @@ mod tests {
         assert_eq!(orphan, 0, "不存在的 book_id 必须按孤儿清理");
         assert_eq!(
             reading_log_days(&conn, Some("b1"), 30).unwrap(),
-            vec![("2026-10-02".into(), 5)]
+            vec![(book_day.clone(), 5)]
         );
 
         // 可空外键真实生效：未知 book_id 写入被拒绝。
         assert!(conn
             .execute(
-                "INSERT INTO reading_log(date, book_id, pages) VALUES ('2026-10-04', 'ghost', 1)",
-                [],
+                "INSERT INTO reading_log(date, book_id, pages) VALUES (?1, 'ghost', 1)",
+                [later_day.as_str()],
             )
             .is_err());
         // 表达式唯一索引覆盖全局 NULL 行（SQLite 普通唯一索引不会约束 NULL）。
         assert!(conn
             .execute(
-                "INSERT INTO reading_log(date, book_id, pages) VALUES ('2026-10-01', NULL, 1)",
-                [],
+                "INSERT INTO reading_log(date, book_id, pages) VALUES (?1, NULL, 1)",
+                [global_day.as_str()],
             )
             .is_err());
         assert!(conn
             .execute(
-                "INSERT INTO reading_log(date, book_id, pages) VALUES ('2026-10-02', 'b1', 1)",
-                [],
+                "INSERT INTO reading_log(date, book_id, pages) VALUES (?1, 'b1', 1)",
+                [book_day.as_str()],
             )
             .is_err());
     }

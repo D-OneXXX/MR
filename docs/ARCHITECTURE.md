@@ -35,6 +35,9 @@ browser WebView
   recovery. It never silently replaces the main window.
 - The **browser** window is isolated from application IPC and accepts only `http` / `https`
   navigation. It must not navigate back to the application’s local origin.
+- A W7-TLS transport library can serve a TLS health check using a locally issued leaf
+  certificate when explicitly started by code. Application startup, commands, and UI do not
+  start it, and it exposes no pairing, session, or library data route in this slice.
 
 ## Local data
 

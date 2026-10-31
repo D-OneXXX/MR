@@ -75,6 +75,10 @@ JavaScript to run, which the project's security policy forbids.
 | `lru`, `minisign-verify`, `rusqlite`, `sysinfo`, `tokio`, `zip` | MIT |
 | `argon2`, `chacha20poly1305`, `rand`, `rcgen`, `rustls-pki-types`, `time`, `x509-parser`, `zeroize` | MIT OR Apache-2.0 (RustCrypto crates: Apache-2.0 OR MIT) |
 | `rustls-webpki` | ISC |
+| `http-body-util`, `hyper`, `hyper-util` | MIT |
+| `if-addrs` | MIT OR BSD-3-Clause |
+| `rustls` | Apache-2.0 OR ISC OR MIT |
+| `tokio-rustls` | MIT OR Apache-2.0 |
 
 ### CA infrastructure dependencies (W7-CA)
 
@@ -98,9 +102,25 @@ crate's declared `license` metadata. "Transitive" means it is not declared direc
 | `aead` | 0.5.2 | MIT OR Apache-2.0 | Transitive AEAD trait layer |
 | `password-hash` | 0.5.0 | MIT OR Apache-2.0 | Transitive password-hash trait layer |
 
-All listed licenses are permissive (MIT, ISC, Apache-2.0) and compatible with the project's
-PolyForm Noncommercial 1.0.0 license. No GPL/AGPL/SSPL or other copyleft dependency is introduced
-by the CA stack.
+All listed licenses are permissive (MIT, ISC, Apache-2.0, BSD-3-Clause) and compatible with the
+project's PolyForm Noncommercial 1.0.0 license. No GPL/AGPL/SSPL or other copyleft dependency is
+introduced by the CA or W7-TLS stacks.
+
+### W7-TLS transport dependencies
+
+The TLS transport slice adds a real HTTPS listener using the CA-issued leaf. The listener is not
+started by application startup, commands, or UI in this slice.
+
+| Crate | Version | License | Role |
+|---|---|---|---|
+| `rustls` | 0.23.46 | Apache-2.0 OR ISC OR MIT | TLS 1.2/1.3 server |
+| `tokio-rustls` | 0.26.6 | MIT OR Apache-2.0 | Tokio TLS acceptor |
+| `hyper` | 1.11.1 | MIT | HTTP/1.1 server |
+| `hyper-util` | 0.1.21 | MIT | Tokio I/O adapter |
+| `http-body-util` | 0.1.5 | MIT | Empty response bodies |
+| `pem` | 4.0.0 | MIT | Direct PEM decoding for W7-TLS leaf material (also present transitively in the CA stack) |
+| `if-addrs` | 0.15.0 | MIT OR BSD-3-Clause | Private LAN IPv4 enumeration for SANs |
+| `httpdate` | 1.0.3 | MIT OR Apache-2.0 | Transitive HTTP date handling |
 
 License texts used by these components are included under [docs/licenses](docs/licenses):
 

@@ -44,7 +44,7 @@ minisign-verify = "0.2"
 # 在线源：同步阻塞 HTTP + URL 规范化 + 文件名解码
 url = "2"
 percent-encoding = "2"
-ureq = { version = "2", features = ["json", "socks-proxy"] }
+ureq = { version = "3", features = ["json", "socks-proxy"] }
 # 在线源：单页 HTML 图集解析
 regex = "1"
 # 在线 HTML 图集：按 charset 正确解码（GBK/Shift_JIS 等）。

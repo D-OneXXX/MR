@@ -3,6 +3,7 @@
 
 mod backup;
 mod browser;
+pub mod ca;
 pub mod cache;
 mod cache_health;
 mod commands;

@@ -4,9 +4,10 @@ Moyu bundles or links the components listed below. The project’s own license
 (PolyForm Noncommercial 1.0.0) is separate from these third-party licenses; see
 [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
 
-This file covers bundled visual assets and direct runtime dependencies. Transitive dependencies
-retain their upstream licenses and notices. The exact dependency graph is recorded in
-`package-lock.json` and `src-tauri/Cargo.lock`.
+This file covers bundled visual assets, direct runtime dependencies, and the CA infrastructure's
+crypto stack (including the listed transitive crates). Other transitive dependencies retain their
+upstream licenses and notices. The exact dependency graph is recorded in `package-lock.json` and
+`src-tauri/Cargo.lock`.
 
 ## Bundled visual assets
 
@@ -72,6 +73,34 @@ JavaScript to run, which the project's security policy forbids.
 | `base64`, `chrono`, `dirs`, `hex`, `image`, `jpeg-decoder`, `libc`, `parking_lot`, `percent-encoding`, `regex`, `reqwest`, `serde`, `serde_json`, `sha2`, `tauri`, `tauri-build`, `tauri-plugin-dialog`, `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater`, `thiserror`, `ureq`, `url`, `windows` | MIT OR Apache-2.0 (Tauri packages: Apache-2.0 OR MIT) |
 | `encoding_rs` | (Apache-2.0 OR MIT) AND BSD-3-Clause |
 | `lru`, `minisign-verify`, `rusqlite`, `sysinfo`, `tokio`, `zip` | MIT |
+| `argon2`, `chacha20poly1305`, `rand`, `rcgen`, `rustls-pki-types`, `time`, `x509-parser`, `zeroize` | MIT OR Apache-2.0 (RustCrypto crates: Apache-2.0 OR MIT) |
+| `rustls-webpki` | ISC |
+
+### CA infrastructure dependencies (W7-CA)
+
+Versions are the resolved versions in `src-tauri/Cargo.lock`; the license expression is the
+crate's declared `license` metadata. "Transitive" means it is not declared directly in
+`src-tauri/Cargo.toml` but is still linked into the application through the CA stack.
+
+| Crate | Version | License | Role |
+|---|---|---|---|
+| `rcgen` | 0.14.10 | MIT OR Apache-2.0 | Certificate/key generation (P-256, X.509) |
+| `rustls-webpki` | 0.103.16 | ISC | Chain and name verification |
+| `rustls-pki-types` | 1.15.1 | MIT OR Apache-2.0 | Shared certificate/key types |
+| `x509-parser` | 0.18.1 | MIT OR Apache-2.0 | Certificate parsing, extension checks, signature verification |
+| `argon2` | 0.5.3 | MIT OR Apache-2.0 | Argon2id KDF for the AEAD backup |
+| `chacha20poly1305` | 0.10.1 | Apache-2.0 OR MIT | XChaCha20-Poly1305 AEAD |
+| `zeroize` | 1.9.0 | Apache-2.0 OR MIT | Wiping private key and derived key buffers |
+| `rand` | 0.8.8 (direct); 0.10.3 (transitive) | MIT OR Apache-2.0 | OS randomness for salts and nonces |
+| `time` | 0.3.55 | MIT OR Apache-2.0 | Validity windows and clock injection |
+| `ring` | 0.17.14 | Apache-2.0 AND ISC | Transitive crypto backend (via rcgen/webpki) |
+| `pem` | 4.0.0 | MIT | Transitive PEM encoding/decoding |
+| `aead` | 0.5.2 | MIT OR Apache-2.0 | Transitive AEAD trait layer |
+| `password-hash` | 0.5.0 | MIT OR Apache-2.0 | Transitive password-hash trait layer |
+
+All listed licenses are permissive (MIT, ISC, Apache-2.0) and compatible with the project's
+PolyForm Noncommercial 1.0.0 license. No GPL/AGPL/SSPL or other copyleft dependency is introduced
+by the CA stack.
 
 License texts used by these components are included under [docs/licenses](docs/licenses):
 

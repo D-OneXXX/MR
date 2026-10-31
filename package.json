@@ -33,7 +33,7 @@
     "@tauri-apps/plugin-updater": "^2",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.0",
-    "lucide-react": "^0.525.0",
+    "lucide-react": "^1.63.0",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
